@@ -1,0 +1,375 @@
+//  AudioEngine.swift — centralized low-latency synth engine.
+//
+//  A single AVAudioSourceNode performs real-time additive/subtractive synthesis
+//  for every drum voice (ported sample-for-sample from the prototype's audio.js
+//  Web-Audio graph) plus sample-buffer slice playback for Sample Mode.
+//
+//  The synthesis core is `nonisolated` and `@unchecked Sendable` so the audio
+//  render thread can drive it; a tiny os_unfair_lock guards the voice pool.
+
+import AVFoundation
+import Combine
+import os
+import FD808Engine
+
+// MARK: - Engine wrapper (main actor)
+
+@MainActor
+final class AudioEngine: ObservableObject {
+    let core = SynthCore(sampleRate: 48000)
+    private let engine = AVAudioEngine()
+    private var srcNode: AVAudioSourceNode!
+    private var started = false
+    private var ioFormat: AVAudioFormat!
+
+    init() { configure(); restoreMasterChain() }
+
+    private func configure() {
+        let fmt = AVAudioFormat(standardFormatWithSampleRate: core.sr, channels: 2)!
+        ioFormat = fmt
+        let core = self.core
+        srcNode = AVAudioSourceNode(format: fmt) { _, _, frameCount, ablPtr in
+            let abl = UnsafeMutableAudioBufferListPointer(ablPtr)
+            core.render(frames: Int(frameCount), abl: abl)
+            return noErr
+        }
+        engine.attach(srcNode)
+        engine.connect(srcNode, to: engine.mainMixerNode, format: fmt)
+    }
+
+    // MARK: - AUv3 hosting (A15): 3rd-party effects inserted on the master bus
+
+    struct HostedAU: Identifiable {
+        let id = UUID()
+        let name: String
+        let unit: AVAudioUnit
+    }
+    @Published private(set) var masterAUs: [HostedAU] = []
+
+    /// Every installed AUv3 audio effect (+ music effect) the system can load.
+    /// Returns nothing in the Simulator — 3rd-party AUv3s only register on device.
+    nonisolated static func availableEffects() -> [AVAudioUnitComponent] {
+        let mgr = AVAudioUnitComponentManager.shared()
+        var desc = AudioComponentDescription(componentType: kAudioUnitType_Effect,
+                                             componentSubType: 0, componentManufacturer: 0,
+                                             componentFlags: 0, componentFlagsMask: 0)
+        let fx = mgr.components(matching: desc)
+        desc.componentType = kAudioUnitType_MusicEffect
+        let mfx = mgr.components(matching: desc)
+        return (fx + mfx).sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    /// Instantiate an effect and append it to the master insert chain.
+    func addMasterAU(_ comp: AVAudioUnitComponent) async -> Bool {
+        do {
+            let avAU = try await AVAudioUnit.instantiate(with: comp.audioComponentDescription, options: [])
+            engine.attach(avAU)
+            masterAUs.append(HostedAU(name: comp.name, unit: avAU))
+            rebuildMasterChain()
+            persistMasterChain()
+            return true
+        } catch {
+            print("AU load error: \(error)")
+            return false
+        }
+    }
+
+    func removeMasterAU(_ id: UUID) {
+        guard let idx = masterAUs.firstIndex(where: { $0.id == id }) else { return }
+        let removed = masterAUs.remove(at: idx)
+        rebuildMasterChain()
+        engine.detach(removed.unit)
+        persistMasterChain()
+    }
+
+    /// Re-wire srcNode → [AU…] → mainMixer to reflect the current chain.
+    private func rebuildMasterChain() {
+        let mixer = engine.mainMixerNode
+        engine.disconnectNodeOutput(srcNode)
+        for au in masterAUs { engine.disconnectNodeOutput(au.unit) }
+        var prev: AVAudioNode = srcNode
+        for au in masterAUs {
+            engine.connect(prev, to: au.unit, format: ioFormat)
+            prev = au.unit
+        }
+        engine.connect(prev, to: mixer, format: ioFormat)
+    }
+
+    // Persist the chain (component IDs + each plugin's fullState) so it reloads next launch.
+    private let auChainKey = "fd808.masterAUChain"
+
+    private func persistMasterChain() {
+        let arr: [[String: Any]] = masterAUs.map { hosted in
+            let d = hosted.unit.audioComponentDescription
+            var entry: [String: Any] = [
+                "type": NSNumber(value: d.componentType),
+                "sub": NSNumber(value: d.componentSubType),
+                "mfr": NSNumber(value: d.componentManufacturer),
+            ]
+            if let state = hosted.unit.auAudioUnit.fullState { entry["state"] = state }
+            return entry
+        }
+        UserDefaults.standard.set(arr, forKey: auChainKey)
+    }
+
+    private func restoreMasterChain() {
+        guard let arr = UserDefaults.standard.array(forKey: auChainKey) as? [[String: Any]], !arr.isEmpty else { return }
+        Task { @MainActor in
+            for entry in arr {
+                guard let t = (entry["type"] as? NSNumber)?.uint32Value,
+                      let s = (entry["sub"] as? NSNumber)?.uint32Value,
+                      let m = (entry["mfr"] as? NSNumber)?.uint32Value else { continue }
+                let desc = AudioComponentDescription(componentType: t, componentSubType: s,
+                                                     componentManufacturer: m, componentFlags: 0, componentFlagsMask: 0)
+                guard AVAudioUnitComponentManager.shared().components(matching: desc).first != nil,
+                      let avAU = try? await AVAudioUnit.instantiate(with: desc, options: []) else { continue }
+                if let state = entry["state"] as? [String: Any] { avAU.auAudioUnit.fullState = state }
+                engine.attach(avAU)
+                masterAUs.append(HostedAU(name: avAU.auAudioUnit.audioUnitName ?? "Plugin", unit: avAU))
+            }
+            rebuildMasterChain()
+        }
+    }
+
+    func start() {
+        guard !started else { return }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setPreferredIOBufferDuration(0.005)
+            try session.setActive(true)
+            try engine.start()
+            started = true
+        } catch {
+            print("AudioEngine start error: \(error)")
+        }
+    }
+
+    private func ensure() { if !started { start() } }
+
+    // MARK: microphone recording (A4)
+
+    @Published private(set) var isMicRecording = false
+    private(set) var micStartTime = 0.0   // engine time when the input tap began (for record alignment)
+    private var mic: MicCapture?
+
+    private func requestMicPermission(_ cb: @escaping (Bool) -> Void) {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission { ok in DispatchQueue.main.async { cb(ok) } }
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission { ok in DispatchQueue.main.async { cb(ok) } }
+        }
+    }
+
+    /// Ask for mic access, switch the session to play-and-record, and tap the input.
+    func startMicRecording(_ completion: @escaping (Bool) -> Void) {
+        guard !isMicRecording else { completion(false); return }
+        requestMicPermission { [weak self] granted in
+            guard let self else { completion(false); return }
+            completion(granted ? self.beginMicTap() : false)
+        }
+    }
+
+    private func beginMicTap() -> Bool {
+        do {
+            engine.stop()
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+            try session.setActive(true)
+            let input = engine.inputNode
+            let fmt = input.inputFormat(forBus: 0)
+            guard fmt.channelCount > 0, fmt.sampleRate > 0, let cap = MicCapture(inputFormat: fmt, sr: core.sr) else {
+                started = false; start(); return false   // restore playback
+            }
+            mic = cap
+            input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { buf, _ in cap.feed(buf) }
+            try engine.start()
+            micStartTime = core.now()
+            isMicRecording = true
+            return true
+        } catch {
+            print("mic record start error: \(error)")
+            mic = nil; started = false; start()          // restore playback
+            return false
+        }
+    }
+
+    /// Tear down the tap, return captured mono audio, restore the .playback session.
+    private func endMicCapture() -> [Float]? {
+        guard isMicRecording else { return nil }
+        isMicRecording = false
+        engine.inputNode.removeTap(onBus: 0)
+        let data = mic?.take() ?? []
+        mic = nil
+        engine.stop()
+        started = false; start()                          // back to .playback
+        return data.isEmpty ? nil : data
+    }
+
+    /// Stop recording → load into the Sample buffer (Sample mode "Record Mic").
+    func stopMicRecording() -> (dur: Double, transients: [Double], wave: [Double])? {
+        guard let data = endMicCapture() else { return nil }
+        return core.loadExternal(data)
+    }
+
+    /// Stop recording → return raw mono audio + reported round-trip latency (for clip recording).
+    func stopMicRecordingRaw() -> (data: [Float], latency: Double)? {
+        let s = AVAudioSession.sharedInstance()
+        let lat = s.inputLatency + s.outputLatency
+        guard let data = endMicCapture() else { return nil }
+        return (data, lat)
+    }
+
+    func now() -> Double { core.now() }
+
+    // Map sounds → their mixer bus index for per-channel insert FX.
+    static let melodyChannel = FX_CHANNELS.firstIndex(of: "melody") ?? 5
+    static let sampleChannel = FX_CHANNELS.firstIndex(of: "perc") ?? 2
+    static func channelIndex(for sound: String) -> Int {
+        let s = sound.hasPrefix("smp:") ? String(sound.dropFirst(4)) : sound
+        return FX_CHANNELS.firstIndex(of: Kit.channelOf(s)) ?? 0
+    }
+
+    /// Register/clear an imported one-shot for a pad. `padID` is the bare pad id.
+    func registerPadSample(_ padID: String, _ data: [Float]) { core.registerPadSample("smp:" + padID, data) }
+    func clearPadSample(_ padID: String) { core.clearPadSample("smp:" + padID) }
+
+    func trigger(_ sound: String, vel: Double = 0.82, when: Double? = nil, opts: TriggerOpts? = nil, channel: Int? = nil) {
+        ensure()
+        let w = when ?? (now() + 0.003)
+        core.trigger(sound, vel: vel, whenSample: w * core.sr, opts: opts, channel: channel ?? Self.channelIndex(for: sound))
+    }
+
+    func playBuffer(offset: Double, dur: Double, vel: Double = 0.9, when: Double? = nil, pitch: Double = 0, pan: Double = 0) {
+        ensure()
+        let w = when ?? (now() + 0.003)
+        core.playBuffer(offsetSec: offset, durSec: dur, vel: vel, whenSample: w * core.sr, pitch: pitch, pan: pan, channel: Self.sampleChannel)
+    }
+
+    /// Granular cloud over the loaded sample buffer (Sample mode "Granular").
+    func playGranular(pos: Double, grainMs: Double, density: Double, spread: Double, pitch: Double, dur: Double) {
+        ensure()
+        core.playGranular(posNorm: pos, grainMs: grainMs, density: density, spread: spread,
+                          pitch: pitch, durSec: dur, whenSample: (now() + 0.003) * core.sr, channel: Self.sampleChannel)
+    }
+
+    func synthOn(_ key: String, midi: Int, patch: SynthPatch, vel: Double = 1.0, when: Double? = nil) {
+        ensure()
+        let w = when ?? (now() + 0.003)
+        core.synthOn(key, midi: midi, patch: patch, vel: vel, whenSample: w * core.sr, channel: Self.melodyChannel)
+    }
+    func synthOff(_ key: String) { core.synthOff(key) }
+    func triggerSynth(_ patch: SynthPatch, midi: Int, dur: Double, vel: Double, when: Double? = nil, pan: Double = 0, channel: Int? = nil) {
+        ensure()
+        let w = when ?? (now() + 0.003)
+        core.triggerSynth(patch, midi: midi, dur: dur, vel: vel, whenSample: w * core.sr, channel: channel ?? Self.melodyChannel, pan: pan)
+    }
+    func makeSynthSample(_ kind: String) { ensure(); core.makeSynthSample(kind) }
+    func applySampleEdits(reverse: Bool, normalize: Bool, fadeIn: Bool, fadeOut: Bool, gain: Double) -> [Double] {
+        core.applySampleEdits(reverse: reverse, normalize: normalize, fadeIn: fadeIn, fadeOut: fadeOut, gain: gain)
+    }
+    func cropSample(trim: [Double]) -> (dur: Double, wave: [Double]) { core.cropSample(trim: trim) }
+    func stretchSample(ratio: Double) -> (dur: Double, wave: [Double]) { core.stretchSample(ratio: ratio) }
+    func resetSample() -> [Double] { core.resetSample() }
+    func currentSampleOriginal() -> [Float] { core.currentSampleOriginal() }
+    func detectPitch() -> Double { ensure(); return core.detectPitch() }
+    func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
+    func sampleToSynth() { core.sampleToSynth() }
+    func resampleOutput() -> (dur: Double, wave: [Double]) { ensure(); return core.resampleOutput() }
+    func scopeSnapshot() -> [Float] { core.scopeSnapshot() }
+    func recordingWaveform() -> [Float] { core.recWaveSnapshot() }
+    func momentaryLUFS() -> Double { core.momentaryLUFS() }
+    func spectrumSamples(_ count: Int) -> [Float] { core.spectrumSamples(count) }
+
+    func setVolume(_ x: Double) { core.setMaster(x) }
+    func setMasterFX(_ s: MasterFX) { core.setMasterFX(s) }
+    func setMasterBus(_ s: MasterBus) { core.setMasterBus(s) }
+    func setMasterCutoff(_ hz: Double) { core.setMasterCutoff(hz) }
+    func setReverbAuto(_ v: Double) { core.setReverbAuto(v) }
+    func setDelayAuto(_ v: Double) { core.setDelayAuto(v) }
+    func setFlex(_ mode: Int, stepSec: Double) { core.setFlex(mode, stepSec: stepSec) }
+    /// Reset all automation overrides to their neutral (off) state.
+    func resetAutomation() { core.setMasterCutoff(20000); core.setReverbAuto(-1); core.setDelayAuto(-1) }
+    func setChannelFX(_ index: Int, _ s: ChannelFX) { core.setChannelFX(index, s) }
+    func setChannelCount(_ n: Int) { core.setChannelCount(n) }   // G2 — dynamic insert-FX bus pool
+    func setMultiSample(_ regions: [MultiSampleRegion]) { core.setMultiSample(regions) }
+
+    func makeSample(_ kind: String) -> (dur: Double, transients: [Double], wave: [Double]) {
+        ensure()
+        return core.makeSampleBuffer(kind)
+    }
+
+    /// Decode a user audio file (from Files / iCloud) into the sample buffer as
+    /// mono at the engine's sample rate. Returns nil if the file can't be read.
+    func importAudio(url: URL, maxSeconds: Double = 30) -> (dur: Double, transients: [Double], wave: [Double])? {
+        ensure()
+        guard let data = decode(url: url, maxSeconds: maxSeconds) else { return nil }
+        return core.loadExternal(data)
+    }
+
+    /// Decode a file to mono @ engine SR *without* touching the sample buffer (for audio clips).
+    func decodeAudioFile(url: URL, maxSeconds: Double = 60) -> [Float]? {
+        ensure(); return decode(url: url, maxSeconds: maxSeconds)
+    }
+
+    /// Push a raw mono buffer into the sample slot (used to restore a persisted sample on project load).
+    @discardableResult
+    func importBuffer(_ data: [Float]) -> (dur: Double, transients: [Double], wave: [Double]) { ensure(); return core.loadExternal(data) }
+
+    private func decode(url: URL, maxSeconds: Double) -> [Float]? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let src = file.processingFormat
+        let frames = AVAudioFrameCount(file.length)
+        guard frames > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: frames) else { return nil }
+        do { try file.read(into: inBuf) } catch { return nil }
+
+        // Fast path: already mono @ engine rate.
+        if src.sampleRate == core.sr && src.channelCount == 1 {
+            let data = Self.floats(from: inBuf, sr: core.sr, maxSeconds: maxSeconds)
+            return data.isEmpty ? nil : data
+        }
+        // Otherwise resample + downmix to mono Float32 @ engine rate.
+        guard let outFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: core.sr, channels: 1, interleaved: false),
+              let conv = AVAudioConverter(from: src, to: outFmt) else { return nil }
+        let cap = AVAudioFrameCount(Double(frames) * core.sr / src.sampleRate) + 2048
+        guard let outBuf = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return nil }
+        var fed = false
+        var err: NSError?
+        conv.convert(to: outBuf, error: &err) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true; status.pointee = .haveData; return inBuf
+        }
+        guard err == nil else { return nil }
+        let data = Self.floats(from: outBuf, sr: core.sr, maxSeconds: maxSeconds)
+        return data.isEmpty ? nil : data
+    }
+
+    func playClip(_ data: [Float], when: Double, gain: Double, channel: Int) {
+        ensure()
+        core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel)
+    }
+    func stopClips() { core.stopClips() }
+
+    /// Pull a mono `[Float]` out of a PCM buffer (down-mixing if needed), capped to `maxSeconds`.
+    private static func floats(from buf: AVAudioPCMBuffer, sr: Double, maxSeconds: Double) -> [Float] {
+        let n = Int(buf.frameLength), ch = Int(buf.format.channelCount)
+        guard n > 0, ch > 0, let chans = buf.floatChannelData else { return [] }
+        let cap = min(n, Int(sr * maxSeconds))
+        var out = [Float](repeating: 0, count: cap)
+        if ch == 1 {
+            let p = chans[0]
+            for i in 0..<cap { out[i] = p[i] }
+        } else {
+            let inv = 1 / Float(ch)
+            for i in 0..<cap {
+                var s: Float = 0
+                for c in 0..<ch { s += chans[c][i] }
+                out[i] = s * inv
+            }
+        }
+        return out
+    }
+}

@@ -1,0 +1,429 @@
+//  TeacherModeView.swift — Teacher / Classroom mode: roster, live class, beat
+//  review. Classroom-safe (teacher-managed accounts, no public messaging/feeds).
+//  Ported from mode-teacher.jsx.
+
+import SwiftUI
+
+private let TE_CLASS = "Beat Lab · 4th Period"
+private let TE_CODE = "FD-7K2P"
+private let TE_TOTAL = 6   // roster-card lesson scale (Student/Submission models live in ClassroomStore.swift)
+
+private func starsFor(_ acc: Double) -> Int { acc >= 0.93 ? 3 : (acc >= 0.78 ? 2 : (acc >= 0.55 ? 1 : 0)) }
+
+struct TeacherModeView: View {
+    @EnvironmentObject var project: Project
+    @EnvironmentObject var engine: AudioEngine
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var progress: ProgressStore     // live local-user values (#152)
+    @EnvironmentObject var classroom: ClassroomStore   // persisted roster/live/sel/feedback (#159)
+    var openTab: (String) -> Void = { _ in }
+
+    @State private var tab = "roster"                  // navigation only — fine to reset on return
+    @State private var toast: String?                  // transient
+
+    /// What the roster/monitor display: the live local "You" row first, then the persisted peers.
+    private var displayRoster: [Student] { [classroom.localRow(progress: progress, outOf: TE_TOTAL)] + classroom.students }
+    private var onCount: Int { displayRoster.filter { $0.on }.count }
+    private var subs: [Student] { displayRoster.filter { $0.sub != nil } }   // local row has sub:nil → excluded
+    private var newSubs: Int { subs.filter { !($0.sub?.reviewed ?? true) }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                Text("Teacher").font(FDFont.display(26, .bold)).foregroundStyle(settings.ink)
+                Eyebrow(text: TE_CLASS)
+                Spacer()
+                Text("\(onCount) of \(displayRoster.count) online\(classroom.live ? " · LIVE" : "")")
+                    .font(FDFont.ui(12.5)).foregroundStyle(classroom.live ? settings.accent : settings.inkFaint)
+            }
+            CoachNote("Classroom-safe by design — **teacher-managed accounts**, no public messaging, profiles or feeds. Push kits, beats and tempo straight to every student.")
+                .padding(.top, 10)
+            tabs.padding(.vertical, 14)
+            Group {
+                switch tab {
+                case "roster": roster
+                case "live": liveClass
+                default: review
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .overlay(alignment: .bottom) {
+            if let toast { toastView(toast) }
+        }
+    }
+
+    private var tabs: some View {
+        HStack(spacing: 8) {
+            tabBtn("Roster", "roster")
+            tabBtn("Live Class", "live")
+            tabBtn("Submissions", "review", badge: newSubs)
+        }
+    }
+    private func tabBtn(_ label: String, _ id: String, badge: Int = 0) -> some View {
+        Button { tab = id } label: {
+            HStack(spacing: 7) {
+                Text(label).font(FDFont.ui(14, .semibold))
+                if badge > 0 {
+                    Text("\(badge)").font(FDFont.mono(10, .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Capsule().fill(settings.theme.miss))
+                }
+            }
+            .foregroundStyle(tab == id ? settings.ink : settings.inkDim)
+            .padding(.horizontal, 18).frame(height: 38)
+            .background(RoundedRectangle(cornerRadius: 10).fill(tab == id ? settings.accent.opacity(0.18) : settings.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(tab == id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
+    // MARK: roster
+
+    private var roster: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text("ASSIGN A LESSON").font(FDFont.mono(10, .bold)).tracking(1).foregroundStyle(settings.inkFaint)
+                Picker("", selection: $classroom.assignLesson) {
+                    ForEach(Kit.lessons) { l in Text("\(l.n). \(l.title)").tag(l.id) }
+                }.pickerStyle(.menu).tint(settings.ink)
+                Spacer()
+                Button { assign() } label: {
+                    Text("Assign to Class").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 16).frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                }.buttonStyle(.plain)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                    ForEach(displayRoster) { st in studentCard(st) }
+                }
+            }.scrollIndicators(.hidden)
+        }
+    }
+
+    private func studentCard(_ st: Student) -> some View {
+        // The local "You" row has no submission to review — tapping it is a no-op.
+        Button { if st.id != ClassroomStore.localRowID { classroom.selectedID = st.id; tab = "review" } } label: {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 9) {
+                    avatar(st, size: 34)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(st.name).font(FDFont.display(14, .semibold)).foregroundStyle(settings.ink)
+                        statusPill(st.status)
+                    }
+                    Spacer()
+                    if let sub = st.sub, !sub.reviewed { newTag }
+                }
+                Text(st.doing).font(FDFont.ui(12)).foregroundStyle(settings.inkDim).lineLimit(1)
+                let shownDone = min(st.done, TE_TOTAL)   // keep bar + label on the same "N/total" scale (#152)
+                progressBar(Double(shownDone) / Double(TE_TOTAL))
+                HStack {
+                    Text("\(shownDone)/\(TE_TOTAL) lessons").font(FDFont.mono(10)).foregroundStyle(settings.inkFaint)
+                    Spacer()
+                    Text("\(Int(st.acc * 100))% timing").font(FDFont.mono(10)).foregroundStyle(settings.inkDim)
+                    stars(starsFor(st.acc))
+                }
+            }
+            .padding(13)
+            .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
+    // MARK: live
+
+    private var liveClass: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(spacing: 12) {
+                VStack(spacing: 8) {
+                    Text("CLASS CODE").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint)
+                    Text(TE_CODE).font(FDFont.display(34, .bold)).foregroundStyle(settings.ink).tracking(2)
+                        .accessibilityLabel("Class code \(TE_CODE)")
+                    Text("Students join from the home screen").font(FDFont.ui(12)).foregroundStyle(settings.inkDim)
+                    Button { toggleLive() } label: {
+                        HStack(spacing: 8) {
+                            Circle().fill(classroom.live ? settings.theme.miss : settings.theme.good).frame(width: 9, height: 9)
+                            Text(classroom.live ? "End Live Class" : "Start Live Class").font(FDFont.ui(14, .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                        .background(RoundedRectangle(cornerRadius: 13).fill(classroom.live ? settings.theme.miss : settings.accent))
+                    }.buttonStyle(.plain).padding(.top, 4)
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+
+                teCard("Class Tempo") {
+                    HStack(spacing: 12) {
+                        tempoBtn("–") { project.setBpm(project.bpm - 2) }
+                        VStack(spacing: 0) {
+                            Text("\(project.bpm)").font(FDFont.mono(24, .bold)).foregroundStyle(settings.ink)
+                            Text("BPM").font(FDFont.mono(9, .bold)).foregroundStyle(settings.inkFaint)
+                        }.frame(maxWidth: .infinity)
+                        tempoBtn("+") { project.setBpm(project.bpm + 2) }
+                    }
+                    Text("Sets the tempo for the whole studio — every student follows.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                }
+            }
+            .frame(width: 280)
+
+            teCard("Push to Class", flex: true) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    pushBtn("🎛 Push Kit") { project.bank = "A"; pushToClass("Studio Kit") }
+                    pushBtn("♫ Push Pattern") { loadPattern("boombap"); pushToClass("Boom Bap pattern") }
+                    pushBtn("⏱ Push Tempo") { pushToClass("Tempo \(project.bpm) BPM") }
+                    pushBtn("✦ Send Practice") { previewPattern("boombap"); pushToClass("Practice drill"); openTab("learn") }
+                }
+                Text("LIVE MONITOR").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint).padding(.top, 8)
+                if !classroom.live {
+                    Text("Start the live class to watch students join and follow along in real time.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(displayRoster) { st in monitorRow(st) }
+                        }
+                    }.scrollIndicators(.hidden)
+                }
+            }
+        }
+    }
+
+    private func monitorRow(_ st: Student) -> some View {
+        HStack(spacing: 9) {
+            avatar(st, size: 24)
+            Text(st.name).font(FDFont.ui(13, .medium)).foregroundStyle(st.on ? settings.ink : settings.inkFaint)
+            Spacer()
+            let txt = st.on ? (st.status == "on-task" ? "Following" : "Joined") : "Not joined"
+            let col: Color = st.on ? (st.status == "on-task" ? settings.theme.good : settings.accent) : settings.inkFaint
+            Text(txt).font(FDFont.mono(10, .bold)).foregroundStyle(col)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(col.opacity(0.14)))
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2)).opacity(st.on ? 1 : 0.6)
+    }
+
+    // MARK: review
+
+    private var review: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SUBMITTED BEATS · \(subs.count)").font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
+                if subs.isEmpty { Text("No submissions yet.").font(FDFont.ui(12)).foregroundStyle(settings.inkFaint) }
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(subs) { st in subRow(st) }
+                    }
+                }.scrollIndicators(.hidden)
+            }
+            .frame(width: 280)
+
+            Group {
+                if let st = classroom.selectedID.flatMap({ id in displayRoster.first { $0.id == id } }), let sub = st.sub {
+                    reviewDetail(st, sub)
+                } else {
+                    VStack {
+                        Text("Select a submission to listen and leave feedback.")
+                            .font(FDFont.ui(14)).foregroundStyle(settings.inkDim)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    private func subRow(_ st: Student) -> some View {
+        Button { classroom.selectedID = st.id } label: {
+            HStack(spacing: 9) {
+                avatar(st, size: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(st.sub?.beat ?? "").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
+                    Text(st.name).font(FDFont.ui(11)).foregroundStyle(settings.inkDim)
+                }
+                Spacer()
+                if !(st.sub?.reviewed ?? true) { newTag }
+                else { Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(settings.theme.good) }
+            }
+            .padding(.horizontal, 10).frame(height: 48)
+            .background(RoundedRectangle(cornerRadius: 10).fill(classroom.selectedID == st.id ? settings.accent.opacity(0.16) : settings.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(classroom.selectedID == st.id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
+    private func reviewDetail(_ st: Student, _ sub: Submission) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                avatar(st, size: 38)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(sub.beat).font(FDFont.display(16, .bold)).foregroundStyle(settings.ink)
+                    Text("\(st.name) · \(st.doing)").font(FDFont.ui(12)).foregroundStyle(settings.inkDim)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(Int(sub.acc * 100))%").font(FDFont.mono(18, .bold)).foregroundStyle(settings.ink)
+                    stars(starsFor(sub.acc))
+                }
+            }
+            HStack(spacing: 10) {
+                Button { previewPattern(sub.pid) } label: {
+                    HStack(spacing: 8) { Triangle().fill(.white).frame(width: 11, height: 13); Text("Play Beat") }
+                        .font(FDFont.ui(14, .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 18).frame(height: 44)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                }.buttonStyle(.plain)
+                Text("2-bar preview of the submission").font(FDFont.ui(12)).foregroundStyle(settings.inkFaint)
+                Spacer()
+            }
+            Text("WRITTEN FEEDBACK").font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
+            feedbackEditor(st)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+    }
+
+    @ViewBuilder private func feedbackEditor(_ st: Student) -> some View {
+        let binding = Binding<String>(
+            get: { classroom.students.first { $0.id == st.id }?.sub?.fb ?? "" },
+            set: { v in classroom.setFeedbackText(st.id, v) })
+        TextEditor(text: binding)
+            .font(FDFont.ui(14)).foregroundStyle(settings.ink).scrollContentBackground(.hidden)
+            .padding(10).frame(height: 100)
+            .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2)).overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+        HStack(spacing: 10) {
+            Button { sendFeedback(st.id, "") } label: {
+                Text("★ Unlock Next Lesson").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
+                    .padding(.horizontal, 16).frame(height: 40)
+                    .background(RoundedRectangle(cornerRadius: 11).fill(settings.panel2)).overlay(RoundedRectangle(cornerRadius: 11).stroke(settings.line, lineWidth: 1))
+            }.buttonStyle(.plain)
+            Spacer()
+            let txt = binding.wrappedValue
+            Button { sendFeedback(st.id, txt) } label: {
+                Text("Send Feedback").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 18).frame(height: 40)
+                    .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+            }.buttonStyle(.plain).disabled(txt.trimmingCharacters(in: .whitespaces).isEmpty).opacity(txt.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
+        }
+    }
+
+    // MARK: small components
+
+    private func avatar(_ st: Student, size: CGFloat) -> some View {
+        Text(st.initial).font(FDFont.display(size * 0.45, .bold)).foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(RoundedRectangle(cornerRadius: size * 0.3).fill(st.color))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(st.name), avatar")
+    }
+    private func statusPill(_ s: String) -> some View {
+        let (txt, col): (String, Color) = s == "on-task" ? ("On task", settings.theme.good) : (s == "idle" ? ("Idle", settings.theme.perfect) : ("Offline", settings.inkFaint))
+        return HStack(spacing: 4) {
+            Circle().fill(col).frame(width: 6, height: 6)
+            Text(txt).font(FDFont.mono(9, .bold)).foregroundStyle(col)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Status: \(txt)")
+    }
+    private func progressBar(_ frac: Double) -> some View {
+        let f = min(1, max(0, frac))   // clamp so a power-user local row never overdraws its track (#152)
+        return GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(settings.line)
+                Capsule().fill(settings.accent).frame(width: g.size.width * f)
+            }
+        }.frame(height: 6)
+    }
+    private func stars(_ n: Int) -> some View {
+        HStack(spacing: 2) {
+            ForEach(0..<3, id: \.self) { i in
+                Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(i < n ? settings.theme.perfect : settings.line)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(n) of 3 stars")
+    }
+    private var newTag: some View {
+        Text("NEW").font(FDFont.mono(8, .bold)).foregroundStyle(.white)
+            .padding(.horizontal, 6).padding(.vertical, 2).background(Capsule().fill(settings.theme.miss))
+    }
+    private func teCard<C: View>(_ title: String, flex: Bool = false, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased()).font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint)
+            content()
+            if flex { Spacer(minLength: 0) }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: flex ? .infinity : nil, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+    }
+    private func tempoBtn(_ s: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(s).font(.system(size: 19, weight: .bold)).foregroundStyle(settings.ink)
+                .frame(width: 38, height: 38).background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2)).overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+    private func pushBtn(_ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label).font(FDFont.ui(13, .semibold)).foregroundStyle(classroom.live ? settings.ink : settings.inkFaint).lineLimit(1)
+                .frame(maxWidth: .infinity).frame(height: 44)
+                .background(RoundedRectangle(cornerRadius: 11).fill(settings.panel2)).overlay(RoundedRectangle(cornerRadius: 11).stroke(settings.line, lineWidth: 1))
+        }.buttonStyle(.plain).disabled(!classroom.live).opacity(classroom.live ? 1 : 0.5)
+    }
+    private func toastView(_ msg: String) -> some View {
+        Text(msg).font(FDFont.ui(14, .semibold)).foregroundStyle(.white)
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            .background(Capsule().fill(settings.ink.opacity(0.92)))
+            .foregroundStyle(settings.theme.bg)
+            .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
+            .padding(.bottom, 18)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    // MARK: actions
+
+    private func flash(_ msg: String) {
+        withAnimation { toast = msg }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_900_000_000)
+            withAnimation { toast = nil }
+        }
+    }
+    private func pushToClass(_ label: String) { flash("\(label) sent to \(onCount) students") }
+    private func toggleLive() { classroom.live.toggle(); flash(classroom.live ? "Live class started · code \(TE_CODE)" : "Live class ended") }
+    private func assign() {
+        let l = Kit.lessons.first { $0.id == classroom.assignLesson }
+        flash("Assigned \u{201C}\(l?.title ?? "lesson")\u{201D} to the class")
+    }
+    private func sendFeedback(_ id: String, _ text: String) {
+        classroom.sendFeedback(id, text)   // persists via the store's didSet (#159)
+        flash("Feedback sent")
+    }
+    private func loadPattern(_ pid: String) {
+        guard let pat = Kit.pattern(pid) else { return }
+        project.checkpoint("pushPattern", coalesce: false)   // overwrites the current beat → keep it undoable
+        project.lanes = Kit.lanesFromSteps(pat.steps)
+        project.setBpm(pat.bpm)
+        project.name = pat.name
+    }
+    private func previewPattern(_ pid: String) {
+        engine.start()
+        let pat = Kit.pattern(pid) ?? Kit.patterns[0]
+        let stepDur = (60.0 / Double(pat.bpm)) / 4
+        let start = engine.now() + 0.1
+        for bar in 0..<2 {
+            for st in 0..<16 {
+                let t = start + Double(bar * 16 + st) * stepDur
+                for padID in pat.steps[st] {
+                    engine.trigger(padID, vel: (padID == "kick" || padID == "snare") ? 1 : 0.8, when: t)
+                }
+            }
+        }
+    }
+}

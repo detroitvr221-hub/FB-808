@@ -6,7 +6,22 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		CD121C372FE3062700BDF787 /* FD808AU.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CD121C0E2FE3062700BDF787 /* FD808AU.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		CD121C422FE3088B00BDF787 /* FD808Engine in Frameworks */ = {isa = PBXBuildFile; productRef = CD121C412FE3088B00BDF787 /* FD808Engine */; };
+		CD121C4B2FE3190100BDF787 /* FD808Engine in Frameworks */ = {isa = PBXBuildFile; productRef = CD121C4A2FE3190100BDF787 /* FD808Engine */; };
+		CD121C4D2FE3191600BDF787 /* FD808Engine in Frameworks */ = {isa = PBXBuildFile; productRef = CD121C4C2FE3191600BDF787 /* FD808Engine */; };
+		CDA17C0FFEE0000000000002 /* LinkKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDA17C0FFEE0000000000001 /* LinkKit.xcframework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		CD121C352FE3062700BDF787 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CD8A94912FDFBF7C0019294D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CD121C0D2FE3062700BDF787;
+			remoteInfo = FD808AU;
+		};
 		CD8A94A92FDFBF7E0019294D /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CD8A94912FDFBF7C0019294D /* Project object */;
@@ -23,13 +38,59 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		CD121C382FE3062700BDF787 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				CD121C372FE3062700BDF787 /* FD808AU.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		CD121C0E2FE3062700BDF787 /* FD808AU.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FD808AU.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		CD8A94992FDFBF7C0019294D /* FB-808.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FB-808.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		CD8A94A82FDFBF7E0019294D /* FB-808Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "FB-808Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		CD8A94B22FDFBF7E0019294D /* FB-808UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "FB-808UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		CDA17C0FFEE0000000000001 /* LinkKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LinkKit.xcframework; path = Frameworks/LinkKit.xcframework; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		CD121C3B2FE3062700BDF787 /* Exceptions for "FD808AU" folder in "FD808AU" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CD121C0D2FE3062700BDF787 /* FD808AU */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		CD121C3D2FE3062700BDF787 /* Exceptions for "FD808AU" folder in "Copy Bundle Resources" phase from "FD808AU" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = CD121C0C2FE3062700BDF787 /* Resources */;
+			membershipExceptions = (
+				Common/DSP/FD808AUAUProcessHelper.hpp,
+				DSP/FD808AUDSPKernel.hpp,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		CD121C0F2FE3062700BDF787 /* FD808AU */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CD121C3B2FE3062700BDF787 /* Exceptions for "FD808AU" folder in "FD808AU" target */,
+				CD121C3D2FE3062700BDF787 /* Exceptions for "FD808AU" folder in "Copy Bundle Resources" phase from "FD808AU" target */,
+			);
+			path = FD808AU;
+			sourceTree = "<group>";
+		};
 		CD8A949B2FDFBF7C0019294D /* FB-808 */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "FB-808";
@@ -48,10 +109,21 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		CD121C0B2FE3062700BDF787 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CD121C4D2FE3191600BDF787 /* FD808Engine in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CD8A94962FDFBF7C0019294D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CD121C422FE3088B00BDF787 /* FD808Engine in Frameworks */,
+				CD121C4B2FE3190100BDF787 /* FD808Engine in Frameworks */,
+				CDA17C0FFEE0000000000002 /* LinkKit.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,12 +144,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		CD121C432FE30D6200BDF787 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				CDA17C0FFEE0000000000001 /* LinkKit.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		CD8A94902FDFBF7C0019294D = {
 			isa = PBXGroup;
 			children = (
 				CD8A949B2FDFBF7C0019294D /* FB-808 */,
 				CD8A94AB2FDFBF7E0019294D /* FB-808Tests */,
 				CD8A94B52FDFBF7E0019294D /* FB-808UITests */,
+				CD121C0F2FE3062700BDF787 /* FD808AU */,
+				CD121C432FE30D6200BDF787 /* Frameworks */,
 				CD8A949A2FDFBF7C0019294D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,6 +170,7 @@
 				CD8A94992FDFBF7C0019294D /* FB-808.app */,
 				CD8A94A82FDFBF7E0019294D /* FB-808Tests.xctest */,
 				CD8A94B22FDFBF7E0019294D /* FB-808UITests.xctest */,
+				CD121C0E2FE3062700BDF787 /* FD808AU.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,6 +178,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		CD121C0D2FE3062700BDF787 /* FD808AU */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CD121C3C2FE3062700BDF787 /* Build configuration list for PBXNativeTarget "FD808AU" */;
+			buildPhases = (
+				CD121C0A2FE3062700BDF787 /* Sources */,
+				CD121C0B2FE3062700BDF787 /* Frameworks */,
+				CD121C0C2FE3062700BDF787 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CD121C0F2FE3062700BDF787 /* FD808AU */,
+			);
+			name = FD808AU;
+			packageProductDependencies = (
+				CD121C4C2FE3191600BDF787 /* FD808Engine */,
+			);
+			productName = FD808AU;
+			productReference = CD121C0E2FE3062700BDF787 /* FD808AU.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		CD8A94982FDFBF7C0019294D /* FB-808 */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = CD8A94BC2FDFBF7E0019294D /* Build configuration list for PBXNativeTarget "FB-808" */;
@@ -102,16 +208,20 @@
 				CD8A94952FDFBF7C0019294D /* Sources */,
 				CD8A94962FDFBF7C0019294D /* Frameworks */,
 				CD8A94972FDFBF7C0019294D /* Resources */,
+				CD121C382FE3062700BDF787 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				CD121C362FE3062700BDF787 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				CD8A949B2FDFBF7C0019294D /* FB-808 */,
 			);
 			name = "FB-808";
 			packageProductDependencies = (
+				CD121C412FE3088B00BDF787 /* FD808Engine */,
+				CD121C4A2FE3190100BDF787 /* FD808Engine */,
 			);
 			productName = "FB-808";
 			productReference = CD8A94992FDFBF7C0019294D /* FB-808.app */;
@@ -173,6 +283,9 @@
 				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					CD121C0D2FE3062700BDF787 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 					CD8A94982FDFBF7C0019294D = {
 						CreatedOnToolsVersion = 26.3;
 					};
@@ -195,6 +308,9 @@
 			);
 			mainGroup = CD8A94902FDFBF7C0019294D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CD121C492FE3190100BDF787 /* XCLocalSwiftPackageReference "../FD808Engine" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CD8A949A2FDFBF7C0019294D /* Products */;
 			projectDirPath = "";
@@ -203,11 +319,19 @@
 				CD8A94982FDFBF7C0019294D /* FB-808 */,
 				CD8A94A72FDFBF7E0019294D /* FB-808Tests */,
 				CD8A94B12FDFBF7E0019294D /* FB-808UITests */,
+				CD121C0D2FE3062700BDF787 /* FD808AU */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		CD121C0C2FE3062700BDF787 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CD8A94972FDFBF7C0019294D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -232,6 +356,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		CD121C0A2FE3062700BDF787 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CD8A94952FDFBF7C0019294D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -256,6 +387,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		CD121C362FE3062700BDF787 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CD121C0D2FE3062700BDF787 /* FD808AU */;
+			targetProxy = CD121C352FE3062700BDF787 /* PBXContainerItemProxy */;
+		};
 		CD8A94AA2FDFBF7E0019294D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = CD8A94982FDFBF7C0019294D /* FB-808 */;
@@ -269,6 +405,100 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		CD121C392FE3062700BDF787 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CODE_SIGN_ENTITLEMENTS = FD808AU/FD808AU.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ND325FQRD5;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FD808AU/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = FD808AU;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.FB-808.FD808AU";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "FD808AU/Common/FD808AU-Bridging-Header.h";
+				SWIFT_OBJC_INTEROP_MODE = objcxx;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		CD121C3A2FE3062700BDF787 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CODE_SIGN_ENTITLEMENTS = FD808AU/FD808AU.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ND325FQRD5;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FD808AU/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = FD808AU;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.FB-808.FD808AU";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "FD808AU/Common/FD808AU-Bridging-Header.h";
+				SWIFT_OBJC_INTEROP_MODE = objcxx;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
 		CD8A94BA2FDFBF7E0019294D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -395,30 +625,43 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "FB-808/FB-808.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = ND325FQRD5;
 				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FD-808 uses the microphone so you can record and sample your own audio.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.FB-808";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "FB-808/FB-808-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 2;
 			};
 			name = Debug;
 		};
@@ -427,30 +670,43 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "FB-808/FB-808.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = ND325FQRD5;
 				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FD-808 uses the microphone so you can record and sample your own audio.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.FB-808";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "FB-808/FB-808-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 2;
 			};
 			name = Release;
 		};
@@ -541,6 +797,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		CD121C3C2FE3062700BDF787 /* Build configuration list for PBXNativeTarget "FD808AU" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CD121C392FE3062700BDF787 /* Debug */,
+				CD121C3A2FE3062700BDF787 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		CD8A94942FDFBF7C0019294D /* Build configuration list for PBXProject "FB-808" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -578,6 +843,29 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		CD121C492FE3190100BDF787 /* XCLocalSwiftPackageReference "../FD808Engine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../FD808Engine;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CD121C412FE3088B00BDF787 /* FD808Engine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FD808Engine;
+		};
+		CD121C4A2FE3190100BDF787 /* FD808Engine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FD808Engine;
+		};
+		CD121C4C2FE3191600BDF787 /* FD808Engine */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CD121C492FE3190100BDF787 /* XCLocalSwiftPackageReference "../FD808Engine" */;
+			productName = FD808Engine;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = CD8A94912FDFBF7C0019294D /* Project object */;
 }
