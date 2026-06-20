@@ -11,6 +11,9 @@ import Foundation
 import Combine
 import CryptoKit
 
+/// A live enrolled student, surfaced to the Teacher roster (name is teacher-visible by design; no PII).
+struct RosterEntry: Identifiable, Equatable { let id = UUID(); let name: String; let online: Bool }
+
 @MainActor
 final class SessionStore: ObservableObject, SyncBus {
     enum Role: String { case solo, host, follow }
@@ -52,6 +55,17 @@ final class SessionStore: ObservableObject, SyncBus {
     private var syncHbTask: Task<Void, Never>?   // host: periodic fullSync (late-joiner + divergence backstop)
     private var reconnectTask: Task<Void, Never>?
     private var reconnectAttempt = 0
+    // Token backend (edge function `room`): teacher's host token + the live roster; student's token + presence.
+    @Published private(set) var remoteRoster: [RosterEntry] = []
+    @Published private(set) var roomTitle = ""
+    private(set) var hostToken: String?
+    var studentToken: String {
+        get { UserDefaults.standard.string(forKey: "fd.studentToken") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "fd.studentToken") }
+    }
+    private var rosterTask: Task<Void, Never>?
+    private var presenceTask: Task<Void, Never>?
+    var displayName = "Student"
 
     static func loadDeviceID() -> String {
         let k = "fd.deviceID"
@@ -67,18 +81,111 @@ final class SessionStore: ObservableObject, SyncBus {
 
     // MARK: - Session lifecycle
 
-    func host(code: String) { start(code: code, as: .host) }
-    func follow(code: String) { start(code: code, as: .follow) }
-
-    private func start(code: String, as newRole: Role) {
+    /// Teacher: create a room on the backend (registers this session's public key as the room's
+    /// authoritative host key), then connect. Generates a fresh non-guessable code.
+    func host(title: String? = nil) {
         leave()
+        let code = SessionStore.randomCode()
+        status = "Creating room…"
+        Task { @MainActor in
+            let res = await callRoom(["action": "create", "code": code, "hostKey": pubKeyB64, "title": title])
+            guard res?["ok"] as? Bool == true, let token = res?["hostToken"] as? String else {
+                status = "Offline"; lastError = (res?["error"] as? String) ?? "Could not create room"; return
+            }
+            hostToken = token
+            begin(code: code, role: .host, serverHostKey: nil)
+            startRosterPolling()
+        }
+    }
+
+    /// Student: join a room by code (server-side display-name moderation), receive the AUTHORITATIVE
+    /// host public key (removes the TOFU first-pin race) + a student token, then follow.
+    func follow(code: String, name: String) {
+        leave()
+        displayName = name.isEmpty ? "Student" : name
+        let up = code.uppercased()
+        status = "Joining…"
+        Task { @MainActor in
+            let res = await callRoom(["action": "join", "code": up, "displayName": displayName,
+                                      "studentToken": studentToken.isEmpty ? nil : studentToken])
+            guard res?["ok"] as? Bool == true else {
+                status = "Offline"; lastError = (res?["error"] as? String) ?? "Could not join"; return
+            }
+            if let st = res?["studentToken"] as? String { studentToken = st }
+            if let n = res?["displayName"] as? String { displayName = n }   // moderated name from server
+            if let t = res?["title"] as? String { roomTitle = t }
+            var serverKey: Curve25519.Signing.PublicKey?
+            if let hk = res?["hostKey"] as? String, let raw = Data(base64Encoded: hk) {
+                serverKey = try? Curve25519.Signing.PublicKey(rawRepresentation: raw)
+            }
+            begin(code: up, role: .follow, serverHostKey: serverKey)
+            startPresence()
+        }
+    }
+
+    private func begin(code: String, role newRole: Role, serverHostKey: Curve25519.Signing.PublicKey?) {
         roomCode = code.uppercased()
         role = newRole
         topic = SyncConfig.channelTopic(roomCode)
         lastAppliedSeq = 0
         reconnectAttempt = 0
-        pinnedHostKey = nil   // re-pin the host key for the new room
+        pinnedHostKey = serverHostKey   // server-authoritative when present; nil → TOFU fallback
         openConnection()
+    }
+
+    // MARK: - Token backend (edge function `room`)
+
+    private func callRoom(_ body: [String: Any?]) async -> [String: Any]? {
+        var req = URLRequest(url: SyncConfig.functionsURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 12
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(SyncConfig.anonKey, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(SyncConfig.anonKey)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body.compactMapValues { $0 })
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj
+    }
+
+    private func startRosterPolling() {
+        rosterTask?.cancel()
+        rosterTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if let res = await self.callRoom(["action": "roster", "code": self.roomCode, "hostToken": self.hostToken]),
+                   let arr = res["roster"] as? [[String: Any]] {
+                    self.remoteRoster = arr.map { RosterEntry(name: ($0["name"] as? String) ?? "Student",
+                                                              online: ($0["online"] as? Bool) ?? false) }
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+
+    private func startPresence() {
+        presenceTask?.cancel()
+        presenceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                _ = await self.callRoom(["action": "presence", "code": self.roomCode, "studentToken": self.studentToken])
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+            }
+        }
+    }
+
+    /// Student: submit the current beat for teacher review (optional audio URL from Storage).
+    func submitBeat(beatName: String, audioUrl: String?, accuracy: Double?) async {
+        _ = await callRoom(["action": "submit", "code": roomCode, "studentToken": studentToken,
+                            "displayName": displayName, "beatName": beatName, "audioUrl": audioUrl, "accuracy": accuracy])
+    }
+    /// Teacher: list submissions / send feedback.
+    func fetchSubmissions() async -> [[String: Any]] {
+        let res = await callRoom(["action": "submissions", "code": roomCode, "hostToken": hostToken])
+        return (res?["submissions"] as? [[String: Any]]) ?? []
+    }
+    func sendFeedbackRemote(submissionId: String, text: String) async {
+        _ = await callRoom(["action": "feedback", "code": roomCode, "hostToken": hostToken, "submissionId": submissionId, "text": text])
     }
 
     /// Open (or re-open) the WebSocket for the current role/room. Reused by reconnect.
@@ -131,10 +238,17 @@ final class SessionStore: ObservableObject, SyncBus {
     func leave() {
         reconnectTask?.cancel(); reconnectTask = nil; reconnectAttempt = 0
         syncHbTask?.cancel(); syncHbTask = nil
+        rosterTask?.cancel(); rosterTask = nil
+        presenceTask?.cancel(); presenceTask = nil
         forked = false
+        // Teacher: deactivate the room on the backend so its code/key can't be reused/spoofed later.
+        if role == .host, let token = hostToken, !roomCode.isEmpty {
+            let code = roomCode
+            Task { _ = await callRoom(["action": "close", "code": code, "hostToken": token]) }
+        }
         if role != .solo { project?.syncBus = NoSyncBus() }
         teardownSocket()
-        role = .solo; status = "Offline"; roomCode = ""
+        role = .solo; status = "Offline"; roomCode = ""; hostToken = nil; remoteRoster = []; roomTitle = ""
     }
 
     /// True while following a teacher — local editing is suppressed (read-only mirror) unless forked.

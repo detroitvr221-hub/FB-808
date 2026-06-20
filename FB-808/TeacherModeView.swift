@@ -23,8 +23,20 @@ struct TeacherModeView: View {
     @State private var tab = "roster"                  // navigation only — fine to reset on return
     @State private var toast: String?                  // transient
 
-    /// What the roster/monitor display: the live local "You" row first, then the persisted peers.
-    private var displayRoster: [Student] { [classroom.localRow(progress: progress, outOf: TE_TOTAL)] + classroom.students }
+    /// What the roster/monitor display: the live local "You" row first, then — when actually hosting a
+    /// live class — the REAL enrolled students from the backend; otherwise the example peers (preview).
+    private var displayRoster: [Student] {
+        let me = classroom.localRow(progress: progress, outOf: TE_TOTAL)
+        if session.role == .host {
+            let live = session.remoteRoster.enumerated().map { (i, e) -> Student in
+                Student(id: "remote-\(i)", name: e.name, colorHex: Student.palette[i % Student.palette.count],
+                        on: e.online, status: e.online ? "on-task" : "offline",
+                        doing: e.online ? "In class" : "Away", done: 0, acc: 0, sub: nil)
+            }
+            return [me] + live
+        }
+        return [me] + classroom.students
+    }
     private var onCount: Int { displayRoster.filter { $0.on }.count }
     private var subs: [Student] { displayRoster.filter { $0.sub != nil } }   // local row has sub:nil → excluded
     private var newSubs: Int { subs.filter { !($0.sub?.reviewed ?? true) }.count }
@@ -188,7 +200,7 @@ struct TeacherModeView: View {
                             .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
                         Button {
                             let c = joinCode.trimmingCharacters(in: .whitespaces).uppercased()
-                            if !c.isEmpty { session.follow(code: c) }
+                            if !c.isEmpty { session.follow(code: c, name: "Student") }
                         } label: {
                             Text("Join").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                                 .padding(.horizontal, 16).frame(height: 36)
@@ -427,12 +439,10 @@ struct TeacherModeView: View {
     private func pushToClass(_ label: String) { flash("\(label) sent to \(onCount) students") }
     private func toggleLive() {
         classroom.live.toggle()
-        if classroom.live {
-            let code = SessionStore.randomCode()   // fresh non-guessable code per class (not a shared constant)
-            session.host(code: code); flash("Live class started · code \(code)")
-        } else { session.leave(); flash("Live class ended") }
+        if classroom.live { session.host(title: TE_CLASS); flash("Starting live class…") }
+        else { session.leave(); flash("Live class ended") }
     }
-    private var liveCode: String { session.roomCode.isEmpty ? TE_CODE : session.roomCode }
+    private var liveCode: String { session.roomCode.isEmpty ? "—" : session.roomCode }
     private func assign() {
         let l = Kit.lessons.first { $0.id == classroom.assignLesson }
         flash("Assigned \u{201C}\(l?.title ?? "lesson")\u{201D} to the class")

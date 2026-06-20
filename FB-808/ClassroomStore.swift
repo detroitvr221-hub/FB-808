@@ -17,6 +17,7 @@ struct Student: Codable, Identifiable, Equatable {
     var sub: Submission?
     var color: Color { Color(hex: colorHex) }   // computed → excluded from synthesized Codable
     var initial: String { String(name.prefix(1)) }
+    static let palette = ["#FF6A2B", "#33E0D4", "#C77DFF", "#FFC23C", "#6C7BFF", "#7AE582", "#FF7AC6", "#27C2E8"]
 }
 
 @MainActor
