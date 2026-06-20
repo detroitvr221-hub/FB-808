@@ -337,6 +337,11 @@ final class Project: ObservableObject {
     /// True while applyState() runs (undo/redo/load). Engine-push didSets still fire (needed to
     /// re-sync), but checkpoint() must early-out — restoring a snapshot is not itself an edit (#23).
     private var isApplyingState = false
+    // Op layer (Step 4): the sync bus (no-op until a live room attaches one), the remote-apply guard
+    // (suppresses undo pollution + op echo while applying a received op), and the last applied seq.
+    var syncBus: SyncBus = NoSyncBus()
+    private(set) var isApplyingRemote = false
+    var lastOpSeq: UInt64 = 0
     // #19 sampler-buffer undo: a bounded ring of pre-edit engine `sampleOriginal` copies, keyed by a
     // token stamped into the snapshot a checkpoint captures, so undo/redo can restore the AUDIO too.
     private var sampleBufferRing: [(key: String, buffer: [Float])] = []
@@ -384,16 +389,72 @@ final class Project: ObservableObject {
         var lane = lanes[padID] ?? Kit.emptyLane()
         lane[i] = lane[i] != 0 ? 0 : vel
         lanes[padID] = lane
+        emit(.setStep(pad: padID, step: i, vel: lane[i]))
     }
     func setStepVel(_ padID: String, _ i: Int, _ vel: Double) {
         checkpoint("paint:\(padID)")
         var lane = lanes[padID] ?? Kit.emptyLane()
         lane[i] = max(0, min(1, vel))
         lanes[padID] = lane
+        emit(.setStep(pad: padID, step: i, vel: lane[i]))
     }
-    func clearRow(_ padID: String) { checkpoint("clearRow", coalesce: false); lanes[padID] = Kit.emptyLane(); stepMeta[padID] = nil }
+    func clearRow(_ padID: String) { checkpoint("clearRow", coalesce: false); lanes[padID] = Kit.emptyLane(); stepMeta[padID] = nil; emit(.clearRow(pad: padID)) }
     func clearAll() { checkpoint("clearAll", coalesce: false); lanes = [:]; stepMeta = [:] }
     func setRowLane(_ padID: String, _ lane: [Double]) { checkpoint("row:\(padID)", coalesce: false); lanes[padID] = lane; stepMeta[padID] = nil }
+
+    // MARK: - Op layer (Step 4) — emit local edits, apply remote ops through the same mutators
+
+    /// Emit an op for a LOCAL edit. No-op unless a real SyncBus is attached (live room as teacher).
+    /// Suppressed while applying a remote op or restoring state, so there's no echo and undo/load
+    /// don't broadcast. Called at the end of the named mutators (the single choke point per verb).
+    func emit(_ kind: OpKind) {
+        guard !isApplyingRemote, !isApplyingState else { return }
+        syncBus.emit(SyncOp(kind: kind))
+    }
+
+    /// Apply an op to the live state by calling the SAME mutator the teacher's UI called. `remote`
+    /// = received from the network → sets the guard so it doesn't pollute the student's undo stack
+    /// or re-emit. Drives toward the op's intended state (idempotent where the mutator is a toggle).
+    func applyOp(_ kind: OpKind, remote: Bool) {
+        // remote ops apply like a state restore: checkpoint() early-outs (no undo pollution) and
+        // emit() early-outs (no echo back to the network), both via the isApplyingState/Remote guards.
+        if remote { isApplyingRemote = true; isApplyingState = true }
+        defer { if remote { isApplyingRemote = false; isApplyingState = false } }
+        switch kind {
+        case .setStep(let pad, let step, let vel):
+            setStepVel(pad, step, vel)
+        case .clearRow(let pad):
+            clearRow(pad)
+        case .setMelodyNote(let step, let pitch, let len, let on):
+            // placeMelodyNote toggles: adds when absent, removes when present. Only act when the
+            // current state differs from the op's intended `on`, so apply converges to the teacher's.
+            let exists = melody.contains { $0.pitch == pitch && step >= $0.step && step < $0.step + $0.dur }
+            if on != exists { placeMelodyNote(step: step, pitch: pitch, len: len) }
+        case .setStepMeta(let pad, let step, let meta):
+            setStepMeta(pad, step) { $0 = meta }
+        case .setTempo(let bpm):
+            setBpm(bpm)
+        case .switchSequence(let i):
+            switchSequence(i)
+        case .setBank(let b):
+            bank = b
+        case .setMix(let ch, let vol, let pan, let mute, let solo):
+            setMix(ch) { m in
+                if let vol { m.vol = vol }; if let pan { m.pan = pan }
+                if let mute { m.mute = mute }; if let solo { m.solo = solo }
+            }
+        case .transport:
+            break   // Step 7 wires clock-synced follow-teacher playback
+        case .fullSync(let snap):
+            restore(snap)
+        }
+    }
+
+    /// Student path: apply a received op (records seq for gap detection; no undo pollution, no echo).
+    func applyRemote(_ op: SyncOp) {
+        lastOpSeq = op.seq
+        applyOp(op.kind, remote: true)
+    }
 
     // MARK: per-step meta (probability / conditions / p-locks)
 
@@ -407,6 +468,7 @@ final class Project: ObservableObject {
         } else {
             stepMeta[pad, default: [:]][step] = sm
         }
+        emit(.setStepMeta(pad: pad, step: step, meta: sm))
     }
     func clearStepMeta(_ pad: String, _ step: Int) {
         checkpoint("stepmeta:\(pad)", coalesce: false)
@@ -476,6 +538,7 @@ final class Project: ObservableObject {
         var c = mixer[ch] ?? MixChannel()
         patch(&c)
         mixer[ch] = c
+        emit(.setMix(ch: ch, vol: c.vol, pan: c.pan, mute: c.mute, solo: c.solo))
     }
     func anySolo() -> Bool { mixer.values.contains { $0.solo } }
 
@@ -716,6 +779,7 @@ final class Project: ObservableObject {
         stepMeta = sequences[i].stepMeta
         parts = sequences[i].parts
         if !(activePart == "lead" || parts.contains { $0.id == activePart }) { activePart = "lead" }
+        emit(.switchSequence(index: i))
     }
     /// Queue a sequence to launch on the next bar (Performance mode). nil → switch immediately when stopped.
     func queueSequence(_ i: Int) {
@@ -744,7 +808,7 @@ final class Project: ObservableObject {
     }
 
     func setBank(_ b: String) { bank = b }
-    func setBpm(_ v: Int) { bpm = max(40, min(220, v)) }
+    func setBpm(_ v: Int) { bpm = max(40, min(220, v)); emit(.setTempo(bpm: bpm)) }
     func setBpm(_ v: Double) { setBpm(Int(v.rounded())) }
 
     // MARK: synth / melody
@@ -825,12 +889,14 @@ final class Project: ObservableObject {
         // tapping anywhere on an existing same-pitch note removes it
         if let i = melody.firstIndex(where: { $0.pitch == pitch && step >= $0.step && step < $0.step + $0.dur }) {
             melody.remove(at: i)
+            emit(.setMelodyNote(step: step, pitch: pitch, len: len, on: false))
             return
         }
         let dur = max(1, min(len, 16 - step))
         let lo = step, hi = step + dur
         melody.removeAll { $0.step < hi && $0.step + $0.dur > lo }
         melody.append(MelodyNote(step: step, pitch: pitch, dur: dur, vel: step % 4 == 0 ? 0.95 : 0.8))
+        emit(.setMelodyNote(step: step, pitch: pitch, len: len, on: true))
     }
 
     func clearMelody() { checkpoint("clearMelody", coalesce: false); melody = [] }
