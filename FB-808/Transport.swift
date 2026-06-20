@@ -255,9 +255,15 @@ final class Transport: ObservableObject {
                     guard s < lane.count, lane[s] != 0 else { continue }
                     let m = p.mixer[Kit.channelOf(pad)] ?? MixChannel()
                     if m.mute || (solo && !m.solo) { continue }
+                    // linked drum tracks honor the live stepMeta (probability/conditions/p-locks); frozen copies don't (#Step3)
+                    let sm = p.trackStepMeta(track, pad, s)
+                    if let sm {
+                        if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
+                        if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
+                    }
                     let v = p.padVel(pad, p.fullLevel ? 1 : lane[s]) * m.vol * master.vol * 1.3 * track.vol * gVol * p.humVel()
                     let when = time + p.padOffsetSec(pad) + p.humTime()
-                    var opts = p.padOpts(pad) ?? TriggerOpts()
+                    var opts = p.padOpts(pad, meta: sm) ?? TriggerOpts()
                     opts.pan = max(-1, min(1, opts.pan + track.pan))   // per-track pan offsets the pad's pan
                     engine.trigger(p.soundFor(pad), vel: v, when: when, opts: opts, channel: busCh)
                     p.triggerPadLayers(pad, vel: v, when: when)

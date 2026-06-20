@@ -417,4 +417,15 @@ extension Project {
         if let n = track.source.notes, let p = track.source.patch { return (n, p) }
         return nil
     }
+    /// Live per-step probability/condition/p-locks for a LINKED drum track's pad, from the same source
+    /// as its lanes — so a linked track keeps the authored stepMeta the live grid has (Step 3). Frozen
+    /// copies have no stepMeta (a captured snapshot never carried it).
+    func trackStepMeta(_ track: Track, _ pad: String, _ step: Int) -> StepMeta? {
+        guard track.isLinked, let link = track.source.link else { return nil }
+        switch link.kind {
+        case .lanes:         return stepMeta[pad]?[step]
+        case .sequenceLanes: return link.seqIndex.flatMap { sequences.indices.contains($0) ? sequences[$0].stepMeta[pad]?[step] : nil }
+        default:             return nil
+        }
+    }
 }
