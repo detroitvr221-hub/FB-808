@@ -134,8 +134,9 @@ extension Project {
                     }
                 }
 
-                // layered frozen tracks (Add Track / send-to-track) — bounce them with the same gating
-                for track in tracks where track.isFrozen && !track.frozenToAudio {   // frozen-to-audio bounces via its clip
+                // layered tracks (Add Track / send-to-track) — LIVE-LINKED tracks resolve their source
+                // live (so bounces match the edited source), FROZEN tracks bounce their captured copy.
+                for track in tracks where track.playsAdditively {   // frozen-to-audio bounces via its clip
                     if trackMute[track.id] == true { continue }
                     if trackSoloOn && !(trackSolo[track.id] ?? false) { continue }
                     if songMode && !trackPlaysInSong(track.id, atBar: bar) { continue }
@@ -144,7 +145,7 @@ extension Project {
                     let gVol = track.busParent.flatMap { pid in tracks.first { $0.id == pid }?.vol } ?? 1
                     switch track.type {
                     case .drumPattern:
-                        guard let tlanes = track.source.lanes else { continue }
+                        guard let tlanes = trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
                         for (padID, lane) in tlanes {
                             guard step < lane.count, lane[step] > 0 else { continue }
                             let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
@@ -157,7 +158,7 @@ extension Project {
                                                     sampleData: padParams[padID]?.sampleFile != nil ? padSampleData[padID] : nil, busKey: busKey))
                         }
                     case .synthPart:
-                        guard let notes = track.source.notes, let patch = track.source.patch else { continue }
+                        guard let (notes, patch) = trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
                         let mmel = mixer["melody"] ?? MixChannel(vol: 0.85)
                         if mmel.mute || (solo && !mmel.solo) { break }
                         for note in notes where note.step == step {
@@ -207,7 +208,7 @@ extension Project {
                 let atSample = t * sr
                 switch track.type {
                 case .drumPattern:
-                    guard let tlanes = track.source.lanes else { continue }
+                    guard let tlanes = trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
                     for (padID, lane) in tlanes where step < lane.count && lane[step] > 0 {
                         let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
                         var opts = padOpts(padID) ?? TriggerOpts(); opts.pan = max(-1, min(1, opts.pan + track.pan))
@@ -216,7 +217,7 @@ extension Project {
                                                 sampleData: padParams[padID]?.sampleFile != nil ? padSampleData[padID] : nil))
                     }
                 case .synthPart:
-                    guard let notes = track.source.notes, let patch = track.source.patch else { continue }
+                    guard let (notes, patch) = trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
                     for note in notes where note.step == step {
                         synths.append(ExportSynth(patch: patch, midi: note.pitch, dur: Double(note.dur) * stepDur, vel: note.vel * 1.25 * track.vol, atSample: atSample, pan: track.pan))
                     }

@@ -61,6 +61,7 @@ final class Transport: ObservableObject {
         t.setEventHandler { [weak self] in self?.scheduler() }
         timer = t
         t.resume()
+        project.emit(.transport(playing: true, hostTime: engine.now(), bar: 0, step: 0))   // host → followers play (Step 7)
     }
 
     func stop() {
@@ -74,6 +75,7 @@ final class Transport: ObservableObject {
         project.playing = false
         project.recording = false
         project.step = -1
+        project.emit(.transport(playing: false, hostTime: engine.now(), bar: project.bar, step: project.step))
     }
 
     // arm record; start playing if needed. If an audio track is armed, capture the
@@ -233,12 +235,15 @@ final class Transport: ObservableObject {
             }
         }
 
-        // ── Layered tracks (Add Track / send-to-track): frozen-content tracks play here, gated by
-        //    the same track-mute / track-solo / Song-Mode-clip rules as the seeded lanes. The 6 seeded
-        //    tracks are NOT frozen, so they're untouched — played by the classic paths above. (99-track foundation)
+        // ── Layered tracks (Add Track / send-to-track): LIVE-LINKED tracks resolve their source live
+        //    here (editing the source updates them), FROZEN tracks play their captured copy — both gated
+        //    by the same track-mute / track-solo / Song-Mode-clip rules as the seeded lanes. The 6 seeded
+        //    tracks have neither a link nor a copy, so they're untouched — played by the classic paths
+        //    above (no double-trigger). Link resolution is per-step here, matching the existing
+        //    curLanes/trackVol per-step cost; a per-bar cache is a future optimization. (SYSTEM_AUDIT Step 1)
         let busIdx = p.busIndex
         let trackVol = Dictionary(p.tracks.map { ($0.id, $0.vol) }, uniquingKeysWith: { a, _ in a })
-        for track in p.tracks where track.isFrozen && !track.frozenToAudio {   // frozen-to-audio plays via its clip
+        for track in p.tracks where track.playsAdditively {   // linked OR frozen, not frozen-to-audio (plays via clip)
             if p.trackMute[track.id] == true { continue }
             if trackSolo && !(p.trackSolo[track.id] ?? false) { continue }
             if song && !p.trackPlaysInSong(track.id, atBar: bar) { continue }
@@ -247,21 +252,27 @@ final class Transport: ObservableObject {
             let gVol = track.busParent.flatMap { trackVol[$0] } ?? 1
             switch track.type {
             case .drumPattern:
-                guard let tlanes = track.source.lanes else { continue }
+                guard let tlanes = p.trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
                 for (pad, lane) in tlanes {
                     guard s < lane.count, lane[s] != 0 else { continue }
                     let m = p.mixer[Kit.channelOf(pad)] ?? MixChannel()
                     if m.mute || (solo && !m.solo) { continue }
+                    // linked drum tracks honor the live stepMeta (probability/conditions/p-locks); frozen copies don't (#Step3)
+                    let sm = p.trackStepMeta(track, pad, s)
+                    if let sm {
+                        if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
+                        if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
+                    }
                     let v = p.padVel(pad, p.fullLevel ? 1 : lane[s]) * m.vol * master.vol * 1.3 * track.vol * gVol * p.humVel()
                     let when = time + p.padOffsetSec(pad) + p.humTime()
-                    var opts = p.padOpts(pad) ?? TriggerOpts()
+                    var opts = p.padOpts(pad, meta: sm) ?? TriggerOpts()
                     opts.pan = max(-1, min(1, opts.pan + track.pan))   // per-track pan offsets the pad's pan
                     engine.trigger(p.soundFor(pad), vel: v, when: when, opts: opts, channel: busCh)
                     p.triggerPadLayers(pad, vel: v, when: when)
                     flash(pad, at: time)
                 }
             case .synthPart:
-                guard let notes = track.source.notes, let patch = track.source.patch else { continue }
+                guard let (notes, patch) = p.trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
                 let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
                 if mmel.mute || (solo && !mmel.solo) { break }
                 for note in notes where note.step == s {
