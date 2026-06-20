@@ -64,12 +64,12 @@ final class SessionStore: ObservableObject, SyncBus {
     @Published private(set) var remoteRoster: [RosterEntry] = []
     @Published private(set) var roomTitle = ""
     private(set) var hostToken: String?
-    var studentToken: String {
-        get { UserDefaults.standard.string(forKey: "fd.studentToken") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "fd.studentToken") }
-    }
+    // Ephemeral (in-memory, per-session) — survives reconnects within a session but a stolen value
+    // can't be replayed across launches/rooms; the server re-issues on join if blank.
+    var studentToken = ""
     private var rosterTask: Task<Void, Never>?
     private var presenceTask: Task<Void, Never>?
+    private var joinTask: Task<Void, Never>?   // the async create/join handle (cancelled on re-entry/leave)
     var displayName = "Student"
 
     static func loadDeviceID() -> String {
@@ -92,13 +92,15 @@ final class SessionStore: ObservableObject, SyncBus {
         leave()
         let code = SessionStore.randomCode()
         status = "Creating room…"
-        Task { @MainActor in
+        joinTask?.cancel()
+        joinTask = Task { @MainActor in
             let res = await callRoom(["action": "create", "code": code, "hostKey": pubKeyB64, "title": title])
+            guard !Task.isCancelled else { return }   // a newer host/follow/leave superseded this
             guard res?["ok"] as? Bool == true, let token = res?["hostToken"] as? String else {
                 status = "Offline"; lastError = (res?["error"] as? String) ?? "Could not create room"; return
             }
             hostToken = token
-            begin(code: code, role: .host, serverHostKey: nil)
+            begin(code: code, role: .host, serverHostKey: nil, channelKey: res?["channel"] as? String)
             startRosterPolling()
         }
     }
@@ -110,9 +112,11 @@ final class SessionStore: ObservableObject, SyncBus {
         displayName = name.isEmpty ? "Student" : name
         let up = code.uppercased()
         status = "Joining…"
-        Task { @MainActor in
+        joinTask?.cancel()
+        joinTask = Task { @MainActor in
             let res = await callRoom(["action": "join", "code": up, "displayName": displayName,
                                       "studentToken": studentToken.isEmpty ? nil : studentToken])
+            guard !Task.isCancelled else { return }
             guard res?["ok"] as? Bool == true else {
                 status = "Offline"; lastError = (res?["error"] as? String) ?? "Could not join"; return
             }
@@ -123,15 +127,16 @@ final class SessionStore: ObservableObject, SyncBus {
             if let hk = res?["hostKey"] as? String, let raw = Data(base64Encoded: hk) {
                 serverKey = try? Curve25519.Signing.PublicKey(rawRepresentation: raw)
             }
-            begin(code: up, role: .follow, serverHostKey: serverKey)
+            begin(code: up, role: .follow, serverHostKey: serverKey, channelKey: res?["channel"] as? String)
             startPresence()
         }
     }
 
-    private func begin(code: String, role newRole: Role, serverHostKey: Curve25519.Signing.PublicKey?) {
+    private func begin(code: String, role newRole: Role, serverHostKey: Curve25519.Signing.PublicKey?, channelKey: String?) {
         roomCode = code.uppercased()
         role = newRole
-        topic = SyncConfig.channelTopic(roomCode)
+        // Subscribe by the unguessable server-issued channel key (not the human code) → read-gated.
+        topic = SyncConfig.channelTopic(channelKey ?? roomCode)
         lastAppliedSeq = 0
         reconnectAttempt = 0
         pinnedHostKey = serverHostKey   // server-authoritative when present; nil → TOFU fallback
@@ -206,10 +211,9 @@ final class SessionStore: ObservableObject, SyncBus {
               let u = res["url"] as? String else { return nil }
         return URL(string: u.hasPrefix("http") ? u : SyncConfig.url.absoluteString + u)
     }
-    /// Render the current project to a mono WAV in memory (for submission upload).
-    func bounceWAV() -> Data? {
-        guard let p = project else { return nil }
-        let (l, r) = renderOffline(p.buildExportPlan())
+    /// Render an ExportPlan to a mono WAV in memory — runs OFF the main thread (renderOffline is heavy).
+    nonisolated static func renderMonoWAV(_ plan: ExportPlan) -> Data? {
+        let (l, r) = renderOffline(plan)
         guard !l.isEmpty else { return nil }
         var mono = [Float](repeating: 0, count: l.count)
         for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
@@ -222,7 +226,9 @@ final class SessionStore: ObservableObject, SyncBus {
     /// Student: bounce the current beat and submit it (audio uploaded server-side via the edge fn).
     func submitCurrentBeat() async {
         let name = project?.name ?? "Beat"
-        if let wav = bounceWAV(), wav.count < 8_000_000 {
+        guard let plan = project?.buildExportPlan() else { await submitBeat(beatName: name, audioUrl: nil, accuracy: nil); return }
+        let wav = await Task.detached(priority: .userInitiated) { SessionStore.renderMonoWAV(plan) }.value
+        if let wav, wav.count < 8_000_000 {
             _ = await callFunc("submitAudio", ["code": roomCode, "studentToken": studentToken,
                                                "displayName": displayName, "beatName": name,
                                                "wavBase64": wav.base64EncodedString()])
@@ -285,6 +291,7 @@ final class SessionStore: ObservableObject, SyncBus {
     func leave() {
         reconnectTask?.cancel(); reconnectTask = nil; reconnectAttempt = 0
         syncHbTask?.cancel(); syncHbTask = nil
+        joinTask?.cancel(); joinTask = nil
         rosterTask?.cancel(); rosterTask = nil
         presenceTask?.cancel(); presenceTask = nil
         pingTask?.cancel(); pingTask = nil
@@ -440,9 +447,9 @@ final class SessionStore: ObservableObject, SyncBus {
         // Transport ops drive the local Transport at the teacher's CURRENT position (clock-offset adjusted).
         if case .transport(let playing, let hostTime, let bar, let step) = op.kind {
             guard playing else { onRemoteTransport?(false, 0, 0); return }
-            let bpm = Double(project?.bpm ?? 90), n = max(1, project?.barSteps ?? 16)
+            let bpm = Double(max(40, project?.bpm ?? 90)), n = max(1, project?.barSteps ?? 16)   // clamp: no div-by-zero
             let secPerStep = (60.0 / bpm) / 4.0
-            let elapsed = max(0, Date().timeIntervalSince1970 - (hostTime - clockOffset))
+            let elapsed = min(3600, max(0, Date().timeIntervalSince1970 - (hostTime - clockOffset)))   // clamp wild offsets
             let abs0 = bar * n + step + Int((elapsed / secPerStep).rounded())
             let songSteps = max(1, (project?.songBars ?? 16) * n)
             let s = ((abs0 % songSteps) + songSteps) % songSteps
