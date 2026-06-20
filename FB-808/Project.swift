@@ -1310,7 +1310,7 @@ final class Project: ObservableObject {
 // MARK: - Codable snapshot
 
 struct ProjectSnapshot: Codable {
-    var version = 2
+    var version = 3   // v3: tracks may carry source.link (live-linked); v1/v2 decode as frozen (tolerant)
     var name: String
     var bpm: Int
     var swing: Double

@@ -233,12 +233,15 @@ final class Transport: ObservableObject {
             }
         }
 
-        // ── Layered tracks (Add Track / send-to-track): frozen-content tracks play here, gated by
-        //    the same track-mute / track-solo / Song-Mode-clip rules as the seeded lanes. The 6 seeded
-        //    tracks are NOT frozen, so they're untouched — played by the classic paths above. (99-track foundation)
+        // ── Layered tracks (Add Track / send-to-track): LIVE-LINKED tracks resolve their source live
+        //    here (editing the source updates them), FROZEN tracks play their captured copy — both gated
+        //    by the same track-mute / track-solo / Song-Mode-clip rules as the seeded lanes. The 6 seeded
+        //    tracks have neither a link nor a copy, so they're untouched — played by the classic paths
+        //    above (no double-trigger). Link resolution is per-step here, matching the existing
+        //    curLanes/trackVol per-step cost; a per-bar cache is a future optimization. (SYSTEM_AUDIT Step 1)
         let busIdx = p.busIndex
         let trackVol = Dictionary(p.tracks.map { ($0.id, $0.vol) }, uniquingKeysWith: { a, _ in a })
-        for track in p.tracks where track.isFrozen && !track.frozenToAudio {   // frozen-to-audio plays via its clip
+        for track in p.tracks where track.playsAdditively {   // linked OR frozen, not frozen-to-audio (plays via clip)
             if p.trackMute[track.id] == true { continue }
             if trackSolo && !(p.trackSolo[track.id] ?? false) { continue }
             if song && !p.trackPlaysInSong(track.id, atBar: bar) { continue }
@@ -247,7 +250,7 @@ final class Transport: ObservableObject {
             let gVol = track.busParent.flatMap { trackVol[$0] } ?? 1
             switch track.type {
             case .drumPattern:
-                guard let tlanes = track.source.lanes else { continue }
+                guard let tlanes = p.trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
                 for (pad, lane) in tlanes {
                     guard s < lane.count, lane[s] != 0 else { continue }
                     let m = p.mixer[Kit.channelOf(pad)] ?? MixChannel()
@@ -261,7 +264,7 @@ final class Transport: ObservableObject {
                     flash(pad, at: time)
                 }
             case .synthPart:
-                guard let notes = track.source.notes, let patch = track.source.patch else { continue }
+                guard let (notes, patch) = p.trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
                 let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
                 if mmel.mute || (solo && !mmel.solo) { break }
                 for note in notes where note.step == s {

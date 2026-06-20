@@ -732,7 +732,7 @@ struct TrackStrip: View {
             }
             // per-track insert FX (G3) on added/frozen tracks; group `.bus` tracks always own a strip (G3.4).
             // The 6 seeded tracks use their kit/melody bus FX in the Buses tab.
-            if track.isFrozen || track.type == .bus {
+            if track.isFrozen || track.isLinked || track.type == .bus {
                 let hasBus = track.ownsBus || track.type == .bus
                 Button {
                     if !hasBus { project.toggleTrackBus(track.id) }

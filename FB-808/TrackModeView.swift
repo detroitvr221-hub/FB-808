@@ -112,7 +112,7 @@ struct TrackModeView: View {
     private var hasContent: Bool {
         project.lanes.values.contains { $0.contains { $0 != 0 } }
             || !project.audioClips.isEmpty || !project.melody.isEmpty || !project.parts.isEmpty
-            || project.tracks.contains { $0.isFrozen }
+            || project.tracks.contains { $0.playsAdditively }
     }
 
     private func exportSong(_ format: ExportFormat) {
@@ -327,7 +327,7 @@ struct TrackModeView: View {
                     Button { project.setTrackColor(t.id, hex) } label: { Label(hex, systemImage: "circle.fill") }
                 }
             } label: { Label("Color", systemImage: "paintpalette") }
-            if t.isFrozen {
+            if t.playsAdditively {   // linked or frozen — both are real arrangeable tracks
                 Button { project.tracks.contains { $0.id == t.id } ? sendClipFull(t) : () } label: { Label("Add Clip (full song)", systemImage: "rectangle.badge.plus") }
                 if !project.busTracks.isEmpty {   // route this track's audio into a group bus (G3.4)
                     Menu {

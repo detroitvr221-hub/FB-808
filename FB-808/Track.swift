@@ -37,28 +37,49 @@ enum TrackType: String, Codable {
     }
 }
 
+/// What musical element a LIVE-LINKED track points at. The track owns no content; Transport/Export
+/// dereference this at play time, so editing the source updates the track everywhere it's used.
+/// (SYSTEM_AUDIT.md Step 1 — the single `LinkRef` both the local and future remote layers consume.)
+enum LinkKind: String, Codable {
+    case lanes            // live Project.lanes, filtered to `rows`
+    case melody           // live Project.melody + synthPatch (the lead)
+    case part             // live parts[partID].notes + .patch (or lead when partID == "lead")
+    case sequenceLanes    // sequences[seqIndex].lanes (Song-Mode bank) — Step 3
+    case sequenceMelody   // sequences[seqIndex].melody — Step 3
+}
+
+struct LinkRef: Codable, Equatable {
+    var kind: LinkKind
+    var rows: [String]? = nil       // which pad rows a drum track shows (subset of lanes)
+    var partID: String? = nil       // "lead" → melody/synthPatch; else parts[].id
+    var seqIndex: Int? = nil        // for sequenceLanes / sequenceMelody
+}
+
 /// What a track plays. Only the fields meaningful for the track's `type` are used.
-/// A FROZEN track (created by Add Track / send-to-track) carries its own captured content;
-/// a LIVE legacy track leaves the frozen fields nil and is played by Transport's classic paths.
+/// A LIVE-LINKED track carries a `link` and no copy (edits to the source flow through); a FROZEN
+/// track carries its own captured `lanes`/`notes` (an independent copy); a LIVE legacy seeded track
+/// has neither and is played by Transport's classic paths.
 struct TrackSource: Codable {
     var padRows: [String] = []                 // drumPattern: informational / future routing
     var partID: String? = nil                  // synthPart: "lead" or a parts[].id (legacy "vox" only)
-    var lanes: [String: [Double]]? = nil       // drumPattern FROZEN capture (new tracks)
-    var notes: [MelodyNote]? = nil             // synthPart FROZEN capture (new tracks)
-    var patch: SynthPatch? = nil               // synthPart FROZEN patch (new tracks)
+    var link: LinkRef? = nil                   // LIVE-LINK reference (new default for created tracks)
+    var lanes: [String: [Double]]? = nil       // drumPattern FROZEN capture (detached copy)
+    var notes: [MelodyNote]? = nil             // synthPart FROZEN capture (detached copy)
+    var patch: SynthPatch? = nil               // synthPart FROZEN patch (detached copy)
     var samplePad: String? = nil               // sampler (reserved)
 
-    init(padRows: [String] = [], partID: String? = nil,
+    init(padRows: [String] = [], partID: String? = nil, link: LinkRef? = nil,
          lanes: [String: [Double]]? = nil, notes: [MelodyNote]? = nil,
          patch: SynthPatch? = nil, samplePad: String? = nil) {
-        self.padRows = padRows; self.partID = partID
+        self.padRows = padRows; self.partID = partID; self.link = link
         self.lanes = lanes; self.notes = notes; self.patch = patch; self.samplePad = samplePad
     }
-    enum CodingKeys: String, CodingKey { case padRows, partID, lanes, notes, patch, samplePad }
+    enum CodingKeys: String, CodingKey { case padRows, partID, link, lanes, notes, patch, samplePad }
     init(from d: Decoder) throws {                 // tolerant — every field optional so old/new saves coexist
         let c = try d.container(keyedBy: CodingKeys.self)
         padRows   = (try? c.decodeIfPresent([String].self, forKey: .padRows)) ?? [] ?? []
         partID    = try? c.decodeIfPresent(String.self, forKey: .partID)
+        link      = try? c.decodeIfPresent(LinkRef.self, forKey: .link)   // nil for old saves → frozen, as before
         lanes     = try? c.decodeIfPresent([String: [Double]].self, forKey: .lanes)
         notes     = try? c.decodeIfPresent([MelodyNote].self, forKey: .notes)
         patch     = try? c.decodeIfPresent(SynthPatch.self, forKey: .patch)
@@ -80,9 +101,14 @@ struct Track: Identifiable, Codable {
     var frozenToAudio: Bool = false  // bus-freeze: live synthesis is bounced to an AudioClip (this track plays it instead)
 
     var color: Color { Color(hex: colorHex) }
+    /// A LIVE-LINKED track references its source and is resolved live by the additive pass; editing
+    /// the source updates it. `link` is the authority — Freeze captures a copy and clears the link.
+    var isLinked: Bool { source.link != nil && !frozenToAudio }
     /// A frozen track owns its own captured content (played by Transport's additive pass);
-    /// a live legacy track does not (played by the classic drum/melody paths).
+    /// a live legacy track does not (played by the classic drum/melody paths). Unchanged meaning.
     var isFrozen: Bool { source.lanes != nil || source.notes != nil }
+    /// True for any non-seeded track the additive pass must play (linked OR frozen, not baked-to-audio).
+    var playsAdditively: Bool { (isLinked || isFrozen) && !frozenToAudio }
 
     init(id: String, name: String, type: TrackType, source: TrackSource = .init(),
          colorHex: String, vol: Double = 0.82, pan: Double = 0, height: CGFloat = 64) {
@@ -230,8 +256,8 @@ extension Project {
     @discardableResult
     func freezeTrack(_ id: String) -> Bool {
         guard let i = tracks.firstIndex(where: { $0.id == id }),
-              tracks[i].isFrozen, !tracks[i].frozenToAudio else { return false }
-        let plan = buildSoloTrackPlan(tracks[i])
+              (tracks[i].isFrozen || tracks[i].isLinked), !tracks[i].frozenToAudio else { return false }
+        let plan = buildSoloTrackPlan(tracks[i])   // resolves the link to live content if linked
         guard !plan.drums.isEmpty || !plan.synths.isEmpty else { return false }
         let (l, r) = renderOffline(plan)
         guard !l.isEmpty else { return false }
@@ -256,8 +282,10 @@ extension Project {
 
     // MARK: routing workflows (the cohesion goals)
 
-    /// Capture the live drum lanes (rows that have any hit, or a chosen subset) into a NEW frozen
-    /// drumPattern track + a clip on the timeline. This is goal #1: pad take → step grid → its own track.
+    /// Send the live drum lanes (rows that have any hit, or a chosen subset) to a NEW LIVE-LINKED
+    /// drumPattern track + a clip on the timeline. Goal #1: pad take → step grid → its own track.
+    /// The track REFERENCES the live lanes (filtered to `picked` rows) — editing the pattern in
+    /// Pads/Sequence updates this track everywhere it plays. Freeze it later to detach a copy.
     @discardableResult
     func sendLanesToNewTrack(rows: [String]? = nil, name: String? = nil,
                              startBar: Int = 0, lenBars: Int = 2) -> String {
@@ -265,40 +293,83 @@ extension Project {
         let picked = rows ?? lanes.compactMap { (pad, lane) in lane.contains { $0 != 0 } ? pad : nil }
         guard !picked.isEmpty else { return "" }
         checkpoint("padToTrack", coalesce: false)
-        var frozen: [String: [Double]] = [:]
-        for pad in picked { if let lane = lanes[pad], lane.contains(where: { $0 != 0 }) { frozen[pad] = lane } }
-        guard !frozen.isEmpty else { return "" }
         let id = freshTrackID("drum")
         let color = nextColor()
+        let link = LinkRef(kind: .lanes, rows: picked)   // LIVE-LINK to the source pattern
         tracks.append(Track(id: id, name: name ?? uniqueTrackName("Pad Take"),
-                            type: .drumPattern, source: .init(padRows: picked, lanes: frozen), colorHex: color))
+                            type: .drumPattern, source: .init(padRows: picked, link: link), colorHex: color))
         clips[id, default: []].append(Clip(s: max(0, min(songBars - 1, startBar)),
                                            l: max(1, min(songBars, lenBars)), color: Color(hex: color)))
         return id
     }
 
-    /// Promote a synth part (Lead or an extra part) into its OWN frozen synthPart track + a clip.
-    /// This is goal #2: piano-roll melody → its own independently-arrangeable track.
+    /// Promote a synth part (Lead or an extra part) into its OWN LIVE-LINKED synthPart track + a clip.
+    /// Goal #2: piano-roll melody → its own independently-arrangeable track. The track REFERENCES the
+    /// live part (notes + patch) — editing the melody/part updates it. Freeze it later to detach.
     @discardableResult
     func promotePartToTrack(_ partID: String, name: String? = nil,
                             startBar: Int = 0, lenBars: Int = 4) -> String {
         guard tracks.count < Project.maxTracks else { return "" }
-        let notes: [MelodyNote]
         let patch: SynthPatch
         let baseName: String
+        let hasNotes: Bool
         if partID == "lead" {
-            notes = melody; patch = synthPatch; baseName = "Lead"
+            patch = synthPatch; baseName = "Lead"; hasNotes = !melody.isEmpty
         } else if let p = parts.first(where: { $0.id == partID }) {
-            notes = p.notes; patch = p.patch; baseName = p.name
+            patch = p.patch; baseName = p.name; hasNotes = !p.notes.isEmpty
         } else { return "" }
-        guard !notes.isEmpty else { return "" }
+        guard hasNotes else { return "" }
         checkpoint("partToTrack", coalesce: false)
         let id = freshTrackID("synth")
         let color = patch.color.toHex()
+        let link = LinkRef(kind: .part, partID: partID)   // LIVE-LINK to the source part
         tracks.append(Track(id: id, name: name ?? uniqueTrackName(baseName),
-                            type: .synthPart, source: .init(notes: notes, patch: patch), colorHex: color))
+                            type: .synthPart, source: .init(partID: partID, link: link), colorHex: color))
         clips[id, default: []].append(Clip(s: max(0, min(songBars - 1, startBar)),
                                            l: max(1, min(songBars, lenBars)), color: Color(hex: color)))
         return id
+    }
+
+    // MARK: live-link resolution (the heart of Step 1 — dereference a link to LIVE content)
+
+    /// Resolve a drum link to the live lanes it points at (filtered to its rows). Returns nil for
+    /// non-drum kinds. Call ONCE PER BAR (not per step) — the additive scheduler hoists this.
+    func resolvedLanes(_ link: LinkRef, atBar bar: Int) -> [String: [Double]]? {
+        switch link.kind {
+        case .lanes:
+            guard let rows = link.rows else { return lanes }
+            return lanes.filter { rows.contains($0.key) }
+        case .sequenceLanes:
+            guard let si = link.seqIndex, sequences.indices.contains(si) else { return nil }
+            let src = sequences[si].lanes
+            guard let rows = link.rows else { return src }
+            return src.filter { rows.contains($0.key) }
+        default: return nil
+        }
+    }
+    /// Resolve a melody/part link to the live notes + patch it points at. Returns nil for non-synth kinds.
+    func resolvedNotes(_ link: LinkRef, atBar bar: Int) -> (notes: [MelodyNote], patch: SynthPatch)? {
+        switch link.kind {
+        case .melody:
+            return (melody, synthPatch)
+        case .part:
+            if link.partID == nil || link.partID == "lead" { return (melody, synthPatch) }
+            guard let p = parts.first(where: { $0.id == link.partID }) else { return nil }
+            return (p.notes, p.patch)
+        case .sequenceMelody:
+            guard let si = link.seqIndex, sequences.indices.contains(si) else { return nil }
+            return (sequences[si].melody, synthPatch)
+        default: return nil
+        }
+    }
+    /// Effective lanes for an additively-played drum track (link-resolved if linked, else the frozen copy).
+    func trackLanes(_ track: Track, atBar bar: Int) -> [String: [Double]]? {
+        track.isLinked ? (track.source.link.flatMap { resolvedLanes($0, atBar: bar) }) : track.source.lanes
+    }
+    /// Effective notes+patch for an additively-played synth track (link-resolved if linked, else frozen).
+    func trackNotes(_ track: Track, atBar bar: Int) -> (notes: [MelodyNote], patch: SynthPatch)? {
+        if track.isLinked { return track.source.link.flatMap { resolvedNotes($0, atBar: bar) } }
+        if let n = track.source.notes, let p = track.source.patch { return (n, p) }
+        return nil
     }
 }
