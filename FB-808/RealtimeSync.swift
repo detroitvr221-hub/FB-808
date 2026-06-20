@@ -30,20 +30,32 @@ final class SessionStore: ObservableObject, SyncBus {
     /// Follower hook: drive the local Transport when a teacher play/stop op arrives (Step 7). Set by RootView.
     var onRemoteTransport: ((Bool) -> Void)?
 
-    var deviceID = SessionStore.loadDeviceID()   // stable per device; overridable for tests
+    /// Per-launch token used for op origin + echo filtering — distinct even for two app instances on
+    /// the SAME device (a persisted deviceID would make them reject each other's ops as self-echo).
+    let instanceToken = UUID().uuidString
+    var deviceID = SessionStore.loadDeviceID()   // stable per device; presence id (overridable for tests)
     private var ws: URLSessionWebSocketTask?
     private var session: URLSession?
     private var topic = ""
     private var ref = 0
     private var seq: UInt64 = 0
+    private var lastAppliedSeq: UInt64 = 0   // per follow-session monotonic guard (drop stale/dup ops)
     private var joined = false
     private var hbTask: Task<Void, Never>?
     private var syncHbTask: Task<Void, Never>?   // host: periodic fullSync (late-joiner + divergence backstop)
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempt = 0
 
     static func loadDeviceID() -> String {
         let k = "fd.deviceID"
         if let s = UserDefaults.standard.string(forKey: k) { return s }
         let s = UUID().uuidString; UserDefaults.standard.set(s, forKey: k); return s
+    }
+    /// A fresh, non-guessable room code per live class (vs a shared hardcoded one) — mitigates code
+    /// enumeration and cross-class collisions.
+    static func randomCode() -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")   // no ambiguous 0/O/1/I
+        return "FD-" + String((0..<5).map { _ in alphabet[Int(arc4random_uniform(UInt32(alphabet.count)))] })
     }
 
     // MARK: - Session lifecycle
@@ -56,6 +68,13 @@ final class SessionStore: ObservableObject, SyncBus {
         roomCode = code.uppercased()
         role = newRole
         topic = SyncConfig.channelTopic(roomCode)
+        lastAppliedSeq = 0
+        reconnectAttempt = 0
+        openConnection()
+    }
+
+    /// Open (or re-open) the WebSocket for the current role/room. Reused by reconnect.
+    private func openConnection() {
         status = "Connecting…"
         lastError = nil
         let s = URLSession(configuration: .default)
@@ -66,8 +85,9 @@ final class SessionStore: ObservableObject, SyncBus {
         receiveLoop()
         sendJoin()
         startHeartbeat()
-        if newRole == .host {
+        if role == .host {
             project?.syncBus = self   // teacher edits now emit ops to this bus
+            syncHbTask?.cancel()
             syncHbTask = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 6_000_000_000)
@@ -78,14 +98,35 @@ final class SessionStore: ObservableObject, SyncBus {
         }
     }
 
-    func leave() {
+    /// Re-establish the socket after a drop, keeping the same room/role (capped exponential backoff).
+    private func scheduleReconnect() {
+        guard role != .solo, reconnectTask == nil else { return }
+        let delay = min(20.0, pow(2.0, Double(reconnectAttempt)))   // 1,2,4,8,16,20…s
+        reconnectAttempt += 1
+        status = "Reconnecting…"
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.role != .solo else { return }
+            self.reconnectTask = nil
+            self.teardownSocket()
+            self.openConnection()
+        }
+    }
+
+    private func teardownSocket() {
         hbTask?.cancel(); hbTask = nil
-        syncHbTask?.cancel(); syncHbTask = nil
-        joined = false; forked = false
-        if role != .solo { project?.syncBus = NoSyncBus() }
         ws?.cancel(with: .goingAway, reason: nil); ws = nil
         session?.invalidateAndCancel(); session = nil
-        role = .solo; connected = false; status = "Offline"; roomCode = ""; ref = 0; seq = 0
+        joined = false; connected = false; ref = 0; seq = 0
+    }
+
+    func leave() {
+        reconnectTask?.cancel(); reconnectTask = nil; reconnectAttempt = 0
+        syncHbTask?.cancel(); syncHbTask = nil
+        forked = false
+        if role != .solo { project?.syncBus = NoSyncBus() }
+        teardownSocket()
+        role = .solo; status = "Offline"; roomCode = ""
     }
 
     /// True while following a teacher — local editing is suppressed (read-only mirror) unless forked.
@@ -103,7 +144,7 @@ final class SessionStore: ObservableObject, SyncBus {
     private func sendOp(_ op: SyncOp) {
         guard role == .host, joined else { return }
         seq += 1
-        var o = op; o.room = roomCode; o.origin = deviceID; o.seq = seq
+        var o = op; o.room = roomCode; o.origin = instanceToken; o.seq = seq
         guard let data = try? JSONEncoder().encode(o),
               let opJSON = try? JSONSerialization.jsonObject(with: data) else { return }
         sendFrame(["topic": topic, "event": "broadcast",
@@ -152,7 +193,10 @@ final class SessionStore: ObservableObject, SyncBus {
             guard let self else { return }
             switch result {
             case .failure(let err):
-                Task { @MainActor in self.connected = false; self.status = "Disconnected"; self.lastError = err.localizedDescription }
+                Task { @MainActor in
+                    self.connected = false; self.status = "Disconnected"; self.lastError = err.localizedDescription
+                    self.scheduleReconnect()   // auto-recover from a dropped socket during a live lesson
+                }
             case .success(let msg):
                 if case .string(let text) = msg { Task { @MainActor in self.handle(text) } }
                 Task { @MainActor in self.receiveLoop() }   // keep listening
@@ -167,9 +211,9 @@ final class SessionStore: ObservableObject, SyncBus {
         switch event {
         case "phx_reply":
             if let payload = obj["payload"] as? [String: Any], (payload["status"] as? String) == "ok" {
-                joined = true; connected = true
-                status = role == .host ? "Hosting · \(roomCode)" : "Following · \(roomCode)"
-                if role == .host { broadcastFullSync() }   // late joiners get state on the next op anyway
+                joined = true; connected = true; reconnectAttempt = 0   // healthy connection resets backoff
+                status = role == .host ? "Hosting · \(roomCode)" : (forked ? "Trying it · \(roomCode)" : "Following · \(roomCode)")
+                if role == .host { broadcastFullSync() }   // give any already-listening followers current state
             }
         case "broadcast":
             guard let payload = obj["payload"] as? [String: Any],
@@ -178,14 +222,19 @@ final class SessionStore: ObservableObject, SyncBus {
                   let opData = try? JSONSerialization.data(withJSONObject: opObj),
                   let op = try? JSONDecoder().decode(SyncOp.self, from: opData) else { return }
             opsReceived += 1
-            // Ignore our own echo (broadcast self:true). A non-forked follower applies the teacher's ops;
-            // a forked follower is experimenting locally and resyncs only after Rejoin (next fullSync).
-            guard op.origin != deviceID, role == .follow, !forked else { return }
+            // Ignore our own echo (broadcast self:true, matched by per-launch instanceToken). A non-forked
+            // follower applies the teacher's ops; a forked follower experiments locally until Rejoin.
+            guard op.origin != instanceToken, role == .follow, !forked else { return }
+            // Monotonic guard: drop stale/duplicate ops from reordering. fullSync always applies (it's a resync).
+            var isFull = false; if case .fullSync = op.kind { isFull = true }
+            if !isFull, op.seq > 0, op.seq <= lastAppliedSeq { return }
+            lastAppliedSeq = max(lastAppliedSeq, op.seq)
             // Transport ops drive the local Transport (not a Project mutator); everything else applies to state.
             if case .transport(let playing, _, _, _) = op.kind { onRemoteTransport?(playing) }
             else { project?.applyRemote(op) }
         case "phx_error", "phx_close":
             connected = false; status = "Disconnected"
+            scheduleReconnect()
         default:
             break
         }

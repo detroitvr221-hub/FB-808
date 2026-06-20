@@ -142,8 +142,8 @@ struct TeacherModeView: View {
             VStack(spacing: 12) {
                 VStack(spacing: 8) {
                     Text("CLASS CODE").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint)
-                    Text(TE_CODE).font(FDFont.display(34, .bold)).foregroundStyle(settings.ink).tracking(2)
-                        .accessibilityLabel("Class code \(TE_CODE)")
+                    Text(liveCode).font(FDFont.display(34, .bold)).foregroundStyle(settings.ink).tracking(2)
+                        .accessibilityLabel("Class code \(liveCode)")
                     Text("Students join from the home screen").font(FDFont.ui(12)).foregroundStyle(settings.inkDim)
                     Button { toggleLive() } label: {
                         HStack(spacing: 8) {
@@ -427,9 +427,12 @@ struct TeacherModeView: View {
     private func pushToClass(_ label: String) { flash("\(label) sent to \(onCount) students") }
     private func toggleLive() {
         classroom.live.toggle()
-        if classroom.live { session.host(code: TE_CODE); flash("Live class started · code \(TE_CODE)") }
-        else { session.leave(); flash("Live class ended") }
+        if classroom.live {
+            let code = SessionStore.randomCode()   // fresh non-guessable code per class (not a shared constant)
+            session.host(code: code); flash("Live class started · code \(code)")
+        } else { session.leave(); flash("Live class ended") }
     }
+    private var liveCode: String { session.roomCode.isEmpty ? TE_CODE : session.roomCode }
     private func assign() {
         let l = Kit.lessons.first { $0.id == classroom.assignLesson }
         flash("Assigned \u{201C}\(l?.title ?? "lesson")\u{201D} to the class")
