@@ -9,6 +9,7 @@
 
 import Foundation
 import Combine
+import CryptoKit
 
 @MainActor
 final class SessionStore: ObservableObject, SyncBus {
@@ -34,6 +35,12 @@ final class SessionStore: ObservableObject, SyncBus {
     /// the SAME device (a persisted deviceID would make them reject each other's ops as self-echo).
     let instanceToken = UUID().uuidString
     var deviceID = SessionStore.loadDeviceID()   // stable per device; presence id (overridable for tests)
+    /// Per-session signing key (host signs every op; followers verify) — closes "any code-holder can
+    /// emit as teacher". The host's public key rides each op (TOFU pin, re-asserted via heartbeat).
+    let signingKey = Curve25519.Signing.PrivateKey()
+    private var pinnedHostKey: Curve25519.Signing.PublicKey?
+    @Published private(set) var rejectedOps = 0   // unsigned/forged ops a follower refused to apply
+    private var pubKeyB64: String { signingKey.publicKey.rawRepresentation.base64EncodedString() }
     private var ws: URLSessionWebSocketTask?
     private var session: URLSession?
     private var topic = ""
@@ -70,6 +77,7 @@ final class SessionStore: ObservableObject, SyncBus {
         topic = SyncConfig.channelTopic(roomCode)
         lastAppliedSeq = 0
         reconnectAttempt = 0
+        pinnedHostKey = nil   // re-pin the host key for the new room
         openConnection()
     }
 
@@ -145,10 +153,13 @@ final class SessionStore: ObservableObject, SyncBus {
         guard role == .host, joined else { return }
         seq += 1
         var o = op; o.room = roomCode; o.origin = instanceToken; o.seq = seq
-        guard let data = try? JSONEncoder().encode(o),
-              let opJSON = try? JSONSerialization.jsonObject(with: data) else { return }
+        // Sign the EXACT op-JSON string we transmit (re-serializing an object could change bytes and
+        // break verification). The frame carries {op: <json string>, sig, pub}.
+        guard let data = try? JSONEncoder().encode(o), let opStr = String(data: data, encoding: .utf8) else { return }
+        let sig = ((try? signingKey.signature(for: data)) ?? Data()).base64EncodedString()
+        let wrapper: [String: Any] = ["op": opStr, "sig": sig, "pub": pubKeyB64]
         sendFrame(["topic": topic, "event": "broadcast",
-                   "payload": ["type": "broadcast", "event": "op", "payload": opJSON],
+                   "payload": ["type": "broadcast", "event": "op", "payload": wrapper],
                    "ref": nextRef()])
         opsSent += 1
     }
@@ -218,13 +229,23 @@ final class SessionStore: ObservableObject, SyncBus {
         case "broadcast":
             guard let payload = obj["payload"] as? [String: Any],
                   (payload["event"] as? String) == "op",
-                  let opObj = payload["payload"],
-                  let opData = try? JSONSerialization.data(withJSONObject: opObj),
+                  let wrapper = payload["payload"] as? [String: Any],
+                  let opStr = wrapper["op"] as? String,
+                  let opData = opStr.data(using: .utf8),
                   let op = try? JSONDecoder().decode(SyncOp.self, from: opData) else { return }
             opsReceived += 1
             // Ignore our own echo (broadcast self:true, matched by per-launch instanceToken). A non-forked
             // follower applies the teacher's ops; a forked follower experiments locally until Rejoin.
             guard op.origin != instanceToken, role == .follow, !forked else { return }
+            // VERIFY the host signature — reject unsigned/forged ops so a mere code-holder can't inject
+            // edits as the teacher. The host's public key is pinned on first sight (re-asserted each op).
+            guard let sigB64 = wrapper["sig"] as? String, let sig = Data(base64Encoded: sigB64),
+                  let pubB64 = wrapper["pub"] as? String, let pubRaw = Data(base64Encoded: pubB64),
+                  let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: pubRaw) else { rejectedOps += 1; return }
+            if pinnedHostKey == nil { pinnedHostKey = pub }
+            guard let pinned = pinnedHostKey,
+                  pinned.rawRepresentation == pub.rawRepresentation,           // same signer as pinned host
+                  pinned.isValidSignature(sig, for: opData) else { rejectedOps += 1; return }
             // Monotonic guard: drop stale/duplicate ops from reordering. fullSync always applies (it's a resync).
             var isFull = false; if case .fullSync = op.kind { isFull = true }
             if !isFull, op.seq > 0, op.seq <= lastAppliedSeq { return }
