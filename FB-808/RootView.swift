@@ -106,6 +106,7 @@ struct RootView: View {
     @StateObject private var settings = AppSettings()
     @StateObject private var progress = ProgressStore()
     @StateObject private var classroom = ClassroomStore()   // persisted Teacher roster/live/feedback (#159)
+    @StateObject private var session = SessionStore()       // live teacher↔student sync (SYSTEM_AUDIT Step 6)
 
     @State private var tab = "pads"
     @State private var showSettings = false
@@ -125,7 +126,9 @@ struct RootView: View {
             rail(th)
             VStack(spacing: 0) {
                 header(th)
+                if session.isFollowing { followBanner(th) }   // live read-only mirror of the teacher
                 content(th)
+                    .allowsHitTesting(!session.isFollowing)    // Follow = watch live, can't edit
             }
         }
         .background(chassisBackground(th).ignoresSafeArea())
@@ -141,10 +144,12 @@ struct RootView: View {
         .environmentObject(settings)
         .environmentObject(progress)
         .environmentObject(classroom)
+        .environmentObject(session)
         .overlay { if showTour { TourOverlay(settings: settings, show: $showTour) { toured = true } } }
         .onAppear {
             engine.start()
             engine.setVolume(0.9)
+            session.project = project   // received ops apply into the live project
             if !didAutoLoad {
                 didAutoLoad = true
                 // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
@@ -318,6 +323,25 @@ struct RootView: View {
     }
 
     // MARK: content routing
+
+    // Live-class read-only banner: students see the teacher's edits stream in, can't edit, can leave.
+    private func followBanner(_ th: Theme) -> some View {
+        HStack(spacing: 10) {
+            Circle().fill(session.connected ? settings.accent : settings.inkFaint).frame(width: 8, height: 8)
+            Text(session.connected ? "Following live · \(session.roomCode)" : "Connecting…")
+                .font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+            Text("\(session.opsReceived) updates")
+                .font(FDFont.mono(10)).foregroundStyle(.white.opacity(0.7))
+            Spacer()
+            Button { session.leave() } label: {
+                Text("Leave").font(FDFont.ui(12, .bold)).foregroundStyle(settings.accent)
+                    .padding(.horizontal, 12).frame(height: 26)
+                    .background(Capsule().fill(.white))
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).frame(height: 40)
+        .background(settings.accent.opacity(0.9))
+    }
 
     @ViewBuilder private func content(_ th: Theme) -> some View {
         Group {

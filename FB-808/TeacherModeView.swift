@@ -16,6 +16,8 @@ struct TeacherModeView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var progress: ProgressStore     // live local-user values (#152)
     @EnvironmentObject var classroom: ClassroomStore   // persisted roster/live/sel/feedback (#159)
+    @EnvironmentObject var session: SessionStore       // live teacher↔student sync (SYSTEM_AUDIT Step 6)
+    @State private var joinCode = ""
     var openTab: (String) -> Void = { _ in }
 
     @State private var tab = "roster"                  // navigation only — fine to reset on return
@@ -168,6 +170,33 @@ struct TeacherModeView: View {
                     }
                     Text("Sets the tempo for the whole studio — every student follows.")
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                }
+
+                teCard("Live Connection") {   // Step 6: real Supabase Realtime status + student join
+                    HStack(spacing: 8) {
+                        Circle().fill(session.connected ? settings.theme.good : settings.inkFaint).frame(width: 9, height: 9)
+                        Text(session.status).font(FDFont.ui(12.5, .semibold)).foregroundStyle(settings.ink)
+                        Spacer()
+                        if session.role == .host { Text("↑\(session.opsSent)").font(FDFont.mono(10)).foregroundStyle(settings.inkFaint) }
+                        if session.role == .follow { Text("↓\(session.opsReceived)").font(FDFont.mono(10)).foregroundStyle(settings.inkFaint) }
+                    }
+                    HStack(spacing: 8) {
+                        TextField("Class code", text: $joinCode)
+                            .font(FDFont.mono(13, .bold)).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                            .padding(.horizontal, 10).frame(height: 36)
+                            .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
+                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                        Button {
+                            let c = joinCode.trimmingCharacters(in: .whitespaces).uppercased()
+                            if !c.isEmpty { session.follow(code: c) }
+                        } label: {
+                            Text("Join").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 16).frame(height: 36)
+                                .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent))
+                        }.buttonStyle(.plain).disabled(joinCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    Text("Students enter the code to follow this class live — they see every edit in real time.")
+                        .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint)
                 }
             }
             .frame(width: 280)
@@ -396,7 +425,11 @@ struct TeacherModeView: View {
         }
     }
     private func pushToClass(_ label: String) { flash("\(label) sent to \(onCount) students") }
-    private func toggleLive() { classroom.live.toggle(); flash(classroom.live ? "Live class started · code \(TE_CODE)" : "Live class ended") }
+    private func toggleLive() {
+        classroom.live.toggle()
+        if classroom.live { session.host(code: TE_CODE); flash("Live class started · code \(TE_CODE)") }
+        else { session.leave(); flash("Live class ended") }
+    }
     private func assign() {
         let l = Kit.lessons.first { $0.id == classroom.assignLesson }
         flash("Assigned \u{201C}\(l?.title ?? "lesson")\u{201D} to the class")
