@@ -61,6 +61,7 @@ final class Transport: ObservableObject {
         t.setEventHandler { [weak self] in self?.scheduler() }
         timer = t
         t.resume()
+        project.emit(.transport(playing: true, hostTime: engine.now(), bar: 0, step: 0))   // host → followers play (Step 7)
     }
 
     func stop() {
@@ -74,6 +75,7 @@ final class Transport: ObservableObject {
         project.playing = false
         project.recording = false
         project.step = -1
+        project.emit(.transport(playing: false, hostTime: engine.now(), bar: project.bar, step: project.step))
     }
 
     // arm record; start playing if needed. If an audio track is armed, capture the

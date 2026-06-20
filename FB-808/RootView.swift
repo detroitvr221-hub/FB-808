@@ -103,6 +103,7 @@ struct RootView: View {
     @EnvironmentObject var project: Project
     @EnvironmentObject var fx: PadFX
     @EnvironmentObject var store: ProjectStore
+    @EnvironmentObject var transport: Transport   // for follow-teacher play/stop (Step 7)
     @StateObject private var settings = AppSettings()
     @StateObject private var progress = ProgressStore()
     @StateObject private var classroom = ClassroomStore()   // persisted Teacher roster/live/feedback (#159)
@@ -128,7 +129,7 @@ struct RootView: View {
                 header(th)
                 if session.isFollowing { followBanner(th) }   // live read-only mirror of the teacher
                 content(th)
-                    .allowsHitTesting(!session.isFollowing)    // Follow = watch live, can't edit
+                    .allowsHitTesting(!session.isFollowing || session.forked)   // Follow = watch live; Try-it = edit locally
             }
         }
         .background(chassisBackground(th).ignoresSafeArea())
@@ -150,6 +151,7 @@ struct RootView: View {
             engine.start()
             engine.setVolume(0.9)
             session.project = project   // received ops apply into the live project
+            session.onRemoteTransport = { playing in if playing { transport.start() } else { transport.stop() } }
             if !didAutoLoad {
                 didAutoLoad = true
                 // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
@@ -328,19 +330,26 @@ struct RootView: View {
     private func followBanner(_ th: Theme) -> some View {
         HStack(spacing: 10) {
             Circle().fill(session.connected ? settings.accent : settings.inkFaint).frame(width: 8, height: 8)
-            Text(session.connected ? "Following live · \(session.roomCode)" : "Connecting…")
+            Text(session.forked ? "Trying it · \(session.roomCode)"
+                 : (session.connected ? "Following live · \(session.roomCode)" : "Connecting…"))
                 .font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
-            Text("\(session.opsReceived) updates")
-                .font(FDFont.mono(10)).foregroundStyle(.white.opacity(0.7))
+            Text("\(session.opsReceived) updates").font(FDFont.mono(10)).foregroundStyle(.white.opacity(0.7))
             Spacer()
-            Button { session.leave() } label: {
-                Text("Leave").font(FDFont.ui(12, .bold)).foregroundStyle(settings.accent)
-                    .padding(.horizontal, 12).frame(height: 26)
-                    .background(Capsule().fill(.white))
-            }.buttonStyle(.plain)
+            if session.forked {
+                bannerBtn("Rejoin") { session.rejoin() }
+            } else {
+                bannerBtn("Try it") { session.tryIt() }
+            }
+            bannerBtn("Leave") { session.leave() }
         }
         .padding(.horizontal, 16).frame(height: 40)
-        .background(settings.accent.opacity(0.9))
+        .background((session.forked ? settings.theme.perfect : settings.accent).opacity(0.92))
+    }
+    private func bannerBtn(_ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label).font(FDFont.ui(12, .bold)).foregroundStyle(settings.accent)
+                .padding(.horizontal, 12).frame(height: 26).background(Capsule().fill(.white))
+        }.buttonStyle(.plain)
     }
 
     @ViewBuilder private func content(_ th: Theme) -> some View {

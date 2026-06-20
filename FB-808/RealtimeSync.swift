@@ -21,9 +21,14 @@ final class SessionStore: ObservableObject, SyncBus {
     @Published private(set) var opsSent = 0
     @Published private(set) var opsReceived = 0
     @Published private(set) var lastError: String?
+    /// "Try it" fork: a follower temporarily stops applying teacher ops to experiment locally; Rejoin
+    /// resyncs to the teacher's state on the next heartbeat fullSync.
+    @Published private(set) var forked = false
 
     /// The live project to apply received ops into. Weak — the project owns the bus (no retain cycle).
     weak var project: Project?
+    /// Follower hook: drive the local Transport when a teacher play/stop op arrives (Step 7). Set by RootView.
+    var onRemoteTransport: ((Bool) -> Void)?
 
     var deviceID = SessionStore.loadDeviceID()   // stable per device; overridable for tests
     private var ws: URLSessionWebSocketTask?
@@ -33,6 +38,7 @@ final class SessionStore: ObservableObject, SyncBus {
     private var seq: UInt64 = 0
     private var joined = false
     private var hbTask: Task<Void, Never>?
+    private var syncHbTask: Task<Void, Never>?   // host: periodic fullSync (late-joiner + divergence backstop)
 
     static func loadDeviceID() -> String {
         let k = "fd.deviceID"
@@ -60,20 +66,33 @@ final class SessionStore: ObservableObject, SyncBus {
         receiveLoop()
         sendJoin()
         startHeartbeat()
-        if newRole == .host { project?.syncBus = self }   // teacher edits now emit ops to this bus
+        if newRole == .host {
+            project?.syncBus = self   // teacher edits now emit ops to this bus
+            syncHbTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 6_000_000_000)
+                    guard let self, !Task.isCancelled else { return }
+                    self.broadcastFullSync()   // late joiners + Rejoin converge within ~6s
+                }
+            }
+        }
     }
 
     func leave() {
         hbTask?.cancel(); hbTask = nil
-        joined = false
+        syncHbTask?.cancel(); syncHbTask = nil
+        joined = false; forked = false
         if role != .solo { project?.syncBus = NoSyncBus() }
         ws?.cancel(with: .goingAway, reason: nil); ws = nil
         session?.invalidateAndCancel(); session = nil
         role = .solo; connected = false; status = "Offline"; roomCode = ""; ref = 0; seq = 0
     }
 
-    /// True while following a teacher — local editing should be suppressed (read-only mirror).
+    /// True while following a teacher — local editing is suppressed (read-only mirror) unless forked.
     var isFollowing: Bool { role == .follow }
+    /// "Try it": stop applying teacher ops and edit locally. Rejoin: resume mirroring (resyncs on next fullSync).
+    func tryIt() { guard role == .follow else { return }; forked = true; status = "Trying it · \(roomCode)" }
+    func rejoin() { guard role == .follow else { return }; forked = false; status = "Following · \(roomCode)" }
 
     // MARK: - SyncBus (teacher edit → broadcast)
 
@@ -159,9 +178,12 @@ final class SessionStore: ObservableObject, SyncBus {
                   let opData = try? JSONSerialization.data(withJSONObject: opObj),
                   let op = try? JSONDecoder().decode(SyncOp.self, from: opData) else { return }
             opsReceived += 1
-            // Ignore our own echo (broadcast self:true). A follower applies the teacher's ops.
-            guard op.origin != deviceID else { return }
-            if role == .follow { project?.applyRemote(op) }
+            // Ignore our own echo (broadcast self:true). A non-forked follower applies the teacher's ops;
+            // a forked follower is experimenting locally and resyncs only after Rejoin (next fullSync).
+            guard op.origin != deviceID, role == .follow, !forked else { return }
+            // Transport ops drive the local Transport (not a Project mutator); everything else applies to state.
+            if case .transport(let playing, _, _, _) = op.kind { onRemoteTransport?(playing) }
+            else { project?.applyRemote(op) }
         case "phx_error", "phx_close":
             connected = false; status = "Disconnected"
         default:
