@@ -31,8 +31,13 @@ final class SessionStore: ObservableObject, SyncBus {
 
     /// The live project to apply received ops into. Weak — the project owns the bus (no retain cycle).
     weak var project: Project?
-    /// Follower hook: drive the local Transport when a teacher play/stop op arrives (Step 7). Set by RootView.
-    var onRemoteTransport: ((Bool) -> Void)?
+    /// Follower hook: drive the local Transport when a teacher play/stop op arrives. The bar/step are
+    /// already clock-offset-adjusted to the teacher's CURRENT position (Step 7 + clock sync).
+    var onRemoteTransport: ((_ playing: Bool, _ atBar: Int, _ atStep: Int) -> Void)?
+    /// Estimated wall-clock offset (teacherClock − followerClock), from ping/pong (median of low-RTT).
+    @Published private(set) var clockOffset: Double = 0
+    private var rttSamples: [(rtt: Double, offset: Double)] = []
+    private var pingTask: Task<Void, Never>?
 
     /// Per-launch token used for op origin + echo filtering — distinct even for two app instances on
     /// the SAME device (a persisted deviceID would make them reject each other's ops as self-echo).
@@ -130,7 +135,9 @@ final class SessionStore: ObservableObject, SyncBus {
         lastAppliedSeq = 0
         reconnectAttempt = 0
         pinnedHostKey = serverHostKey   // server-authoritative when present; nil → TOFU fallback
+        rttSamples = []; clockOffset = 0
         openConnection()
+        if newRole == .follow { startPing() }   // estimate the clock offset for transport alignment
     }
 
     // MARK: - Token backend (edge function `room`)
@@ -208,6 +215,10 @@ final class SessionStore: ObservableObject, SyncBus {
                     try? await Task.sleep(nanoseconds: 6_000_000_000)
                     guard let self, !Task.isCancelled else { return }
                     self.broadcastFullSync()   // late joiners + Rejoin converge within ~6s
+                    if let p = self.project, p.playing {   // re-assert transport position so late joiners play in time
+                        self.sendOp(SyncOp(kind: .transport(playing: true, hostTime: Date().timeIntervalSince1970,
+                                                            bar: p.bar, step: max(0, p.step))))
+                    }
                 }
             }
         }
@@ -240,6 +251,7 @@ final class SessionStore: ObservableObject, SyncBus {
         syncHbTask?.cancel(); syncHbTask = nil
         rosterTask?.cancel(); rosterTask = nil
         presenceTask?.cancel(); presenceTask = nil
+        pingTask?.cancel(); pingTask = nil
         forked = false
         // Teacher: deactivate the room on the backend so its code/key can't be reused/spoofed later.
         if role == .host, let token = hostToken, !roomCode.isEmpty {
@@ -271,11 +283,25 @@ final class SessionStore: ObservableObject, SyncBus {
         // break verification). The frame carries {op: <json string>, sig, pub}.
         guard let data = try? JSONEncoder().encode(o), let opStr = String(data: data, encoding: .utf8) else { return }
         let sig = ((try? signingKey.signature(for: data)) ?? Data()).base64EncodedString()
-        let wrapper: [String: Any] = ["op": opStr, "sig": sig, "pub": pubKeyB64]
-        sendFrame(["topic": topic, "event": "broadcast",
-                   "payload": ["type": "broadcast", "event": "op", "payload": wrapper],
-                   "ref": nextRef()])
+        sendBroadcast(event: "op", payload: ["op": opStr, "sig": sig, "pub": pubKeyB64])
         opsSent += 1
+    }
+
+    private func sendBroadcast(event: String, payload: [String: Any]) {
+        sendFrame(["topic": topic, "event": "broadcast",
+                   "payload": ["type": "broadcast", "event": event, "payload": payload],
+                   "ref": nextRef()])
+    }
+
+    private func startPing() {
+        pingTask?.cancel()
+        pingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.joined { self.sendBroadcast(event: "ping", payload: ["from": self.instanceToken, "t0": Date().timeIntervalSince1970]) }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+        }
     }
 
     /// Send the full project to the room (join / reconnect / resync). Teacher-only.
@@ -341,37 +367,70 @@ final class SessionStore: ObservableObject, SyncBus {
                 if role == .host { broadcastFullSync() }   // give any already-listening followers current state
             }
         case "broadcast":
-            guard let payload = obj["payload"] as? [String: Any],
-                  (payload["event"] as? String) == "op",
-                  let wrapper = payload["payload"] as? [String: Any],
-                  let opStr = wrapper["op"] as? String,
-                  let opData = opStr.data(using: .utf8),
-                  let op = try? JSONDecoder().decode(SyncOp.self, from: opData) else { return }
-            opsReceived += 1
-            // Ignore our own echo (broadcast self:true, matched by per-launch instanceToken). A non-forked
-            // follower applies the teacher's ops; a forked follower experiments locally until Rejoin.
-            guard op.origin != instanceToken, role == .follow, !forked else { return }
-            // VERIFY the host signature — reject unsigned/forged ops so a mere code-holder can't inject
-            // edits as the teacher. The host's public key is pinned on first sight (re-asserted each op).
-            guard let sigB64 = wrapper["sig"] as? String, let sig = Data(base64Encoded: sigB64),
-                  let pubB64 = wrapper["pub"] as? String, let pubRaw = Data(base64Encoded: pubB64),
-                  let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: pubRaw) else { rejectedOps += 1; return }
-            if pinnedHostKey == nil { pinnedHostKey = pub }
-            guard let pinned = pinnedHostKey,
-                  pinned.rawRepresentation == pub.rawRepresentation,           // same signer as pinned host
-                  pinned.isValidSignature(sig, for: opData) else { rejectedOps += 1; return }
-            // Monotonic guard: drop stale/duplicate ops from reordering. fullSync always applies (it's a resync).
-            var isFull = false; if case .fullSync = op.kind { isFull = true }
-            if !isFull, op.seq > 0, op.seq <= lastAppliedSeq { return }
-            lastAppliedSeq = max(lastAppliedSeq, op.seq)
-            // Transport ops drive the local Transport (not a Project mutator); everything else applies to state.
-            if case .transport(let playing, _, _, _) = op.kind { onRemoteTransport?(playing) }
-            else { project?.applyRemote(op) }
+            guard let payload = obj["payload"] as? [String: Any], let inner = payload["event"] as? String else { return }
+            switch inner {
+            case "op":   handleOp(payload["payload"] as? [String: Any])
+            case "ping": handlePing(payload["payload"] as? [String: Any])
+            case "pong": handlePong(payload["payload"] as? [String: Any])
+            default: break
+            }
         case "phx_error", "phx_close":
             connected = false; status = "Disconnected"
             scheduleReconnect()
         default:
             break
         }
+    }
+
+    private func handleOp(_ wrapper: [String: Any]?) {
+        guard let wrapper, let opStr = wrapper["op"] as? String, let opData = opStr.data(using: .utf8),
+              let op = try? JSONDecoder().decode(SyncOp.self, from: opData) else { return }
+        opsReceived += 1
+        // Ignore our own echo (broadcast self:true, matched by per-launch instanceToken). A non-forked
+        // follower applies the teacher's ops; a forked follower experiments locally until Rejoin.
+        guard op.origin != instanceToken, role == .follow, !forked else { return }
+        // VERIFY the host signature — reject unsigned/forged ops so a mere code-holder can't inject
+        // edits as the teacher (pinned key is server-authoritative when set on join, else TOFU).
+        guard let sigB64 = wrapper["sig"] as? String, let sig = Data(base64Encoded: sigB64),
+              let pubB64 = wrapper["pub"] as? String, let pubRaw = Data(base64Encoded: pubB64),
+              let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: pubRaw) else { rejectedOps += 1; return }
+        if pinnedHostKey == nil { pinnedHostKey = pub }
+        guard let pinned = pinnedHostKey,
+              pinned.rawRepresentation == pub.rawRepresentation,
+              pinned.isValidSignature(sig, for: opData) else { rejectedOps += 1; return }
+        var isFull = false; if case .fullSync = op.kind { isFull = true }
+        if !isFull, op.seq > 0, op.seq <= lastAppliedSeq { return }
+        lastAppliedSeq = max(lastAppliedSeq, op.seq)
+        // Transport ops drive the local Transport at the teacher's CURRENT position (clock-offset adjusted).
+        if case .transport(let playing, let hostTime, let bar, let step) = op.kind {
+            guard playing else { onRemoteTransport?(false, 0, 0); return }
+            let bpm = Double(project?.bpm ?? 90), n = max(1, project?.barSteps ?? 16)
+            let secPerStep = (60.0 / bpm) / 4.0
+            let elapsed = max(0, Date().timeIntervalSince1970 - (hostTime - clockOffset))
+            let abs0 = bar * n + step + Int((elapsed / secPerStep).rounded())
+            let songSteps = max(1, (project?.songBars ?? 16) * n)
+            let s = ((abs0 % songSteps) + songSteps) % songSteps
+            onRemoteTransport?(true, s / n, s % n)
+        } else {
+            project?.applyRemote(op)
+        }
+    }
+
+    // Clock sync (NTP-style): follower pings, host echoes recv/send times, follower keeps the median
+    // offset of the lowest-RTT samples → maps the teacher's transport host-time into the follower's clock.
+    private func handlePing(_ p: [String: Any]?) {
+        guard role == .host, let from = p?["from"] as? String, let t0 = p?["t0"] as? Double else { return }
+        let now = Date().timeIntervalSince1970
+        sendBroadcast(event: "pong", payload: ["to": from, "t0": t0, "t1": now, "t2": Date().timeIntervalSince1970])
+    }
+    private func handlePong(_ p: [String: Any]?) {
+        guard role == .follow, (p?["to"] as? String) == instanceToken,
+              let t0 = p?["t0"] as? Double, let t1 = p?["t1"] as? Double, let t2 = p?["t2"] as? Double else { return }
+        let now = Date().timeIntervalSince1970
+        let rtt = (now - t0) - (t2 - t1)
+        let offset = ((t1 - t0) + (t2 - now)) / 2.0            // teacherClock − followerClock
+        rttSamples.append((rtt, offset)); if rttSamples.count > 8 { rttSamples.removeFirst() }
+        let best = rttSamples.sorted { $0.rtt < $1.rtt }.prefix(max(1, rttSamples.count / 2)).map { $0.offset }.sorted()
+        clockOffset = best[best.count / 2]
     }
 }
