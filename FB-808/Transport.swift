@@ -61,7 +61,29 @@ final class Transport: ObservableObject {
         t.setEventHandler { [weak self] in self?.scheduler() }
         timer = t
         t.resume()
-        project.emit(.transport(playing: true, hostTime: engine.now(), bar: 0, step: 0))   // host → followers play (Step 7)
+        project.emit(.transport(playing: true, hostTime: Date().timeIntervalSince1970, bar: 0, step: 0))   // host → followers play (Step 7)
+    }
+
+    /// Follower-driven start at a specific arrangement position (clock-synced follow). Like start() but
+    /// seeds the playhead to (bar, step). Does NOT emit a transport op (avoids echo on followers).
+    func startAt(bar: Int, step: Int) {
+        if playing { stop() }
+        engine.start(); engine.stopClips()
+        playing = true
+        let n = max(1, project.barSteps)
+        step16 = ((step % n) + n) % n
+        countSteps = 0
+        nextStepTime = engine.now() + 0.05
+        project.playing = true
+        project.step = -1
+        let sb = max(0, bar) % max(1, project.songBars)
+        project.bar = sb
+        barCount = sb
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now(), repeating: lookahead)
+        t.setEventHandler { [weak self] in self?.scheduler() }
+        timer = t
+        t.resume()
     }
 
     func stop() {
@@ -75,7 +97,7 @@ final class Transport: ObservableObject {
         project.playing = false
         project.recording = false
         project.step = -1
-        project.emit(.transport(playing: false, hostTime: engine.now(), bar: project.bar, step: project.step))
+        project.emit(.transport(playing: false, hostTime: Date().timeIntervalSince1970, bar: project.bar, step: max(0, project.step)))
     }
 
     // arm record; start playing if needed. If an audio track is armed, capture the

@@ -151,7 +151,16 @@ struct RootView: View {
             engine.start()
             engine.setVolume(0.9)
             session.project = project   // received ops apply into the live project
-            session.onRemoteTransport = { playing in if playing { transport.start() } else { transport.stop() } }
+            session.onRemoteTransport = { playing, bar, step in
+                if !playing { transport.stop(); return }
+                if !project.playing {
+                    transport.startAt(bar: bar, step: step)            // join in time at the teacher's position
+                } else {
+                    let n = max(1, project.barSteps)
+                    let drift = abs((project.bar * n + max(0, project.step)) - (bar * n + step))
+                    if drift > 2 { transport.startAt(bar: bar, step: step) }   // re-seek only on real drift
+                }
+            }
             if !didAutoLoad {
                 didAutoLoad = true
                 // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
@@ -340,6 +349,7 @@ struct RootView: View {
             } else {
                 bannerBtn("Try it") { session.tryIt() }
             }
+            bannerBtn("Submit") { Task { await session.submitCurrentBeat() } }   // bounce + upload + submit for review
             bannerBtn("Leave") { session.leave() }
         }
         .padding(.horizontal, 16).frame(height: 40)
