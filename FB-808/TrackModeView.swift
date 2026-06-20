@@ -280,6 +280,14 @@ struct TrackModeView: View {
                 HStack(spacing: 5) {
                     Circle().fill(t.color).frame(width: 7, height: 7)
                     Text(t.name).font(FDFont.display(14, .semibold)).foregroundStyle(settings.ink).lineLimit(1)
+                    // link/freeze status (Step 2): linked tracks follow their source live; frozen are detached copies
+                    if t.isLinked {
+                        Image(systemName: "link").font(.system(size: 9, weight: .bold)).foregroundStyle(settings.accent)
+                            .accessibilityLabel(Text("Live-linked to source"))
+                    } else if t.isFrozen {
+                        Image(systemName: "snowflake").font(.system(size: 9, weight: .bold)).foregroundStyle(settings.inkFaint)
+                            .accessibilityLabel(Text("Frozen copy"))
+                    }
                     Spacer(minLength: 0)
                     trackMenu(t)
                 }
@@ -340,6 +348,13 @@ struct TrackModeView: View {
                             }
                         }
                     } label: { Label("Route to Bus", systemImage: "arrow.triangle.merge") }
+                }
+                if !t.frozenToAudio {   // live-link ⇄ independent copy (Step 2)
+                    if t.isLinked {
+                        Button { _ = project.freezeLinkToCopy(t.id) } label: { Label("Freeze (detach copy)", systemImage: "scissors") }
+                    } else if t.isFrozen {
+                        Button { _ = project.relinkTrack(t.id) } label: { Label("Re-link to source", systemImage: "link") }
+                    }
                 }
                 if t.frozenToAudio {
                     Button { project.unfreezeTrack(t.id) } label: { Label("Unfreeze", systemImage: "arrow.counterclockwise") }

@@ -273,6 +273,51 @@ extension Project {
         tracks[i].frozenToAudio = false
     }
 
+    // MARK: link ⇄ freeze (Step 2 — detach a live-linked track into an independent copy, or re-link)
+
+    /// FREEZE: capture a live-linked track's current resolved content into an independent copy and
+    /// clear the link. The track stops following the source (DAW-style "freeze"). Undoable.
+    @discardableResult
+    func freezeLinkToCopy(_ id: String) -> Bool {
+        guard let i = tracks.firstIndex(where: { $0.id == id }), tracks[i].isLinked,
+              let link = tracks[i].source.link else { return false }
+        checkpoint("freezeLink:\(id)", coalesce: false)
+        switch tracks[i].type {
+        case .drumPattern:
+            tracks[i].source.lanes = resolvedLanes(link, atBar: 0) ?? [:]
+            tracks[i].source.notes = nil; tracks[i].source.patch = nil
+        case .synthPart:
+            if let (notes, patch) = resolvedNotes(link, atBar: 0) {
+                tracks[i].source.notes = notes; tracks[i].source.patch = patch
+            }
+            tracks[i].source.lanes = nil
+        default: break
+        }
+        tracks[i].source.link = nil
+        return true
+    }
+
+    /// RE-LINK: reconnect a frozen copy to its live source (drum lanes by its rows, or its part),
+    /// discarding the independent copy so edits to the source flow again. Undoable.
+    @discardableResult
+    func relinkTrack(_ id: String) -> Bool {
+        guard let i = tracks.firstIndex(where: { $0.id == id }), tracks[i].isFrozen,
+              !tracks[i].frozenToAudio else { return false }
+        checkpoint("relink:\(id)", coalesce: false)
+        switch tracks[i].type {
+        case .drumPattern:
+            let rows = tracks[i].source.padRows.isEmpty
+                ? Array((tracks[i].source.lanes ?? [:]).keys) : tracks[i].source.padRows
+            tracks[i].source.link = LinkRef(kind: .lanes, rows: rows)
+            tracks[i].source.lanes = nil
+        case .synthPart:
+            tracks[i].source.link = LinkRef(kind: .part, partID: tracks[i].source.partID ?? "lead")
+            tracks[i].source.notes = nil; tracks[i].source.patch = nil
+        default: return false
+        }
+        return true
+    }
+
     func moveTrack(from: Int, to: Int) {
         guard tracks.indices.contains(from), to >= 0, to <= tracks.count, from != to else { return }
         checkpoint("movetrack", coalesce: false)
