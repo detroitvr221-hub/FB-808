@@ -349,6 +349,7 @@ struct RootView: View {
             } else {
                 bannerBtn("Try it") { session.tryIt() }
             }
+            bannerBtn("Submit") { Task { await session.submitCurrentBeat() } }   // bounce + upload + submit for review
             bannerBtn("Leave") { session.leave() }
         }
         .padding(.horizontal, 16).frame(height: 40)

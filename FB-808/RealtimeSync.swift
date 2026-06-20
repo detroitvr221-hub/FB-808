@@ -142,10 +142,13 @@ final class SessionStore: ObservableObject, SyncBus {
 
     // MARK: - Token backend (edge function `room`)
 
-    private func callRoom(_ body: [String: Any?]) async -> [String: Any]? {
-        var req = URLRequest(url: SyncConfig.functionsURL)
+    private func callRoom(_ body: [String: Any?]) async -> [String: Any]? { await callFunc("room", body) }
+
+    private func callFunc(_ name: String, _ body: [String: Any?]) async -> [String: Any]? {
+        guard let url = URL(string: "https://\(SyncConfig.projectRef).supabase.co/functions/v1/\(name)") else { return nil }
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 12
+        req.timeoutInterval = 20
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(SyncConfig.anonKey, forHTTPHeaderField: "apikey")
         req.setValue("Bearer \(SyncConfig.anonKey)", forHTTPHeaderField: "Authorization")
@@ -193,6 +196,39 @@ final class SessionStore: ObservableObject, SyncBus {
     }
     func sendFeedbackRemote(submissionId: String, text: String) async {
         _ = await callRoom(["action": "feedback", "code": roomCode, "hostToken": hostToken, "submissionId": submissionId, "text": text])
+    }
+
+    // MARK: - Audio via Storage (submission bounces)
+
+    /// Teacher: a short-lived signed URL to play back a submission's audio.
+    func submissionAudioURL(path: String) async -> URL? {
+        guard let res = await callRoom(["action": "downloadUrl", "code": roomCode, "hostToken": hostToken, "path": path]),
+              let u = res["url"] as? String else { return nil }
+        return URL(string: u.hasPrefix("http") ? u : SyncConfig.url.absoluteString + u)
+    }
+    /// Render the current project to a mono WAV in memory (for submission upload).
+    func bounceWAV() -> Data? {
+        guard let p = project else { return nil }
+        let (l, r) = renderOffline(p.buildExportPlan())
+        guard !l.isEmpty else { return nil }
+        var mono = [Float](repeating: 0, count: l.count)
+        for i in 0..<l.count { mono[i] = (l[i] + r[i]) * 0.5 }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).wav")
+        guard writeWAVData(mono, to: tmp) else { return nil }
+        let data = try? Data(contentsOf: tmp)
+        try? FileManager.default.removeItem(at: tmp)
+        return data
+    }
+    /// Student: bounce the current beat and submit it (audio uploaded server-side via the edge fn).
+    func submitCurrentBeat() async {
+        let name = project?.name ?? "Beat"
+        if let wav = bounceWAV(), wav.count < 8_000_000 {
+            _ = await callFunc("submitAudio", ["code": roomCode, "studentToken": studentToken,
+                                               "displayName": displayName, "beatName": name,
+                                               "wavBase64": wav.base64EncodedString()])
+        } else {
+            await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)   // metadata only if no/oversized audio
+        }
     }
 
     /// Open (or re-open) the WebSocket for the current role/room. Reused by reconnect.
