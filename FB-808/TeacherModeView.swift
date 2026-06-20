@@ -3,6 +3,7 @@
 //  Ported from mode-teacher.jsx.
 
 import SwiftUI
+import AVFoundation
 
 private let TE_CLASS = "Beat Lab · 4th Period"
 private let TE_CODE = "FD-7K2P"
@@ -23,6 +24,32 @@ struct TeacherModeView: View {
     @State private var tab = "roster"                  // navigation only — fine to reset on return
     @State private var toast: String?                  // transient
 
+    // Live submissions (Submissions tab while HOSTING — real backend data, not the mock roster).
+    @State private var remoteSubs: [RemoteSub] = []
+    @State private var selectedRemoteID: String?
+    @State private var remoteFeedback = ""             // teacher's in-progress feedback for the selected sub
+    @State private var subsRefreshing = false
+    @State private var audioPlayer: AVPlayer?          // retained so playback isn't deallocated mid-play
+    @State private var playingSubID: String?
+
+    /// A submission as returned by the `submissions` edge action (token-authorized; teacher-only).
+    /// PII-free: only a moderated display name, never an email or account id.
+    struct RemoteSub: Identifiable, Equatable {
+        let id: String, name: String, beat: String
+        let acc: Double?, reviewed: Bool, feedback: String, audioPath: String?
+        init?(_ d: [String: Any]) {
+            guard let id = d["id"] as? String else { return nil }
+            self.id = id
+            name = (d["display_name"] as? String) ?? "Student"
+            beat = (d["beat_name"] as? String) ?? "Beat"
+            acc = (d["accuracy"] as? NSNumber)?.doubleValue
+            reviewed = (d["reviewed"] as? Bool) ?? ((d["reviewed"] as? NSNumber)?.boolValue ?? false)
+            feedback = (d["feedback"] as? String) ?? ""
+            let path = d["audio_url"] as? String
+            audioPath = (path?.isEmpty ?? true) ? nil : path
+        }
+    }
+
     /// What the roster/monitor display: the live local "You" row first, then — when actually hosting a
     /// live class — the REAL enrolled students from the backend; otherwise the example peers (preview).
     private var displayRoster: [Student] {
@@ -40,6 +67,8 @@ struct TeacherModeView: View {
     private var onCount: Int { displayRoster.filter { $0.on }.count }
     private var subs: [Student] { displayRoster.filter { $0.sub != nil } }   // local row has sub:nil → excluded
     private var newSubs: Int { subs.filter { !($0.sub?.reviewed ?? true) }.count }
+    /// Unreviewed count for the Submissions tab badge — real remote subs when hosting, mock otherwise.
+    private var pendingReview: Int { session.role == .host ? remoteSubs.filter { !$0.reviewed }.count : newSubs }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -65,13 +94,63 @@ struct TeacherModeView: View {
         .overlay(alignment: .bottom) {
             if let toast { toastView(toast) }
         }
+        // Poll real submissions while hosting (keeps the badge + list live regardless of which tab is open).
+        .task(id: session.role) {
+            guard session.role == .host else { remoteSubs = []; return }
+            while !Task.isCancelled {
+                await refreshSubs()
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { _ in
+            playingSubID = nil
+        }
+    }
+
+    @MainActor private func refreshSubs() async {
+        guard session.role == .host else { return }
+        subsRefreshing = true
+        let raw = await session.fetchSubmissions()
+        subsRefreshing = false
+        guard session.role == .host else { return }       // role may have changed during the await
+        let parsed = raw.compactMap { RemoteSub($0) }
+        remoteSubs = parsed
+        if let sel = selectedRemoteID, !parsed.contains(where: { $0.id == sel }) { selectedRemoteID = nil }
+        if selectedRemoteID == nil { selectedRemoteID = parsed.first?.id; remoteFeedback = parsed.first?.feedback ?? "" }
+    }
+
+    private func playRemote(_ sub: RemoteSub) {
+        guard let path = sub.audioPath else { return }
+        Task {
+            guard let url = await session.submissionAudioURL(path: path) else { toast = "Couldn't load audio"; return }
+            let player = AVPlayer(url: url)
+            audioPlayer = player
+            playingSubID = sub.id
+            player.play()
+        }
+    }
+
+    private func sendRemoteFeedback(_ sub: RemoteSub) {
+        let text = remoteFeedback.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        Task {
+            await session.sendFeedbackRemote(submissionId: sub.id, text: text)
+            toast = "Feedback sent to \(sub.name)"
+            await refreshSubs()
+        }
+    }
+
+    /// Deterministic per-name avatar color (stable across launches, unlike String.hashValue).
+    private func colorFor(_ s: String) -> Color {
+        var h = 5381; for b in s.utf8 { h = ((h << 5) &+ h) &+ Int(b) }
+        return Color(hex: Student.palette[abs(h) % Student.palette.count])
     }
 
     private var tabs: some View {
         HStack(spacing: 8) {
             tabBtn("Roster", "roster")
             tabBtn("Live Class", "live")
-            tabBtn("Submissions", "review", badge: newSubs)
+            tabBtn("Submissions", "review", badge: pendingReview)
         }
     }
     private func tabBtn(_ label: String, _ id: String, badge: Int = 0) -> some View {
@@ -252,7 +331,127 @@ struct TeacherModeView: View {
 
     // MARK: review
 
-    private var review: some View {
+    /// Submissions tab: real remote submissions when a live class is hosting, the example roster otherwise.
+    @ViewBuilder private var review: some View {
+        if session.role == .host { liveReview } else { mockReview }
+    }
+
+    // MARK: Live submissions (real backend, teacher-authorized)
+
+    private var liveReview: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text("SUBMITTED BEATS · \(remoteSubs.count)").font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
+                    Spacer()
+                    if subsRefreshing { ProgressView().controlSize(.mini) }
+                    Button { Task { await refreshSubs() } } label: {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .bold)).foregroundStyle(settings.inkDim)
+                    }.buttonStyle(.plain).accessibilityLabel("Refresh submissions")
+                }
+                if remoteSubs.isEmpty {
+                    Text("No submissions yet — students' beats appear here the moment they hit Submit.")
+                        .font(FDFont.ui(12)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(remoteSubs) { sub in remoteSubRow(sub) }
+                    }
+                }.scrollIndicators(.hidden)
+            }
+            .frame(width: 280)
+
+            Group {
+                if let sub = remoteSubs.first(where: { $0.id == selectedRemoteID }) {
+                    remoteReviewDetail(sub)
+                } else {
+                    VStack {
+                        Text("Select a submission to listen and leave feedback.")
+                            .font(FDFont.ui(14)).foregroundStyle(settings.inkDim)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+                }
+            }
+        }
+        .onAppear { Task { await refreshSubs() } }   // snappy first load when the tab opens
+    }
+
+    private func remoteSubRow(_ sub: RemoteSub) -> some View {
+        Button { selectedRemoteID = sub.id; remoteFeedback = sub.feedback } label: {
+            HStack(spacing: 9) {
+                Circle().fill(colorFor(sub.name)).frame(width: 24, height: 24)
+                    .overlay(Text(String(sub.name.prefix(1))).font(FDFont.ui(11, .bold)).foregroundStyle(.white))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(sub.beat).font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink).lineLimit(1)
+                    Text(sub.name).font(FDFont.ui(11)).foregroundStyle(settings.inkDim)
+                }
+                Spacer()
+                if !sub.reviewed { newTag }
+                else { Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(settings.theme.good) }
+            }
+            .padding(.horizontal, 10).frame(height: 48)
+            .background(RoundedRectangle(cornerRadius: 10).fill(selectedRemoteID == sub.id ? settings.accent.opacity(0.16) : settings.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(selectedRemoteID == sub.id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
+    private func remoteReviewDetail(_ sub: RemoteSub) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Circle().fill(colorFor(sub.name)).frame(width: 38, height: 38)
+                    .overlay(Text(String(sub.name.prefix(1))).font(FDFont.ui(16, .bold)).foregroundStyle(.white))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(sub.beat).font(FDFont.display(16, .bold)).foregroundStyle(settings.ink)
+                    Text(sub.name).font(FDFont.ui(12)).foregroundStyle(settings.inkDim)
+                }
+                Spacer()
+                if let a = sub.acc {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(Int(a * 100))%").font(FDFont.mono(18, .bold)).foregroundStyle(settings.ink)
+                        stars(starsFor(a))
+                    }
+                }
+            }
+            HStack(spacing: 10) {
+                Button { playRemote(sub) } label: {
+                    HStack(spacing: 8) {
+                        if playingSubID == sub.id { Image(systemName: "speaker.wave.2.fill").font(.system(size: 12, weight: .bold)) }
+                        else { Triangle().fill(.white).frame(width: 11, height: 13) }
+                        Text(sub.audioPath == nil ? "No Audio" : "Play Submission")
+                    }
+                    .font(FDFont.ui(14, .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 18).frame(height: 44)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                }.buttonStyle(.plain).disabled(sub.audioPath == nil).opacity(sub.audioPath == nil ? 0.5 : 1)
+                Text(sub.audioPath == nil ? "Student submitted without a recording" : "Plays the student's recorded bounce")
+                    .font(FDFont.ui(12)).foregroundStyle(settings.inkFaint)
+                Spacer()
+            }
+            Text("WRITTEN FEEDBACK").font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
+            TextEditor(text: $remoteFeedback)
+                .font(FDFont.ui(14)).foregroundStyle(settings.ink).scrollContentBackground(.hidden)
+                .padding(10).frame(height: 100)
+                .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2)).overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+            HStack {
+                if sub.reviewed { Label("Reviewed", systemImage: "checkmark.seal.fill").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.theme.good) }
+                Spacer()
+                let empty = remoteFeedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                Button { sendRemoteFeedback(sub) } label: {
+                    Text("Send Feedback").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 18).frame(height: 40)
+                        .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                }.buttonStyle(.plain).disabled(empty).opacity(empty ? 0.5 : 1)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+    }
+
+    // MARK: Example submissions (preview when not hosting a live class)
+
+    private var mockReview: some View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("SUBMITTED BEATS · \(subs.count)").font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
