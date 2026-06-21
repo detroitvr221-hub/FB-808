@@ -197,10 +197,27 @@ final class Transport: ObservableObject {
             }
         }
 
+        // Sources a live-linked track now OWNS — suppress them in the classic paths below so a promoted /
+        // sent pattern plays exactly ONCE (via its track), not doubled. Seeded tracks have no link so they
+        // own nothing; frozen copies carry their own data and don't reference the source. (#review)
+        var ownedRows = Set<String>()
+        var ownedLeadMelody = false
+        var ownedPartIDs = Set<String>()
+        for track in p.tracks where track.isLinked {
+            guard let link = track.source.link else { continue }
+            switch link.kind {
+            case .lanes:  if let rows = link.rows { ownedRows.formUnion(rows) } else { ownedRows.formUnion(curLanes.keys) }
+            case .melody: ownedLeadMelody = true
+            case .part:   if link.partID == nil || link.partID == "lead" { ownedLeadMelody = true } else if let pid = link.partID { ownedPartIDs.insert(pid) }
+            case .sequenceLanes, .sequenceMelody: break   // point at a stored sequence bank, not the live scratch buffers
+            }
+        }
+
         for (padID, lane) in curLanes {
             guard s < lane.count else { continue }
             let vel = lane[s]
             if vel == 0 { continue }
+            if ownedRows.contains(padID) { continue }   // owned by a linked track → played in the additive pass
             if p.rowMute[padID] == true { continue }
             if rowSolo && !(p.rowSolo[padID] ?? false) { continue }
             // Tracks tab mute/solo
@@ -226,7 +243,7 @@ final class Transport: ObservableObject {
         }
 
         // synth / melody track (played by the knob-driven patch) — gated by the "vox" arrangement track
-        if !p.melodyMuted, !curMelody.isEmpty, p.trackMute["vox"] != true,
+        if !p.melodyMuted, !ownedLeadMelody, !curMelody.isEmpty, p.trackMute["vox"] != true,
            !(trackSolo && !(p.trackSolo["vox"] ?? false)),
            !(song && !p.trackPlaysInSong("vox", atBar: bar)) {
             let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
@@ -247,7 +264,7 @@ final class Transport: ObservableObject {
            !(trackSolo && !(p.trackSolo["vox"] ?? false)) {
             let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
             if !mmel.mute && !(solo && !mmel.solo) {
-                for part in curParts where !part.muted {
+                for part in curParts where !part.muted && !ownedPartIDs.contains(part.id) {
                     for note in part.notes where note.step == s {
                         let durSec = Double(note.dur) * secPerStep()
                         let v = note.vel * mmel.vol * master.vol * 1.25
@@ -280,7 +297,7 @@ final class Transport: ObservableObject {
                     let m = p.mixer[Kit.channelOf(pad)] ?? MixChannel()
                     if m.mute || (solo && !m.solo) { continue }
                     // linked drum tracks honor the live stepMeta (probability/conditions/p-locks); frozen copies don't (#Step3)
-                    let sm = p.trackStepMeta(track, pad, s)
+                    let sm = p.trackStepMeta(track, pad, s, atBar: bar)
                     if let sm {
                         if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
                         if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }

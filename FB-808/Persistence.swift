@@ -225,16 +225,29 @@ final class ProjectStore: ObservableObject {
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try? enc.encode(snap).write(to: url, options: .atomic)
     }
+    /// True when `name` resolves to a file that belongs to a DIFFERENT project than `item`
+    /// (so a rename to it would overwrite). sanitize() can collapse distinct names onto one file,
+    /// so this checks the resolved path, not the raw string.
+    func nameCollision(with name: String, excluding item: SavedProject) -> Bool {
+        let url = fileURL(name)
+        return url.path != item.url.path && FileManager.default.fileExists(atPath: url.path)
+    }
     /// Rename a saved project (moves the file + rewrites the embedded name). (#211)
-    func rename(_ item: SavedProject, to newName: String) {
+    /// Returns false WITHOUT writing if the target name belongs to a different project and `force` is
+    /// false — the caller must confirm the overwrite first (mirrors the Save-overwrite flow), so a
+    /// rename can never silently destroy another saved beat.
+    @discardableResult
+    func rename(_ item: SavedProject, to newName: String, force: Bool = false) -> Bool {
         let clean = newName.trimmingCharacters(in: .whitespaces)
-        guard !clean.isEmpty, var snap = decode(item.url) else { return }
+        guard !clean.isEmpty, var snap = decode(item.url) else { return false }
+        if !force && nameCollision(with: clean, excluding: item) { return false }
         snap.name = clean
         let newURL = fileURL(clean)
         writeSnap(snap, to: newURL)
         if newURL.path != item.url.path { try? FileManager.default.removeItem(at: item.url) }
         if lastProjectName == item.name { lastProjectName = clean }
         refresh()
+        return true
     }
     /// Duplicate a saved project under "<name> copy". (#211)
     func duplicate(_ item: SavedProject) {
@@ -243,6 +256,29 @@ final class ProjectStore: ObservableObject {
         while exists(nm) { nm = "\(item.name) copy \(i)"; i += 1 }
         snap.name = nm
         snap.id = UUID().uuidString   // a copy is a NEW project — fresh stable id, else loadByID is ambiguous (#219)
+        // Give the copy INDEPENDENT audio. Without this both projects reference the same WAVs, so editing
+        // one (re-import/clear a pad sample, remove a clip) deletes the other's audio (#review).
+        var newPads = snap.padParams
+        for (pad, pp) in snap.padParams {
+            guard let f = pp.sampleFile, let data = readPadSampleWAV(file: f) else { continue }
+            let newFile = UUID().uuidString + ".wav"
+            if writePadSampleWAV(data, file: newFile) { var p = pp; p.sampleFile = newFile; newPads[pad] = p }
+        }
+        snap.padParams = newPads
+        if var s = snap.sample, let f = s.audioFile, let data = readPadSampleWAV(file: f) {
+            let newFile = UUID().uuidString + ".wav"
+            if writePadSampleWAV(data, file: newFile) { s.audioFile = newFile; snap.sample = s }
+        }
+        if let clips = snap.audioClips {
+            snap.audioClips = clips.map { clip in
+                var c = clip
+                if let oldUUID = UUID(uuidString: clip.id), let data = readClipWAV(id: oldUUID) {
+                    let newUUID = UUID()
+                    if writeClipWAV(data, id: newUUID) { c.id = newUUID.uuidString }
+                }
+                return c
+            }
+        }
         writeSnap(snap, to: fileURL(nm))
         refresh()
     }

@@ -697,7 +697,7 @@ struct SampleModeView: View {
         // in the sequencer and bounce into export (not the old bank-C-only sliceBank dead-end).
         let n = project.assignSlicesToPads(buffer: engine.currentSampleOriginal(), slices: s.slices, reverse: s.reverseSlices)
         guard n > 0 else { flash("No audio to slice"); return }
-        project.bank = "C"
+        project.setBank("C")
         flash("\(n) chops → pads · sequence them & they’ll export")
     }
 }

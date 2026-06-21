@@ -65,6 +65,20 @@ extension Project {
             let curMelody = songMode ? melodyForBar(bar) : melody
             let curParts = songMode ? partsForBar(bar) : parts
             let curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            // Sources a live-linked track owns — suppress in the classic paths so a sent/promoted pattern
+            // bounces ONCE (via its track), matching live playback. (#review)
+            var ownedRows = Set<String>()
+            var ownedLeadMelody = false
+            var ownedPartIDs = Set<String>()
+            for track in tracks where track.isLinked {
+                guard let link = track.source.link else { continue }
+                switch link.kind {
+                case .lanes:  if let rows = link.rows { ownedRows.formUnion(rows) } else { ownedRows.formUnion(curLanes.keys) }
+                case .melody: ownedLeadMelody = true
+                case .part:   if link.partID == nil || link.partID == "lead" { ownedLeadMelody = true } else if let pid = link.partID { ownedPartIDs.insert(pid) }
+                case .sequenceLanes, .sequenceMelody: break
+                }
+            }
             for step in 0..<n {
                 var t = Double(bar * n + step) * stepDur
                 if swing > 0 && step % 2 == 1 { t += stepDur * swing * 0.66 }
@@ -72,6 +86,7 @@ extension Project {
 
                 for (padID, lane) in curLanes {
                     guard step < lane.count, lane[step] > 0 else { continue }
+                    if ownedRows.contains(padID) { continue }   // owned by a linked track → bounced in the additive pass
                     if rowMute[padID] == true { continue }
                     if rowSoloOn && !(rowSolo[padID] ?? false) { continue }
                     let tk = Kit.trackOf(padID)
@@ -106,7 +121,7 @@ extension Project {
                     }
                 }
 
-                if !melodyMuted, !curMelody.isEmpty, trackMute["vox"] != true,
+                if !melodyMuted, !ownedLeadMelody, !curMelody.isEmpty, trackMute["vox"] != true,
                    !(trackSoloOn && !(trackSolo["vox"] ?? false)),
                    !(songMode && !trackPlaysInSong("vox", atBar: bar)) {
                     let mmel = mixer["melody"] ?? MixChannel(vol: 0.85)
@@ -124,7 +139,7 @@ extension Project {
                    !(trackSoloOn && !(trackSolo["vox"] ?? false)) {
                     let mmel = mixer["melody"] ?? MixChannel(vol: 0.85)
                     if !mmel.mute && !(solo && !mmel.solo) {
-                        for part in curParts where !part.muted {
+                        for part in curParts where !part.muted && !ownedPartIDs.contains(part.id) {
                             for note in part.notes where note.step == step {
                                 let dur = Double(note.dur) * stepDur
                                 let vel = note.vel * mmel.vol * 1.25
@@ -150,8 +165,19 @@ extension Project {
                             guard step < lane.count, lane[step] > 0 else { continue }
                             let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
                             if m.mute || (solo && !m.solo) { continue }
+                            // Honor the linked track's live step prob/conditions/p-locks so the bounce matches
+                            // playback (deterministic seed = reproducible, matching the classic export above). (#review)
+                            let sm = trackStepMeta(track, padID, step, atBar: bar)
+                            if let sm {
+                                if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
+                                if sm.prob < 0.999 {
+                                    var seed = UInt64(bar &* 16 &+ step) &+ 1
+                                    for ch in padID.unicodeScalars { seed = seed &* 31 &+ UInt64(ch.value) }
+                                    if Double(seed % 997) / 997.0 > sm.prob { continue }
+                                }
+                            }
                             let vel = padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * 1.3 * track.vol * gVol
-                            var opts = padOpts(padID) ?? TriggerOpts()
+                            var opts = padOpts(padID, meta: sm) ?? TriggerOpts()
                             opts.pan = max(-1, min(1, opts.pan + track.pan))
                             drums.append(ExportDrum(sound: soundFor(padID), vel: vel, opts: opts,
                                                     atSample: atSample + padOffsetSec(padID) * sr,

@@ -106,6 +106,11 @@ extension Project {
     }
     func removePart(_ id: String) {
         guard id != "lead" else { return }
+        // Bake any track live-linked to this part into a frozen copy FIRST — otherwise deleting the part
+        // orphans the track into an unrecoverable silent zombie (#review).
+        for t in tracks where t.source.link?.kind == .part && t.source.link?.partID == id {
+            _ = freezeLinkToCopy(t.id)
+        }
         checkpoint("rmpart", coalesce: false)
         parts.removeAll { $0.id == id }
         if activePart == id { activePart = "lead" }
