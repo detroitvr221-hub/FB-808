@@ -85,20 +85,30 @@ extension Project {
     func restartArp() {
         arpTimer?.invalidate()
         arpIdx = 0
-        arpTick()   // sound the first note immediately
-        let timer = Timer.scheduledTimer(withTimeInterval: arpStepSec(), repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.arpTick() }   // scheduled on (and fires on) the main runloop
+        arpNextTime = engine.now() + 0.02            // first note just ahead of the clock
+        arpPump()                                    // schedule the first batch immediately
+        // Fixed 20ms pump (NOT one-fire-per-note): notes are scheduled at absolute engine times with
+        // lookahead, so timer jitter no longer shifts the onsets — the arp is now sample-anchored.
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.arpPump() }
         }
         arpTimer = timer
     }
 
     func stopArp() { arpTimer?.invalidate(); arpTimer = nil; arpIdx = 0 }
 
-    private func arpTick() {
+    /// Schedule every arp note whose time falls within the lookahead window, at its absolute engine time.
+    private func arpPump() {
         let notes = arpNotes()
         guard !notes.isEmpty else { stopArp(); return }
-        let idx = arpMode == "random" ? Int.random(in: 0..<notes.count) : (arpIdx % notes.count)
-        if arpMode != "random" { arpIdx += 1 }
-        engine.triggerSynth(editPatch, midi: notes[idx], dur: arpStepSec() * 0.9, vel: synthGain, when: engine.now() + 0.01)
+        let ahead = engine.now() + 0.1               // 100ms lookahead (survives a main-thread stall)
+        if arpNextTime < engine.now() { arpNextTime = engine.now() + 0.005 }   // never schedule in the past
+        let step = max(0.02, arpStepSec())           // re-read each pump → live BPM changes apply immediately
+        while arpNextTime < ahead {
+            let idx = arpMode == "random" ? Int.random(in: 0..<notes.count) : (arpIdx % notes.count)
+            if arpMode != "random" { arpIdx += 1 }
+            engine.triggerSynth(editPatch, midi: notes[idx], dur: step * 0.9, vel: synthGain, when: arpNextTime)
+            arpNextTime += step
+        }
     }
 }

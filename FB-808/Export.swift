@@ -28,7 +28,13 @@ struct ExportPlan: Sendable {
     var busCount: Int = FX_CHANNELS.count           // dynamic insert-FX bus count (G2/G3)
     var busIndex: [String: Int] = [:]               // bus-owner id → strip slot (G3 per-track buses)
     var busOrder: [String] = FX_CHANNELS            // strip slot → owner id (for stem names)
+    var safetyEnabled = true                         // always-on master limiter (mirror SynthCore live)
+    var safetyCeilingDb = -1.0
+    var automation: [AutoPoint] = []                 // sorted FX-automation schedule (filter/reverb/delay sweeps)
 }
+
+/// One FX-automation breakpoint for the offline bounce — mirrors a live per-step applyAuto() call.
+struct AutoPoint: Sendable { var atSample: Double; var target: String; var value: Double }
 
 struct ExportFile: Identifiable { let id = UUID(); let urls: [URL] }
 
@@ -42,7 +48,7 @@ enum ExportFormat: Sendable {
 // MARK: - Build the plan from the project (mirrors the transport's per-step logic)
 
 extension Project {
-    func buildExportPlan(loopBarsOverride: Int? = nil) -> ExportPlan {
+    func buildExportPlan(loopBarsOverride: Int? = nil, safetyEnabled: Bool = true, safetyCeilingDb: Double = -1.0) -> ExportPlan {
         let sr = 48_000.0
         let bpmD = Double(bpm)
         let stepDur = (60 / bpmD) / 4
@@ -51,8 +57,11 @@ extension Project {
         let songMode = loopBarsOverride == nil ? self.songMode : false
         let totalBars = loopBarsOverride ?? (songMode ? songBars : 4)
         let masterCh = mixer["master"] ?? MixChannel(vol: 0.9)
-        let master = masterCh.vol
+        // Live applies the fader (baked into velocities) AND a fixed 0.9 render trim (RootView
+        // engine.setVolume(0.9)); fold that same trim in here so the bounce level matches monitoring.
+        let master = masterCh.vol * 0.9
         let masterMuted = masterCh.mute
+        var automation: [AutoPoint] = []   // FX-automation schedule, mirrors Transport.scheduleStep
         let solo = mixer.values.contains { $0.solo }
         let rowSoloOn = rowSolo.values.contains(true)
         let trackSoloOn = trackSolo.values.contains(true)
@@ -83,6 +92,15 @@ extension Project {
                 var t = Double(bar * n + step) * stepDur
                 if swing > 0 && step % 2 == 1 { t += stepDur * swing * 0.66 }
                 let atSample = t * sr
+
+                // FX-automation schedule (mirror Transport.scheduleStep so a filter/reverb/delay sweep
+                // bounces exactly as it plays). Song-wide breakpoint takes priority in Song Mode.
+                if songMode, songAutoTarget != "" {
+                    automation.append(AutoPoint(atSample: atSample, target: songAutoTarget,
+                                                value: songAutoValue(bar: bar, frac: Double(step) / Double(n))))
+                } else if autoTarget != "", step < autoLane.count {
+                    automation.append(AutoPoint(atSample: atSample, target: autoTarget, value: autoLane[step]))
+                }
 
                 for (padID, lane) in curLanes {
                     guard step < lane.count, lane[step] > 0 else { continue }
@@ -217,7 +235,7 @@ extension Project {
         let order = busOrder
         let cfx = order.map { channelFX[$0] ?? ChannelFX() }
         var idx: [String: Int] = [:]; for (i, id) in order.enumerated() { idx[id] = i }
-        return ExportPlan(drums: drums, synths: synths, audioClips: clips, totalFrames: totalFrames, master: master, sr: sr, name: name, bars: totalBars, fx: fxSettings, channelFX: cfx, masterBus: masterBus, busCount: order.count, busIndex: idx, busOrder: order)
+        return ExportPlan(drums: drums, synths: synths, audioClips: clips, totalFrames: totalFrames, master: master, sr: sr, name: name, bars: totalBars, fx: fxSettings, channelFX: cfx, masterBus: masterBus, busCount: order.count, busIndex: idx, busOrder: order, safetyEnabled: safetyEnabled, safetyCeilingDb: safetyCeilingDb, automation: automation)
     }
 
     /// A DRY, unity-gain plan containing ONLY one frozen track's voices — for bus-freeze (render the
@@ -253,7 +271,8 @@ extension Project {
         }
         let frames = Int(Double(totalBars * n) * stepDur * sr) + Int(sr / 2)
         return ExportPlan(drums: drums, synths: synths, audioClips: [], totalFrames: frames, master: 1.0, sr: sr,
-                          name: track.name, bars: totalBars, fx: MasterFX(), channelFX: [], masterBus: MasterBus())
+                          name: track.name, bars: totalBars, fx: MasterFX(), channelFX: [], masterBus: MasterBus(),
+                          safetyEnabled: false)   // DRY freeze — limiter is re-applied on live playback
     }
 }
 
@@ -396,7 +415,12 @@ nonisolated func renderOffline(_ plan: ExportPlan) -> (left: [Float], right: [Fl
     var lastFrame = 0
     let fx = FXChain(sr: sr)
     fx.configure(plan.fx, sr: sr)
-    let fxActive = plan.fx.reverbMix > 0.0001 || plan.fx.delayMix > 0.0001
+    let hasFxAuto = plan.automation.contains { $0.target == "reverb" || $0.target == "delay" }
+    let fxActive = plan.fx.reverbMix > 0.0001 || plan.fx.delayMix > 0.0001 || hasFxAuto
+    // Mirror the live master chain: automated lowpass sweep + always-on safety limiter (pre soft-clip).
+    var msvfL = SVF(), msvfR = SVF(), mCut = 20_000.0
+    var safety = SafetyLimiter(sr: sr, ceiling: Float(pow(10, plan.safetyCeilingDb / 20)), enabled: plan.safetyEnabled)
+    var aIdx = 0
     // per-channel insert FX (mirrors SynthCore so the export matches live playback)
     let nch = plan.busCount
     let cfx = plan.channelFX.count == nch ? plan.channelFX : Array(repeating: ChannelFX(), count: nch)
@@ -411,6 +435,16 @@ nonisolated func renderOffline(_ plan: ExportPlan) -> (left: [Float], right: [Fl
 
     for i in 0..<n {
         let g = Double(i)
+        // advance the FX-automation schedule (mirrors live applyAuto mapping)
+        while aIdx < plan.automation.count && plan.automation[aIdx].atSample <= g {
+            let ap = plan.automation[aIdx]; aIdx += 1
+            switch ap.target {
+            case "filter": mCut = 20 * pow(900, ap.value)
+            case "reverb": fx.reverbMix = Float(ap.value)
+            case "delay":  fx.delayMix = Float(ap.value)
+            default: break
+            }
+        }
         // activate voices that start now — apply choke at the moment of activation
         while nextIdx < voices.count && voices[nextIdx].startSample <= g {
             let v = voices[nextIdx]
@@ -456,9 +490,14 @@ nonisolated func renderOffline(_ plan: ExportPlan) -> (left: [Float], right: [Fl
             let (oL, oR) = fx.process(gL + sL, gR + sR)
             gL = oL - sL; gR = oR - sR
         }
+        if mCut < 18000 {                                  // automated master lowpass sweep (mirrors live)
+            gL = Float(msvfL.lp(Double(gL), mCut, 1.0, sr))
+            gR = Float(msvfR.lp(Double(gR), mCut, 1.0, sr))
+        }
         if masterActive { (gL, gR) = mbus.process(gL, gR, plan.masterBus) }
-        L[i] = tanhf(gL * 0.8) * 1.05
-        R[i] = tanhf(gR * 0.8) * 1.05
+        let (lgL, lgR) = safety.process(gL, gR)            // always-on safety limiter, before the soft-clip
+        L[i] = tanhf(lgL * 0.8) * 1.05
+        R[i] = tanhf(lgR * 0.8) * 1.05
         if max(abs(gL), abs(gR)) > 2e-4 { lastFrame = i }          // last audible frame
         if active.isEmpty && nextIdx >= voices.count {             // every voice has finished
             let guardFrames = fxActive ? Int(0.1 * sr) : 0         // let the reverb/delay tail ring out
