@@ -118,7 +118,7 @@ struct TrackModeView: View {
     private func exportSong(_ format: ExportFormat) {
         guard !exporting else { return }
         exporting = true
-        let plan = project.buildExportPlan()
+        let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
         Task {
             sweepExportDirs()            // reclaim PRIOR batches first → never deletes the dir we're about to share (#227)
             let dir = fd808ExportDir()   // one unique batch dir → re-exports never collide
@@ -134,7 +134,7 @@ struct TrackModeView: View {
     private func exportStems() {
         guard !exporting else { return }
         exporting = true
-        let plan = project.buildExportPlan()
+        let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
         Task {
             sweepExportDirs()            // reclaim PRIOR batches first (#227)
             let dir = fd808ExportDir()   // all stems of this batch share one dir

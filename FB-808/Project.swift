@@ -827,6 +827,7 @@ final class Project: ObservableObject {
     var assistHeld: [String: [Int]] = [:]   // keyboard key → currently-sounding midis (chord-expanded)
     var arpTimer: Timer?
     var arpIdx = 0
+    var arpNextTime = 0.0   // absolute engine time of the next arp note (sample-anchored, jitter-immune)
 
     /// Live keyboard note-on (sustains until noteOff). Plays the current patch — or, with
     /// Play Assist on, expands to a chord and/or feeds the arpeggiator.

@@ -67,7 +67,9 @@ final class AudioEngine: ObservableObject {
             let avAU = try await AVAudioUnit.instantiate(with: comp.audioComponentDescription, options: [])
             engine.attach(avAU)
             masterAUs.append(HostedAU(name: comp.name, unit: avAU))
+            engine.mainMixerNode.outputVolume = 0   // mute across the rewire so disconnecting srcNode doesn't click
             rebuildMasterChain()
+            engine.mainMixerNode.outputVolume = 1
             persistMasterChain()
             return true
         } catch {
@@ -79,7 +81,9 @@ final class AudioEngine: ObservableObject {
     func removeMasterAU(_ id: UUID) {
         guard let idx = masterAUs.firstIndex(where: { $0.id == id }) else { return }
         let removed = masterAUs.remove(at: idx)
+        engine.mainMixerNode.outputVolume = 0   // mute across the rewire (avoids the disconnect click)
         rebuildMasterChain()
+        engine.mainMixerNode.outputVolume = 1
         engine.detach(removed.unit)
         persistMasterChain()
     }
@@ -134,7 +138,7 @@ final class AudioEngine: ObservableObject {
     }
 
     func start() {
-        guard !started else { return }
+        guard !engine.isRunning else { started = true; return }   // guard on real engine state, not a cached flag
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -143,16 +147,56 @@ final class AudioEngine: ObservableObject {
             try engine.start()
             started = true
             startReclaimTimer()
+            installAudioObservers()
         } catch {
             print("AudioEngine start error: \(error)")
         }
     }
 
-    /// Periodically release finished voices the render thread parked (off the audio thread).
+    /// Periodically release finished voices the render thread parked (off the audio thread). 100ms keeps
+    /// the reclaim bin well under capacity even during dense rolls (so the render thread never frees).
     private func startReclaimTimer() {
         guard reclaimTimer == nil else { return }
         let core = self.core
-        reclaimTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { _ in core.drainReclaim() }
+        reclaimTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in core.drainReclaim() }
+    }
+
+    // MARK: - Interruption / route / configuration recovery
+    // Without these, audio dies permanently after a phone call, a headphone unplug, or an output switch.
+
+    private var audioObservers: [NSObjectProtocol] = []
+    private func installAudioObservers() {
+        guard audioObservers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+        audioObservers.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, let info = note.userInfo,
+                      let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+                let opts = AVAudioSession.InterruptionOptions(rawValue: info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+                if opts.contains(.shouldResume) { self.restartAudio() }   // resume after the call/alarm ends
+            }
+        })
+        audioObservers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restartAudio() }            // headphones unplugged / BT switched
+        })
+        audioObservers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restartAudio(reconfigure: true) }   // output rate/route changed
+        })
+        audioObservers.append(nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: session, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restartAudio(reconfigure: true) }
+        })
+    }
+
+    /// Re-activate the session and restart the engine if it stopped. Idempotent.
+    func restartAudio(reconfigure: Bool = false) {
+        try? AVAudioSession.sharedInstance().setActive(true)
+        if reconfigure { rebuildMasterChain() }   // re-establish srcNode→mixer after a graph teardown
+        if !engine.isRunning {
+            do { try engine.start() } catch { print("AudioEngine restart error: \(error)") }
+        }
+        started = engine.isRunning
     }
 
     // MARK: - Audio settings (latency / polyphony / safety limiter)
@@ -173,9 +217,11 @@ final class AudioEngine: ObservableObject {
         let clamped = max(0.0026, min(0.0464, sec))   // ~2.6 ms … ~46 ms (hardware-supported range)
         guard abs(clamped - preferredBufferDur) > 1e-6 else { return }
         preferredBufferDur = clamped
-        guard started else { return }                  // otherwise applied on next start()
+        guard engine.isRunning else { return }         // otherwise applied on next start()
+        engine.mainMixerNode.outputVolume = 0          // mute across the IO restart to avoid a click
         engine.stop(); started = false
         start()
+        engine.mainMixerNode.outputVolume = 1
     }
 
     private func ensure() { if !started { start() } }

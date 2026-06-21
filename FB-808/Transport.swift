@@ -369,7 +369,9 @@ final class Transport: ObservableObject {
         guard let phase = link.phase(atHostTime: ht) else { return }   // 0 ..< quantum (bar)
         let q = link.quantum
         let corrBeats = phase > q / 2 ? (q - phase) : -phase            // shortest shift to phase 0
-        nextStepTime += corrBeats * (60.0 / Double(project.bpm)) * 0.5  // ease 50% toward lock per bar
+        // Ease 50% toward lock per bar, but never pull the next step into the PAST (a backward nudge could
+        // otherwise schedule steps before now() → they'd flam onto the next block boundary).
+        nextStepTime = max(nextStepTime + corrBeats * (60.0 / Double(project.bpm)) * 0.5, engine.now() + lookahead)
     }
 
     private func scheduler() {
