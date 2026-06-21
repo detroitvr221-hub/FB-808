@@ -21,6 +21,8 @@ final class AudioEngine: ObservableObject {
     private var srcNode: AVAudioSourceNode!
     private var started = false
     private var ioFormat: AVAudioFormat!
+    private var preferredBufferDur: Double = 0.008   // ~8 ms default (was 5 ms) — more stable under heavy polyphony
+    private var reclaimTimer: Timer?                  // frees finished voices off the audio thread
 
     init() { configure(); restoreMasterChain() }
 
@@ -136,13 +138,44 @@ final class AudioEngine: ObservableObject {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try session.setPreferredIOBufferDuration(0.005)
+            try session.setPreferredIOBufferDuration(preferredBufferDur)
             try session.setActive(true)
             try engine.start()
             started = true
+            startReclaimTimer()
         } catch {
             print("AudioEngine start error: \(error)")
         }
+    }
+
+    /// Periodically release finished voices the render thread parked (off the audio thread).
+    private func startReclaimTimer() {
+        guard reclaimTimer == nil else { return }
+        let core = self.core
+        reclaimTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { _ in core.drainReclaim() }
+    }
+
+    // MARK: - Audio settings (latency / polyphony / safety limiter)
+
+    /// Push the user's audio preferences to the engine. Buffer changes restart the IO; polyphony +
+    /// limiter apply live.
+    func applyAudioSettings(bufferSec: Double, polyphony: Int, limiterOn: Bool, limiterCeilingDb: Double) {
+        core.setVoiceLimit(polyphony)
+        core.setSafetyLimiter(ceilingDb: limiterCeilingDb, enabled: limiterOn)
+        setPreferredBuffer(bufferSec)
+    }
+
+    /// The IO buffer the system actually granted (may differ from preferred; the OS quantizes it).
+    func currentBufferDuration() -> Double { AVAudioSession.sharedInstance().ioBufferDuration }
+
+    /// Change the IO buffer (latency vs. stability). Restarts the IO if running so it takes effect now.
+    func setPreferredBuffer(_ sec: Double) {
+        let clamped = max(0.0026, min(0.0464, sec))   // ~2.6 ms … ~46 ms (hardware-supported range)
+        guard abs(clamped - preferredBufferDur) > 1e-6 else { return }
+        preferredBufferDur = clamped
+        guard started else { return }                  // otherwise applied on next start()
+        engine.stop(); started = false
+        start()
     }
 
     private func ensure() { if !started { start() } }
