@@ -60,6 +60,7 @@ final class SessionStore: ObservableObject, SyncBus {
     private var syncHbTask: Task<Void, Never>?   // host: periodic fullSync (late-joiner + divergence backstop)
     private var reconnectTask: Task<Void, Never>?
     private var reconnectAttempt = 0
+    private var joinWatchdog: Task<Void, Never>?   // fail-safe if the socket opens but phx_join never replies
     // Token backend (edge function `room`): teacher's host token + the live roster; student's token + presence.
     @Published private(set) var remoteRoster: [RosterEntry] = []
     @Published private(set) var roomTitle = ""
@@ -133,13 +134,24 @@ final class SessionStore: ObservableObject, SyncBus {
     }
 
     private func begin(code: String, role newRole: Role, serverHostKey: Curve25519.Signing.PublicKey?, channelKey: String?) {
+        // FAIL CLOSED on the read-gate: the realtime topic MUST be the unguessable server-issued channel
+        // key, never the shoulder-surfable room code. If the server didn't return one, refuse to connect
+        // rather than exposing a class of minors' live stream on a guessable/displayed topic.
+        guard let key = channelKey, !key.isEmpty else {
+            status = "Offline"; lastError = "Secure channel unavailable — please rejoin"; return
+        }
+        // Followers MUST have the server-authoritative host key — no silent TOFU fallback (else a mere
+        // code-holder could race a forged op and get self-pinned as the teacher).
+        if newRole == .follow && serverHostKey == nil {
+            status = "Offline"; lastError = "Couldn't verify the teacher — please rejoin"; return
+        }
         roomCode = code.uppercased()
         role = newRole
-        // Subscribe by the unguessable server-issued channel key (not the human code) → read-gated.
-        topic = SyncConfig.channelTopic(channelKey ?? roomCode)
+        topic = SyncConfig.channelTopic(key)
         lastAppliedSeq = 0
+        seq = 0                          // op sequence is reset only on a genuinely new session, NOT on reconnect
         reconnectAttempt = 0
-        pinnedHostKey = serverHostKey   // server-authoritative when present; nil → TOFU fallback
+        pinnedHostKey = serverHostKey    // server-authoritative; followers are guaranteed non-nil by the guard above
         rttSamples = []; clockOffset = 0
         openConnection()
         if newRole == .follow { startPing() }   // estimate the clock offset for transport alignment
@@ -195,9 +207,11 @@ final class SessionStore: ObservableObject, SyncBus {
                             "displayName": displayName, "beatName": beatName, "audioUrl": audioUrl, "accuracy": accuracy])
     }
     /// Teacher: list submissions / send feedback.
-    func fetchSubmissions() async -> [[String: Any]] {
-        let res = await callRoom(["action": "submissions", "code": roomCode, "hostToken": hostToken])
-        return (res?["submissions"] as? [[String: Any]]) ?? []
+    /// Returns nil on a transport failure (so callers don't mistake a network blip for "no submissions"
+    /// and wipe the UI), [] only when the server genuinely reports none.
+    func fetchSubmissions() async -> [[String: Any]]? {
+        guard let res = await callRoom(["action": "submissions", "code": roomCode, "hostToken": hostToken]) else { return nil }
+        return (res["submissions"] as? [[String: Any]]) ?? []
     }
     func sendFeedbackRemote(submissionId: String, text: String) async {
         _ = await callRoom(["action": "feedback", "code": roomCode, "hostToken": hostToken, "submissionId": submissionId, "text": text])
@@ -249,6 +263,7 @@ final class SessionStore: ObservableObject, SyncBus {
         receiveLoop()
         sendJoin()
         startHeartbeat()
+        armJoinWatchdog()   // recover if the socket opens but the channel never joins (silent phx_join drop)
         if role == .host {
             project?.syncBus = self   // teacher edits now emit ops to this bus
             syncHbTask?.cancel()
@@ -266,10 +281,29 @@ final class SessionStore: ObservableObject, SyncBus {
         }
     }
 
-    /// Re-establish the socket after a drop, keeping the same room/role (capped exponential backoff).
+    /// Arm a one-shot deadline: if the channel hasn't joined within 8s of opening the socket, force a
+    /// teardown + reconnect. Without this, a socket that connects but never receives a phx_join reply
+    /// (channel-level reject delivered as a drop, lost join frame, half-open NAT) leaves a HOST silently
+    /// broadcasting nothing — the whole class sees a frozen "Connecting…" with no recovery.
+    private func armJoinWatchdog() {
+        joinWatchdog?.cancel()
+        let mySocket = ws
+        joinWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self, !Task.isCancelled, self.role != .solo, !self.joined, self.ws === mySocket else { return }
+            self.lastError = "Join timed out"
+            self.teardownSocket()
+            self.scheduleReconnect()
+        }
+    }
+
+    /// Re-establish the socket after a drop, keeping the same room/role (capped exponential backoff + jitter).
     private func scheduleReconnect() {
         guard role != .solo, reconnectTask == nil else { return }
-        let delay = min(20.0, pow(2.0, Double(reconnectAttempt)))   // 1,2,4,8,16,20…s
+        // Equal jitter so a shared-cause outage (server restart) doesn't make a whole classroom re-dial
+        // in lockstep (thundering herd).
+        let base = min(20.0, pow(2.0, Double(reconnectAttempt)))   // 1,2,4,8,16,20…s
+        let delay = base * 0.5 + Double.random(in: 0...(base * 0.5))
         reconnectAttempt += 1
         status = "Reconnecting…"
         reconnectTask = Task { [weak self] in
@@ -283,9 +317,11 @@ final class SessionStore: ObservableObject, SyncBus {
 
     private func teardownSocket() {
         hbTask?.cancel(); hbTask = nil
+        joinWatchdog?.cancel(); joinWatchdog = nil
         ws?.cancel(with: .goingAway, reason: nil); ws = nil
         session?.invalidateAndCancel(); session = nil
-        joined = false; connected = false; ref = 0; seq = 0
+        joined = false; connected = false; ref = 0   // NOTE: `seq` is deliberately NOT reset — it must stay
+        // monotonic across reconnects so followers' lastAppliedSeq doesn't reject post-reconnect ops.
     }
 
     func leave() {
@@ -383,17 +419,19 @@ final class SessionStore: ObservableObject, SyncBus {
     }
 
     private func receiveLoop() {
-        ws?.receive { [weak self] result in
+        let task = ws   // capture identity so a torn-down socket's late callback can't drive a live one
+        task?.receive { [weak self] result in
             guard let self else { return }
             switch result {
             case .failure(let err):
                 Task { @MainActor in
+                    guard task === self.ws else { return }   // ignore failures from a socket we already replaced
                     self.connected = false; self.status = "Disconnected"; self.lastError = err.localizedDescription
                     self.scheduleReconnect()   // auto-recover from a dropped socket during a live lesson
                 }
             case .success(let msg):
                 if case .string(let text) = msg { Task { @MainActor in self.handle(text) } }
-                Task { @MainActor in self.receiveLoop() }   // keep listening
+                Task { @MainActor in guard task === self.ws else { return }; self.receiveLoop() }   // keep listening on the SAME socket
             }
         }
     }
@@ -406,6 +444,7 @@ final class SessionStore: ObservableObject, SyncBus {
         case "phx_reply":
             if let payload = obj["payload"] as? [String: Any], (payload["status"] as? String) == "ok" {
                 joined = true; connected = true; reconnectAttempt = 0   // healthy connection resets backoff
+                joinWatchdog?.cancel(); joinWatchdog = nil               // channel joined — stand the deadline down
                 status = role == .host ? "Hosting · \(roomCode)" : (forked ? "Trying it · \(roomCode)" : "Following · \(roomCode)")
                 if role == .host { broadcastFullSync() }   // give any already-listening followers current state
             }
@@ -437,13 +476,16 @@ final class SessionStore: ObservableObject, SyncBus {
         guard let sigB64 = wrapper["sig"] as? String, let sig = Data(base64Encoded: sigB64),
               let pubB64 = wrapper["pub"] as? String, let pubRaw = Data(base64Encoded: pubB64),
               let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: pubRaw) else { rejectedOps += 1; return }
-        if pinnedHostKey == nil { pinnedHostKey = pub }
+        // No TOFU auto-pin: the follower's pinnedHostKey is the server-authoritative key set in begin().
+        // A wire key that doesn't match (or a missing pin) is rejected — a code-holder can't self-pin.
         guard let pinned = pinnedHostKey,
               pinned.rawRepresentation == pub.rawRepresentation,
               pinned.isValidSignature(sig, for: opData) else { rejectedOps += 1; return }
         var isFull = false; if case .fullSync = op.kind { isFull = true }
         if !isFull, op.seq > 0, op.seq <= lastAppliedSeq { return }
-        lastAppliedSeq = max(lastAppliedSeq, op.seq)
+        // A fullSync is an authoritative resync: re-anchor the dedup watermark to the host's CURRENT seq
+        // (handles a host restart whose seq is below our last-applied). Incremental ops advance it as usual.
+        lastAppliedSeq = isFull ? op.seq : max(lastAppliedSeq, op.seq)
         // Transport ops drive the local Transport at the teacher's CURRENT position (clock-offset adjusted).
         if case .transport(let playing, let hostTime, let bar, let step) = op.kind {
             guard playing else { onRemoteTransport?(false, 0, 0); return }

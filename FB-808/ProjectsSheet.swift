@@ -17,6 +17,8 @@ struct ProjectsSheet: View {
     @State private var pendingLoad: SavedProject?
     @State private var renameItem: SavedProject?
     @State private var renameText = ""
+    @State private var renameOverwriteItem: SavedProject?
+    @State private var renameOverwriteName = ""
 
     private var trimmedName: String { nameField.trimmingCharacters(in: .whitespaces) }
 
@@ -54,8 +56,27 @@ struct ProjectsSheet: View {
         }
         .alert("Rename Project", isPresented: Binding(get: { renameItem != nil }, set: { if !$0 { renameItem = nil } })) {
             TextField("Name", text: $renameText)
-            Button("Save") { if let it = renameItem { store.rename(it, to: renameText) }; renameItem = nil }
+            Button("Save") { if let it = renameItem { attemptRename(it, renameText) }; renameItem = nil }
             Button("Cancel", role: .cancel) { renameItem = nil }
+        }
+        .alert("Overwrite “\(renameOverwriteName)”?", isPresented: Binding(get: { renameOverwriteItem != nil }, set: { if !$0 { renameOverwriteItem = nil } })) {
+            Button("Cancel", role: .cancel) { renameOverwriteItem = nil }
+            Button("Overwrite", role: .destructive) {
+                if let it = renameOverwriteItem { store.rename(it, to: renameOverwriteName, force: true) }
+                renameOverwriteItem = nil
+            }
+        } message: { Text("A different saved beat already uses this name. Renaming replaces it.") }
+    }
+
+    /// Rename, but if the target name belongs to a DIFFERENT saved beat, confirm the overwrite first
+    /// (mirrors the Save flow) so a rename never silently destroys another project.
+    private func attemptRename(_ item: SavedProject, _ newName: String) {
+        let clean = newName.trimmingCharacters(in: .whitespaces)
+        guard !clean.isEmpty else { return }
+        if store.nameCollision(with: clean, excluding: item) {
+            renameOverwriteName = clean; renameOverwriteItem = item
+        } else {
+            store.rename(item, to: clean)
         }
     }
 

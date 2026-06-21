@@ -807,7 +807,7 @@ final class Project: ObservableObject {
         return (i == activeSeq || !sequences.indices.contains(i)) ? parts : sequences[i].parts
     }
 
-    func setBank(_ b: String) { bank = b }
+    func setBank(_ b: String) { bank = b; emit(.setBank(bank: b)) }   // emit → students' bank follows the teacher live
     func setBpm(_ v: Int) { bpm = max(40, min(220, v)); emit(.setTempo(bpm: bpm)) }
     func setBpm(_ v: Double) { setBpm(Int(v.rounded())) }
 

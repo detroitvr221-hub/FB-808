@@ -183,6 +183,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             // autosave unsaved work to the recovery slot when leaving the foreground
             if (phase == .background || phase == .inactive) && project.hasUnsavedChanges {
+                project.persistSampleAudio()   // flush the sampler buffer to disk so crash-recovery can restore it (#review)
                 store.autosave(project.snapshot())
             }
         }

@@ -281,17 +281,21 @@ extension Project {
     func freezeLinkToCopy(_ id: String) -> Bool {
         guard let i = tracks.firstIndex(where: { $0.id == id }), tracks[i].isLinked,
               let link = tracks[i].source.link else { return false }
-        checkpoint("freezeLink:\(id)", coalesce: false)
+        // Resolve BEFORE mutating. If the source is gone (e.g. its part was deleted), abort with the link
+        // intact rather than baking an empty, unrecoverable "frozen" zombie (#review).
         switch tracks[i].type {
         case .drumPattern:
-            tracks[i].source.lanes = resolvedLanes(link, atBar: 0) ?? [:]
+            guard let lanesCopy = resolvedLanes(link, atBar: 0) else { return false }
+            checkpoint("freezeLink:\(id)", coalesce: false)
+            tracks[i].source.lanes = lanesCopy
             tracks[i].source.notes = nil; tracks[i].source.patch = nil
         case .synthPart:
-            if let (notes, patch) = resolvedNotes(link, atBar: 0) {
-                tracks[i].source.notes = notes; tracks[i].source.patch = patch
-            }
+            guard let (notes, patch) = resolvedNotes(link, atBar: 0) else { return false }
+            checkpoint("freezeLink:\(id)", coalesce: false)
+            tracks[i].source.notes = notes; tracks[i].source.patch = patch
             tracks[i].source.lanes = nil
-        default: break
+        default:
+            return false
         }
         tracks[i].source.link = nil
         return true
@@ -382,8 +386,12 @@ extension Project {
     func resolvedLanes(_ link: LinkRef, atBar bar: Int) -> [String: [Double]]? {
         switch link.kind {
         case .lanes:
-            guard let rows = link.rows else { return lanes }
-            return lanes.filter { rows.contains($0.key) }
+            // In Song Mode resolve through the bar's arranged sequence so a linked track mirrors the same
+            // per-bar pattern the seeded drums play (lanesForBar returns the live buffer for active-seq bars,
+            // so single-sequence / non-song projects are unaffected). (#review)
+            let src = songMode ? lanesForBar(bar) : lanes
+            guard let rows = link.rows else { return src }
+            return src.filter { rows.contains($0.key) }
         case .sequenceLanes:
             guard let si = link.seqIndex, sequences.indices.contains(si) else { return nil }
             let src = sequences[si].lanes
@@ -396,10 +404,11 @@ extension Project {
     func resolvedNotes(_ link: LinkRef, atBar bar: Int) -> (notes: [MelodyNote], patch: SynthPatch)? {
         switch link.kind {
         case .melody:
-            return (melody, synthPatch)
+            return (songMode ? melodyForBar(bar) : melody, synthPatch)
         case .part:
-            if link.partID == nil || link.partID == "lead" { return (melody, synthPatch) }
-            guard let p = parts.first(where: { $0.id == link.partID }) else { return nil }
+            if link.partID == nil || link.partID == "lead" { return (songMode ? melodyForBar(bar) : melody, synthPatch) }
+            let pool = songMode ? partsForBar(bar) : parts
+            guard let p = pool.first(where: { $0.id == link.partID }) else { return nil }
             return (p.notes, p.patch)
         case .sequenceMelody:
             guard let si = link.seqIndex, sequences.indices.contains(si) else { return nil }
@@ -420,10 +429,10 @@ extension Project {
     /// Live per-step probability/condition/p-locks for a LINKED drum track's pad, from the same source
     /// as its lanes — so a linked track keeps the authored stepMeta the live grid has (Step 3). Frozen
     /// copies have no stepMeta (a captured snapshot never carried it).
-    func trackStepMeta(_ track: Track, _ pad: String, _ step: Int) -> StepMeta? {
+    func trackStepMeta(_ track: Track, _ pad: String, _ step: Int, atBar bar: Int) -> StepMeta? {
         guard track.isLinked, let link = track.source.link else { return nil }
         switch link.kind {
-        case .lanes:         return stepMeta[pad]?[step]
+        case .lanes:         return (songMode ? stepMetaForBar(bar) : stepMeta)[pad]?[step]
         case .sequenceLanes: return link.seqIndex.flatMap { sequences.indices.contains($0) ? sequences[$0].stepMeta[pad]?[step] : nil }
         default:             return nil
         }

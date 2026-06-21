@@ -96,7 +96,7 @@ struct TeacherModeView: View {
         }
         // Poll real submissions while hosting (keeps the badge + list live regardless of which tab is open).
         .task(id: session.role) {
-            guard session.role == .host else { remoteSubs = []; return }
+            guard session.role == .host else { remoteSubs = []; stopPlayback(); return }
             while !Task.isCancelled {
                 await refreshSubs()
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -113,6 +113,8 @@ struct TeacherModeView: View {
         let raw = await session.fetchSubmissions()
         subsRefreshing = false
         guard session.role == .host else { return }       // role may have changed during the await
+        guard let raw else { return }                     // transport failure — keep the current list AND the
+        // teacher's in-progress feedback; a network blip must never wipe submissions or unsent text.
         let parsed = raw.compactMap { RemoteSub($0) }
         remoteSubs = parsed
         if let sel = selectedRemoteID, !parsed.contains(where: { $0.id == sel }) { selectedRemoteID = nil }
@@ -121,6 +123,7 @@ struct TeacherModeView: View {
 
     private func playRemote(_ sub: RemoteSub) {
         guard let path = sub.audioPath else { return }
+        stopPlayback()   // stop any current submission before starting another (no overlapping audio)
         Task {
             guard let url = await session.submissionAudioURL(path: path) else { toast = "Couldn't load audio"; return }
             let player = AVPlayer(url: url)
@@ -128,6 +131,13 @@ struct TeacherModeView: View {
             playingSubID = sub.id
             player.play()
         }
+    }
+
+    private func stopPlayback() {
+        audioPlayer?.pause()
+        audioPlayer?.replaceCurrentItem(with: nil)
+        audioPlayer = nil
+        playingSubID = nil
     }
 
     private func sendRemoteFeedback(_ sub: RemoteSub) {
@@ -294,7 +304,7 @@ struct TeacherModeView: View {
 
             teCard("Push to Class", flex: true) {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                    pushBtn("🎛 Push Kit") { project.bank = "A"; pushToClass("Studio Kit") }
+                    pushBtn("🎛 Push Kit") { project.setBank("A"); pushToClass("Studio Kit") }
                     pushBtn("♫ Push Pattern") { loadPattern("boombap"); pushToClass("Boom Bap pattern") }
                     pushBtn("⏱ Push Tempo") { pushToClass("Tempo \(project.bpm) BPM") }
                     pushBtn("✦ Send Practice") { previewPattern("boombap"); pushToClass("Practice drill"); openTab("learn") }
@@ -375,6 +385,7 @@ struct TeacherModeView: View {
             }
         }
         .onAppear { Task { await refreshSubs() } }   // snappy first load when the tab opens
+        .onDisappear { stopPlayback() }              // don't keep streaming a submission after leaving the tab
     }
 
     private func remoteSubRow(_ sub: RemoteSub) -> some View {
