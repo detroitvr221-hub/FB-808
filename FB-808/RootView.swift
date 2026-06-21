@@ -299,9 +299,7 @@ struct RootView: View {
         let level = progress.level
         let into = progress.levelProgress
         return HStack {
-            (Text("FD").foregroundStyle(th.ink)
-             + Text("·").foregroundStyle(settings.accent)
-             + Text("808").foregroundStyle(th.ink))
+            styledText([("FD", th.ink, nil), ("·", settings.accent, nil), ("808", th.ink, nil)])
                 .font(FDFont.display(21, .bold))
             Spacer()
             HStack(spacing: 16) {

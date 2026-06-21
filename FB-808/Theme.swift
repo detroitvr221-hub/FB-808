@@ -10,7 +10,7 @@ import UIKit
 // MARK: - Color helpers
 
 extension Color {
-    init(hex: String) {
+    nonisolated init(hex: String) {   // pure hex parser — usable from the nonisolated render/data paths
         var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasPrefix("#") { s.removeFirst() }
         var v: UInt64 = 0

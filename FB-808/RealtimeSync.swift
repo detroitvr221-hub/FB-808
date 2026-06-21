@@ -413,8 +413,9 @@ final class SessionStore: ObservableObject, SyncBus {
     private func sendFrame(_ obj: [String: Any]) {
         guard let ws, let data = try? JSONSerialization.data(withJSONObject: obj),
               let str = String(data: data, encoding: .utf8) else { return }
-        ws.send(.string(str)) { [weak self] err in
-            if let err { Task { @MainActor in self?.lastError = err.localizedDescription } }
+        ws.send(.string(str)) { err in   // don't capture self in this @Sendable completion; hop to the actor instead
+            guard let err else { return }
+            Task { @MainActor [weak self] in self?.lastError = err.localizedDescription }
         }
     }
 

@@ -77,7 +77,7 @@ struct TrackSource: Codable {
     enum CodingKeys: String, CodingKey { case padRows, partID, link, lanes, notes, patch, samplePad }
     init(from d: Decoder) throws {                 // tolerant — every field optional so old/new saves coexist
         let c = try d.container(keyedBy: CodingKeys.self)
-        padRows   = (try? c.decodeIfPresent([String].self, forKey: .padRows)) ?? [] ?? []
+        padRows   = (try? c.decodeIfPresent([String].self, forKey: .padRows)) ?? []
         partID    = try? c.decodeIfPresent(String.self, forKey: .partID)
         link      = try? c.decodeIfPresent(LinkRef.self, forKey: .link)   // nil for old saves → frozen, as before
         lanes     = try? c.decodeIfPresent([String: [Double]].self, forKey: .lanes)

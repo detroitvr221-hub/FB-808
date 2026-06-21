@@ -37,8 +37,8 @@ struct StepMeta: Codable, Equatable {
     enum CodingKeys: String, CodingKey { case prob, cond, pitch, cutoff, decay, pan }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
-        prob = (try? c.decodeIfPresent(Double.self, forKey: .prob)) ?? 1 ?? 1
-        cond = (try? c.decodeIfPresent(String.self, forKey: .cond)) ?? "" ?? ""
+        prob = (try? c.decodeIfPresent(Double.self, forKey: .prob)) ?? 1
+        cond = (try? c.decodeIfPresent(String.self, forKey: .cond)) ?? ""
         pitch = (try? c.decodeIfPresent(Double.self, forKey: .pitch)) ?? nil
         cutoff = (try? c.decodeIfPresent(Double.self, forKey: .cutoff)) ?? nil
         decay = (try? c.decodeIfPresent(Double.self, forKey: .decay)) ?? nil
@@ -63,8 +63,8 @@ struct SeqSlot: Codable {
         name = try c.decode(String.self, forKey: .name)
         lanes = try c.decode([String: [Double]].self, forKey: .lanes)
         melody = try c.decode([MelodyNote].self, forKey: .melody)
-        stepMeta = (try? c.decodeIfPresent([String: [Int: StepMeta]].self, forKey: .stepMeta)) ?? [:] ?? [:]
-        parts = (try? c.decodeIfPresent([InstrumentPart].self, forKey: .parts)) ?? [] ?? []
+        stepMeta = (try? c.decodeIfPresent([String: [Int: StepMeta]].self, forKey: .stepMeta)) ?? [:]
+        parts = (try? c.decodeIfPresent([InstrumentPart].self, forKey: .parts)) ?? []
     }
 }
 
@@ -81,7 +81,7 @@ struct Clip: Identifiable, Codable {
         s = try c.decode(Int.self, forKey: .s)
         l = try c.decode(Int.self, forKey: .l)
         color = Color(hex: try c.decode(String.self, forKey: .color))
-        muted = (try? c.decodeIfPresent(Bool.self, forKey: .muted)) ?? false ?? false
+        muted = (try? c.decodeIfPresent(Bool.self, forKey: .muted)) ?? false
     }
     func encode(to e: Encoder) throws {
         var c = e.container(keyedBy: CodingKeys.self)

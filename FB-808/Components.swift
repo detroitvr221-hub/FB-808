@@ -3,6 +3,20 @@
 
 import SwiftUI
 
+/// Concatenate styled inline text segments into ONE `Text` — the non-deprecated replacement for the
+/// `Text + Text` operator (removed in iOS 26). Each segment keeps its own color and optional font; a
+/// segment that omits them inherits the call site's `.font(_:)` / `.foregroundStyle(_:)`.
+func styledText(_ segments: [(String, Color?, Font?)]) -> Text {
+    var s = AttributedString()
+    for (str, color, font) in segments {
+        var run = AttributedString(str)
+        if let color { run.foregroundColor = color }
+        if let font { run.font = font }
+        s += run
+    }
+    return Text(s)
+}
+
 // MARK: - Type helpers
 
 struct Eyebrow: View {
@@ -169,8 +183,8 @@ struct TransportBar: View {
             }
             sep
             // position
-            (Text("\(String(format: "%02d", pos.bar))").foregroundStyle(settings.accent)
-             + Text(":\(pos.beat):\(pos.tick)").foregroundStyle(th.ink))
+            styledText([(String(format: "%02d", pos.bar), settings.accent, nil),
+                        (":\(pos.beat):\(pos.tick)", th.ink, nil)])
                 .font(FDFont.mono(18, .bold))
                 .frame(minWidth: 76, alignment: .leading)
 

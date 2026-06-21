@@ -650,7 +650,7 @@ struct PatternCard: View {
                     }
                 }
                 Spacer()
-                (Text("\(p.bpm) ").font(FDFont.mono(16, .bold)) + Text("BPM").font(FDFont.mono(10)))
+                styledText([("\(p.bpm) ", nil, FDFont.mono(16, .bold)), ("BPM", nil, FDFont.mono(10))])
                     .foregroundStyle(settings.ink)
             }
             Text(p.name).font(FDFont.display(24, .bold)).foregroundStyle(settings.ink)
