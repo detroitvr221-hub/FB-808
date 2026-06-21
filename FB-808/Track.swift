@@ -141,6 +141,10 @@ struct Track: Identifiable, Codable {
 extension Project {
 
     static let maxTracks = 99
+    /// Per-pad drive into the mix bus. Kept a touch below the old hard-coded 1.3 so the master safety
+    /// limiter has headroom and only engages on genuine stacks (not on every moderate hit). Shared by
+    /// live playback (Transport) and bounces (Export) so they stay level-matched.
+    static let padDrive = 1.15
 
     /// The default six-track layout, reproducing today's fixed arrangement exactly.
     /// Drum tracks own their pad rows (inverted from Kit.padTrack); "vox" is the live Lead synth line.

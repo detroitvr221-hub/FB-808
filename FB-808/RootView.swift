@@ -150,6 +150,7 @@ struct RootView: View {
         .onAppear {
             engine.start()
             engine.setVolume(0.9)
+            applyAudio()                // push persisted buffer / polyphony / limiter prefs to the engine
             session.project = project   // received ops apply into the live project
             session.onRemoteTransport = { playing, bar, step in
                 if !playing { transport.stop(); return }
@@ -187,6 +188,10 @@ struct RootView: View {
                 store.autosave(project.snapshot())
             }
         }
+        .onChange(of: settings.audioBufferMs) { _, _ in applyAudio() }
+        .onChange(of: settings.polyphony) { _, _ in applyAudio() }
+        .onChange(of: settings.limiterOn) { _, _ in applyAudio() }
+        .onChange(of: settings.limiterCeilingDb) { _, _ in applyAudio() }
         .alert("Recover unsaved changes?", isPresented: Binding(get: { recoverSnap != nil }, set: { if !$0 { recoverSnap = nil } })) {
             Button("Recover") { if let s = recoverSnap { project.restore(s) }; store.clearAutosave(); recoverSnap = nil }
             Button("Discard", role: .destructive) { store.clearAutosave(); recoverSnap = nil }
@@ -361,6 +366,11 @@ struct RootView: View {
             Text(label).font(FDFont.ui(12, .bold)).foregroundStyle(settings.accent)
                 .padding(.horizontal, 12).frame(height: 26).background(Capsule().fill(.white))
         }.buttonStyle(.plain)
+    }
+
+    private func applyAudio() {
+        engine.applyAudioSettings(bufferSec: settings.audioBufferMs / 1000, polyphony: settings.polyphony,
+                                  limiterOn: settings.limiterOn, limiterCeilingDb: settings.limiterCeilingDb)
     }
 
     @ViewBuilder private func content(_ th: Theme) -> some View {

@@ -55,6 +55,32 @@ struct SettingsSheet: View {
                         Slider(value: $settings.glow, in: 0.3...1.6, step: 0.1).tint(settings.accent)
                     }
 
+                    section("Audio")
+                    radioRow(title: "Latency · buffer size",
+                             options: [("Low · 3 ms", "3"), ("Balanced · 8 ms", "8"), ("Stable · 12 ms", "12"), ("Max · 21 ms", "21")],
+                             selected: "\(Int(settings.audioBufferMs))") { v in settings.audioBufferMs = Double(v) ?? 8 }
+                    Text("Lower = snappier pads; higher = fewer glitches when many sounds play at once.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
+                    radioRow(title: "Max voices · polyphony",
+                             options: [("32", "32"), ("64", "64"), ("96", "96"), ("128", "128")],
+                             selected: "\(settings.polyphony)") { v in settings.polyphony = Int(v) ?? 64 }
+                    Toggle(isOn: $settings.limiterOn) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Master limiter").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                            Text("Keeps loud stacks clean instead of distorting").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                        }
+                    }.tint(settings.accent)
+                    if settings.limiterOn {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Ceiling").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                                Spacer()
+                                Text(String(format: "%.1f dB", settings.limiterCeilingDb)).font(FDFont.mono(13)).foregroundStyle(th.inkDim)
+                            }
+                            Slider(value: $settings.limiterCeilingDb, in: -6...0, step: 0.5).tint(settings.accent)
+                        }
+                    }
+
                     section("Progress")
                     radioRow(title: "Daily XP goal",
                              options: [("Casual · 20", "20"), ("Regular · 60", "60"), ("Intense · 120", "120")],

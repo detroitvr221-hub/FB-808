@@ -235,7 +235,7 @@ final class Transport: ObservableObject {
                 if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
                 if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
             }
-            let v = p.padVel(padID, p.fullLevel ? 1 : vel) * m.vol * master.vol * 1.3 * p.humVel()
+            let v = p.padVel(padID, p.fullLevel ? 1 : vel) * m.vol * master.vol * Project.padDrive * p.humVel()
             let when = time + p.padOffsetSec(padID) + p.humTime()
             engine.trigger(p.soundFor(padID), vel: v, when: when, opts: p.padOpts(padID, meta: sm))
             p.triggerPadLayers(padID, vel: v, when: when)
@@ -302,7 +302,7 @@ final class Transport: ObservableObject {
                         if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
                         if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
                     }
-                    let v = p.padVel(pad, p.fullLevel ? 1 : lane[s]) * m.vol * master.vol * 1.3 * track.vol * gVol * p.humVel()
+                    let v = p.padVel(pad, p.fullLevel ? 1 : lane[s]) * m.vol * master.vol * Project.padDrive * track.vol * gVol * p.humVel()
                     let when = time + p.padOffsetSec(pad) + p.humTime()
                     var opts = p.padOpts(pad, meta: sm) ?? TriggerOpts()
                     opts.pan = max(-1, min(1, opts.pan + track.pan))   // per-track pan offsets the pad's pan

@@ -13,6 +13,12 @@ final class AppSettings: ObservableObject {
     @Published var padLabels: Bool     { didSet { store.set(padLabels, forKey: "fd.padLabels") } }
     @Published var glow: Double        { didSet { store.set(glow, forKey: "fd.glow") } }
     @Published var mpcCoach: Bool      { didSet { store.set(mpcCoach, forKey: "fd.mpcCoach") } }
+    // Audio engine prefs (applied to AudioEngine on launch + on change). Buffer = latency vs. stability;
+    // polyphony bounds CPU + level; the safety limiter prevents the "loud stacks distort" problem.
+    @Published var audioBufferMs: Double { didSet { store.set(audioBufferMs, forKey: "fd.audioBufferMs") } }
+    @Published var polyphony: Int        { didSet { store.set(polyphony, forKey: "fd.polyphony") } }
+    @Published var limiterOn: Bool       { didSet { store.set(limiterOn, forKey: "fd.limiterOn") } }
+    @Published var limiterCeilingDb: Double { didSet { store.set(limiterCeilingDb, forKey: "fd.limiterCeilingDb") } }
     // User-saved drum kits (per-pad sound maps), persisted as JSON. Shared across projects.
     @Published var userKits: [UserKitDef] { didSet { saveUserKits() } }
     // User-saved synth patches — a GLOBAL library so they persist across projects (#67, was per-project).
@@ -28,6 +34,10 @@ final class AppSettings: ObservableObject {
         padLabels = store.object(forKey: "fd.padLabels") as? Bool ?? true
         glow = store.object(forKey: "fd.glow") as? Double ?? 1.0
         mpcCoach = store.object(forKey: "fd.mpcCoach") as? Bool ?? false
+        audioBufferMs = store.object(forKey: "fd.audioBufferMs") as? Double ?? 8
+        polyphony = store.object(forKey: "fd.polyphony") as? Int ?? 64
+        limiterOn = store.object(forKey: "fd.limiterOn") as? Bool ?? true
+        limiterCeilingDb = store.object(forKey: "fd.limiterCeilingDb") as? Double ?? -1.0
         userKits = AppSettings.loadUserKits()
         savedSynths = AppSettings.loadSavedSynths()
     }

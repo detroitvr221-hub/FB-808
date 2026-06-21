@@ -106,7 +106,7 @@ extension Project {
                             if Double(seed % 997) / 997.0 > sm.prob { continue }
                         }
                     }
-                    var vel = padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * 1.3
+                    var vel = padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * Project.padDrive
                     var atS = atSample + padOffsetSec(padID) * sr
                     if humanize > 0 {   // deterministic humanize so bounces are reproducible
                         var hs = UInt64(bar &* 919 &+ step &* 17 &+ 7)
@@ -176,7 +176,7 @@ extension Project {
                                     if Double(seed % 997) / 997.0 > sm.prob { continue }
                                 }
                             }
-                            let vel = padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * 1.3 * track.vol * gVol
+                            let vel = padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * Project.padDrive * track.vol * gVol
                             var opts = padOpts(padID, meta: sm) ?? TriggerOpts()
                             opts.pan = max(-1, min(1, opts.pan + track.pan))
                             drums.append(ExportDrum(sound: soundFor(padID), vel: vel, opts: opts,
@@ -238,7 +238,7 @@ extension Project {
                     for (padID, lane) in tlanes where step < lane.count && lane[step] > 0 {
                         let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
                         var opts = padOpts(padID) ?? TriggerOpts(); opts.pan = max(-1, min(1, opts.pan + track.pan))
-                        drums.append(ExportDrum(sound: soundFor(padID), vel: padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * 1.3 * track.vol,
+                        drums.append(ExportDrum(sound: soundFor(padID), vel: padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * Project.padDrive * track.vol,
                                                 opts: opts, atSample: atSample + padOffsetSec(padID) * sr,
                                                 sampleData: padParams[padID]?.sampleFile != nil ? padSampleData[padID] : nil))
                     }
