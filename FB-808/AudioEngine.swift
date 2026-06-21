@@ -7,7 +7,7 @@
 //  The synthesis core is `nonisolated` and `@unchecked Sendable` so the audio
 //  render thread can drive it; a tiny os_unfair_lock guards the voice pool.
 
-import AVFoundation
+@preconcurrency import AVFoundation   // suppress AVFAudio Sendable noise (e.g. AVAudioPCMBuffer in the converter block)
 import Combine
 import os
 import FD808Engine

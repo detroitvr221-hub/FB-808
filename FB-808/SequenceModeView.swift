@@ -65,24 +65,20 @@ struct SequenceModeView: View {
                 }
             }
             Rectangle().fill(settings.line).frame(width: 1, height: 22)
-            chip(Text("Swing ").foregroundStyle(settings.ink)
-                 + Text("\(Int(project.swing * 100))%").foregroundStyle(settings.accent), arrow: true) {
+            chip(styledText([("Swing ", settings.ink, nil), ("\(Int(project.swing * 100))%", settings.accent, nil)]), arrow: true) {
                 project.checkpoint("swing", coalesce: false)
                 let i = SWINGS.firstIndex(of: project.swing) ?? 0; project.swing = SWINGS[(i + 1) % SWINGS.count]
             }
-            chip(Text("Humanize ").foregroundStyle(settings.ink)
-                 + Text("\(Int(project.humanize * 100))%").foregroundStyle(settings.accent), arrow: true) {
+            chip(styledText([("Humanize ", settings.ink, nil), ("\(Int(project.humanize * 100))%", settings.accent, nil)]), arrow: true) {
                 project.checkpoint("humanize", coalesce: false)
                 let hs: [Double] = [0, 0.25, 0.5, 0.75, 1.0]
                 let i = hs.firstIndex(of: project.humanize) ?? 0; project.humanize = hs[(i + 1) % hs.count]
             }
-            chip(Text("Quantize ").foregroundStyle(settings.ink)
-                 + Text(project.quantize).foregroundStyle(settings.accent), arrow: true) {
+            chip(styledText([("Quantize ", settings.ink, nil), (project.quantize, settings.accent, nil)]), arrow: true) {
                 project.checkpoint("quant", coalesce: false)
                 let i = QUANTS.firstIndex(of: project.quantize) ?? 0; project.quantize = QUANTS[(i + 1) % QUANTS.count]
             }
-            chip(Text("Sig ").foregroundStyle(settings.ink)
-                 + Text(sigLabel).foregroundStyle(settings.accent), arrow: true) {
+            chip(styledText([("Sig ", settings.ink, nil), (sigLabel, settings.accent, nil)]), arrow: true) {
                 project.checkpoint("sig", coalesce: false)
                 let i = SIGS.firstIndex(of: project.barSteps) ?? 0; project.barSteps = SIGS[(i + 1) % SIGS.count]
             }
@@ -93,7 +89,7 @@ struct SequenceModeView: View {
                 .popover(isPresented: $showEuclid) { euclidPanel }
             chip(Text("Clear \(sel)").foregroundStyle(settings.ink)) { project.clearRow(sel) }
             chip(Text("Clear all").foregroundStyle(settings.ink)) { confirmClear = true }
-            chip(Text("Auto ").foregroundStyle(settings.ink) + Text(autoLabel).foregroundStyle(settings.accent), arrow: true) { cycleAuto() }
+            chip(styledText([("Auto ", settings.ink, nil), (autoLabel, settings.accent, nil)]), arrow: true) { cycleAuto() }
             Spacer()
         }
     }

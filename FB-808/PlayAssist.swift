@@ -86,7 +86,9 @@ extension Project {
         arpTimer?.invalidate()
         arpIdx = 0
         arpTick()   // sound the first note immediately
-        let timer = Timer.scheduledTimer(withTimeInterval: arpStepSec(), repeats: true) { [weak self] _ in self?.arpTick() }
+        let timer = Timer.scheduledTimer(withTimeInterval: arpStepSec(), repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.arpTick() }   // scheduled on (and fires on) the main runloop
+        }
         arpTimer = timer
     }
 

@@ -612,7 +612,7 @@ struct SynthModeView: View {
     }
     private func rollCycle(_ label: String, _ value: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            (Text("\(label) ").foregroundStyle(settings.inkDim) + Text(value).foregroundStyle(settings.accent))
+            styledText([("\(label) ", settings.inkDim, nil), (value, settings.accent, nil)])
                 .font(FDFont.ui(12.5, .semibold))
                 .padding(.horizontal, 11).frame(height: 34)
                 .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))

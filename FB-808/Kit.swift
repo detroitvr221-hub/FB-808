@@ -16,7 +16,8 @@ struct PadDef: Identifiable {
 // A user-saved drum kit (per-pad sound map). Persisted in AppSettings, shared across projects.
 struct UserKitDef: Codable, Identifiable, Equatable { var id: String; var name: String; var sounds: [String: String] }
 
-enum Kit {
+// Pure static kit data + lookups — nonisolated so the export/render path (off the main actor) can read it.
+nonisolated enum Kit {
 
     // 4x4 grid, reading order top-left -> bottom-right.
     static let pads: [PadDef] = {
