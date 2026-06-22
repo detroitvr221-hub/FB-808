@@ -382,6 +382,8 @@ final class AudioEngine: ObservableObject {
     func resetSample() -> [Double] { core.resetSample() }
     func currentSampleOriginal() -> [Float] { core.currentSampleOriginal() }
     func currentSampleData() -> [Float] { core.currentSampleData() }   // edited buffer, for the GPU waveform view
+    func setHQInterpolation(_ on: Bool) { core.setHQInterpolation(on) }   // opt-in HQ DSP (default off)
+    func setEqualPowerPan(_ on: Bool) { core.setEqualPowerPan(on) }
     func detectPitch() -> Double { ensure(); return core.detectPitch() }
     func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
     func sampleToSynth() { core.sampleToSynth() }

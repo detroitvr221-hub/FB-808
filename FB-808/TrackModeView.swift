@@ -122,12 +122,13 @@ struct TrackModeView: View {
         guard !exporting else { return }
         exporting = true
         let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let dither = settings.exportDither   // captured on the main actor before detaching
         Task {
             sweepExportDirs()            // reclaim PRIOR batches first → never deletes the dir we're about to share (#227)
             let dir = fd808ExportDir()   // one unique batch dir → re-exports never collide
             let url = await Task.detached(priority: .userInitiated) {
                 let (l, r) = renderOffline(plan)
-                return writeAudio(format, left: l, right: r, sr: plan.sr, name: plan.name, dir: dir)
+                return writeAudio(format, left: l, right: r, sr: plan.sr, name: plan.name, dir: dir, dither: dither)
             }.value
             exporting = false
             if let url { exportFile = ExportFile(urls: [url]); progress.awardCreative("export", 10) }
@@ -138,12 +139,13 @@ struct TrackModeView: View {
         guard !exporting else { return }
         exporting = true
         let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let dither = settings.exportDither   // captured on the main actor before detaching
         Task {
             sweepExportDirs()            // reclaim PRIOR batches first (#227)
             let dir = fd808ExportDir()   // all stems of this batch share one dir
             let urls = await Task.detached(priority: .userInitiated) { () -> [URL] in
                 renderStems(plan).compactMap { stem in
-                    writeAudio(.wav, left: stem.left, right: stem.right, sr: plan.sr, name: "\(plan.name) - \(stem.name)", dir: dir)
+                    writeAudio(.wav, left: stem.left, right: stem.right, sr: plan.sr, name: "\(plan.name) - \(stem.name)", dir: dir, dither: dither)
                 }
             }.value
             exporting = false

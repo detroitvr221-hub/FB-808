@@ -20,6 +20,10 @@ final class AppSettings: ObservableObject {
     @Published var limiterOn: Bool       { didSet { store.set(limiterOn, forKey: "fd.limiterOn") } }
     @Published var limiterCeilingDb: Double { didSet { store.set(limiterCeilingDb, forKey: "fd.limiterCeilingDb") } }
     @Published var sampleRate: Double    { didSet { store.set(sampleRate, forKey: "fd.sampleRate") } }   // engine rate; applies on next launch
+    // Audio-quality modes (opt-in; default off = current behavior). Applied to the engine live; export reads the dither flag.
+    @Published var hqInterp: Bool        { didSet { store.set(hqInterp, forKey: "fd.hqInterp") } }
+    @Published var equalPowerPan: Bool   { didSet { store.set(equalPowerPan, forKey: "fd.equalPowerPan") } }
+    @Published var exportDither: Bool    { didSet { store.set(exportDither, forKey: "fd.exportDither") } }
     // User-saved drum kits (per-pad sound maps), persisted as JSON. Shared across projects.
     @Published var userKits: [UserKitDef] { didSet { saveUserKits() } }
     // User-saved synth patches — a GLOBAL library so they persist across projects (#67, was per-project).
@@ -40,6 +44,9 @@ final class AppSettings: ObservableObject {
         limiterOn = store.object(forKey: "fd.limiterOn") as? Bool ?? true
         limiterCeilingDb = store.object(forKey: "fd.limiterCeilingDb") as? Double ?? -1.0
         sampleRate = store.object(forKey: "fd.sampleRate") as? Double ?? 48000
+        hqInterp = store.object(forKey: "fd.hqInterp") as? Bool ?? false
+        equalPowerPan = store.object(forKey: "fd.equalPowerPan") as? Bool ?? false
+        exportDither = store.object(forKey: "fd.exportDither") as? Bool ?? false
         userKits = AppSettings.loadUserKits()
         savedSynths = AppSettings.loadSavedSynths()
     }
