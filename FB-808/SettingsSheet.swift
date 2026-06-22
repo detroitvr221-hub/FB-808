@@ -9,6 +9,7 @@ struct SettingsSheet: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var progress: ProgressStore
     @EnvironmentObject var engine: AudioEngine
+    @EnvironmentObject var midi: MIDIManager
     @Environment(\.dismiss) private var dismiss
     @State private var showMPCBridge = false
 
@@ -128,6 +129,7 @@ struct SettingsSheet: View {
                     (d.overruns > 0 ? settings.theme.miss : settings.ink))
             diagRow("Sample rate", String(format: "%.0f Hz", d.sampleRate), settings.inkDim)
             diagRow("Route", engine.sessionMgr.summary, settings.inkDim)
+            diagRow("MIDI in", midi.summary, settings.inkDim)
             diagRow("Engine restarts", "\(engine.restartCount)\(engine.lastRestartReason.isEmpty ? "" : " · \(engine.lastRestartReason)")", settings.inkDim)
         }
         .padding(12)
