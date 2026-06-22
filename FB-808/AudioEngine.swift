@@ -170,7 +170,11 @@ final class AudioEngine: ObservableObject {
         reclaimTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in core.drainReclaim() }
         if diagTimer == nil {
             diagTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.diag = self?.core.diagnostics() ?? AudioDiagnostics() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.diag = self.core.diagnostics()
+                    self.inputLevel = self.isMicRecording ? (self.mic?.peakLevel() ?? 0) : 0   // record meter
+                }
             }
         }
     }
@@ -252,6 +256,7 @@ final class AudioEngine: ObservableObject {
     // MARK: microphone recording (A4)
 
     @Published private(set) var isMicRecording = false
+    @Published private(set) var inputLevel: Float = 0   // record-meter input peak (0…1), published ~5 Hz while recording
     private(set) var micStartTime = 0.0   // engine time when the input tap began (for record alignment)
     private var mic: MicCapture?
 
@@ -273,27 +278,26 @@ final class AudioEngine: ObservableObject {
     }
 
     private func beginMicTap() -> Bool {
+        engine.stop()
+        sessionMgr.preferredSampleRate = core.sr            // capture at the engine rate (Phase 5/7)
+        sessionMgr.activateRecording()                      // .playAndRecord via the one session-policy home (Phase 7)
+        let input = engine.inputNode
+        let fmt = input.inputFormat(forBus: 0)
+        guard fmt.channelCount > 0, fmt.sampleRate > 0, let cap = MicCapture(inputFormat: fmt, sr: core.sr) else {
+            started = false; start(); return false           // restore playback
+        }
+        mic = cap
+        input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { buf, _ in cap.feed(buf) }
         do {
-            engine.stop()
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
-            try session.setActive(true)
-            let input = engine.inputNode
-            let fmt = input.inputFormat(forBus: 0)
-            guard fmt.channelCount > 0, fmt.sampleRate > 0, let cap = MicCapture(inputFormat: fmt, sr: core.sr) else {
-                started = false; start(); return false   // restore playback
-            }
-            mic = cap
-            input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { buf, _ in cap.feed(buf) }
             try engine.start()
-            micStartTime = core.now()
-            isMicRecording = true
-            return true
         } catch {
             print("mic record start error: \(error)")
-            mic = nil; started = false; start()          // restore playback
+            input.removeTap(onBus: 0); mic = nil; started = false; start()   // restore playback
             return false
         }
+        micStartTime = core.now()
+        isMicRecording = true
+        return true
     }
 
     /// Tear down the tap, return captured mono audio, restore the .playback session.
@@ -323,6 +327,9 @@ final class AudioEngine: ObservableObject {
     }
 
     func now() -> Double { core.now() }
+    /// The engine's working sample rate (Phase 5). Authoritative for any seconds↔samples math outside the
+    /// core — e.g. trimming a recorded take to the beat, which must NOT assume 48 k once higher rates exist.
+    var sampleRate: Double { core.sr }
 
     // Map sounds → their mixer bus index for per-channel insert FX.
     static let melodyChannel = FX_CHANNELS.firstIndex(of: "melody") ?? 5
