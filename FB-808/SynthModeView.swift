@@ -501,10 +501,15 @@ struct SynthModeView: View {
             HStack(spacing: 8) {
                 segTab("Keyboard", "pianokeys", on: playMode == "keys") { playMode = "keys" }
                 segTab("Piano Roll", "square.grid.3x2.fill", on: playMode == "roll") { playMode = "roll" }
+                segTab("Free", "scribble.variable", on: playMode == "free") { playMode = "free" }
                 Spacer()
                 if playMode == "roll" { rollToolbar }
             }
-            if playMode == "keys" { keyboardArea } else { SynthRoll() }
+            switch playMode {
+            case "keys": keyboardArea
+            case "free": FreeRollView()
+            default:     SynthRoll()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

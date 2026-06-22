@@ -12,6 +12,8 @@
 		CD121C4B2FE3190100BDF787 /* FD808Engine in Frameworks */ = {isa = PBXBuildFile; productRef = CD121C4A2FE3190100BDF787 /* FD808Engine */; };
 		CD121C4D2FE3191600BDF787 /* FD808Engine in Frameworks */ = {isa = PBXBuildFile; productRef = CD121C4C2FE3191600BDF787 /* FD808Engine */; };
 		CDA17C0FFEE0000000000002 /* LinkKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDA17C0FFEE0000000000001 /* LinkKit.xcframework */; };
+		EE0000000000000000000005 /* PianoRoll in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000003 /* PianoRoll */; };
+		EE0000000000000000000006 /* Waveform in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000004 /* Waveform */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -124,6 +126,8 @@
 				CD121C422FE3088B00BDF787 /* FD808Engine in Frameworks */,
 				CD121C4B2FE3190100BDF787 /* FD808Engine in Frameworks */,
 				CDA17C0FFEE0000000000002 /* LinkKit.xcframework in Frameworks */,
+				EE0000000000000000000005 /* PianoRoll in Frameworks */,
+				EE0000000000000000000006 /* Waveform in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -222,6 +226,8 @@
 			packageProductDependencies = (
 				CD121C412FE3088B00BDF787 /* FD808Engine */,
 				CD121C4A2FE3190100BDF787 /* FD808Engine */,
+				EE0000000000000000000003 /* PianoRoll */,
+				EE0000000000000000000004 /* Waveform */,
 			);
 			productName = "FB-808";
 			productReference = CD8A94992FDFBF7C0019294D /* FB-808.app */;
@@ -310,6 +316,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				CD121C492FE3190100BDF787 /* XCLocalSwiftPackageReference "../FD808Engine" */,
+				EE0000000000000000000001 /* XCLocalSwiftPackageReference "../PianoRoll" */,
+				EE0000000000000000000002 /* XCLocalSwiftPackageReference "../Waveform" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CD8A949A2FDFBF7C0019294D /* Products */;
@@ -849,6 +857,14 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../FD808Engine;
 		};
+		EE0000000000000000000001 /* XCLocalSwiftPackageReference "../PianoRoll" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../PianoRoll;
+		};
+		EE0000000000000000000002 /* XCLocalSwiftPackageReference "../Waveform" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Waveform;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -864,6 +880,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = CD121C492FE3190100BDF787 /* XCLocalSwiftPackageReference "../FD808Engine" */;
 			productName = FD808Engine;
+		};
+		EE0000000000000000000003 /* PianoRoll */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EE0000000000000000000001 /* XCLocalSwiftPackageReference "../PianoRoll" */;
+			productName = PianoRoll;
+		};
+		EE0000000000000000000004 /* Waveform */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EE0000000000000000000002 /* XCLocalSwiftPackageReference "../Waveform" */;
+			productName = Waveform;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
