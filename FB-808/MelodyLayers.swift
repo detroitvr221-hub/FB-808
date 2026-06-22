@@ -53,6 +53,12 @@ extension Project {
         if activePart == "lead" { f(&melody) }
         else if let i = parts.firstIndex(where: { $0.id == activePart }) { f(&parts[i].notes) }
     }
+    /// Replace the active part's notes wholesale — used by the free-form PianoRoll editor, which edits a
+    /// whole model rather than one cell. Coalesced into a single undo step; kept step-sorted for the roll.
+    func replaceActiveNotes(_ notes: [MelodyNote]) {
+        checkpoint("freeroll")
+        mutateActiveNotes { $0 = notes.sorted { $0.step < $1.step } }
+    }
     /// Draw (or extend) a note of `len` steps at `start` — used by the piano-roll click-drag.
     func drawActiveNote(pitch: Int, start: Int, len: Int) {
         let dur = max(1, min(len, 16 - start)), lo = start, hi = start + dur
