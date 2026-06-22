@@ -214,7 +214,9 @@ struct RootView: View {
             if !allowed.contains(tab) { tab = allowed.first ?? "pads" }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsSheet().environmentObject(settings).environmentObject(progress)
+            // Sheets don't inherit environmentObjects injected mid-hierarchy (settings/progress/midi live on
+            // RootView, not the App root), so re-inject everything SettingsSheet reads — incl. midi (Phase 6).
+            SettingsSheet().environmentObject(settings).environmentObject(progress).environmentObject(midi)
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showProjects) {
