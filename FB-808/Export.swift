@@ -49,7 +49,7 @@ enum ExportFormat: Sendable {
 
 extension Project {
     func buildExportPlan(loopBarsOverride: Int? = nil, safetyEnabled: Bool = true, safetyCeilingDb: Double = -1.0) -> ExportPlan {
-        let sr = 48_000.0
+        let sr = engine.sampleRate   // render at the engine rate (Phase 5/8) so recorded audio clips stay in sync; 48 k by default
         let bpmD = Double(bpm)
         let stepDur = (60 / bpmD) / 4
         let n = max(1, barSteps)        // steps per bar (A13 time signature)
@@ -241,7 +241,9 @@ extension Project {
     /// A DRY, unity-gain plan containing ONLY one frozen track's voices — for bus-freeze (render the
     /// track to an AudioClip so it costs one voice). No master FX/bus (re-applied on playback).
     func buildSoloTrackPlan(_ track: Track) -> ExportPlan {
-        let sr = 48_000.0, stepDur = (60 / Double(bpm)) / 4, n = max(1, barSteps)
+        // Freeze renders at the engine rate: the resulting clip is played back LIVE at core.sr, so a 48 k
+        // bounce of a 96 k engine would play 2× fast. Match the rate (Phase 5/8). 48 k by default.
+        let sr = engine.sampleRate, stepDur = (60 / Double(bpm)) / 4, n = max(1, barSteps)
         let totalBars = songMode ? songBars : 4
         var drums: [ExportDrum] = []; var synths: [ExportSynth] = []
         for bar in 0..<totalBars {
@@ -401,7 +403,9 @@ nonisolated func renderStems(_ plan: ExportPlan) -> [(name: String, left: [Float
     return stems
 }
 
-nonisolated func renderOffline(_ plan: ExportPlan) -> (left: [Float], right: [Float]) {
+nonisolated func renderOffline(_ plan: ExportPlan,
+                               progress: (@Sendable (Double) -> Void)? = nil,
+                               isCancelled: (@Sendable () -> Bool)? = nil) -> (left: [Float], right: [Float]) {
     let sr = plan.sr
     var voices = buildVoices(plan)
     voices.sort { $0.startSample < $1.startSample }
@@ -434,6 +438,10 @@ nonisolated func renderOffline(_ plan: ExportPlan) -> (left: [Float], right: [Fl
     var kIdx = 0, lastKick = -1e18
 
     for i in 0..<n {
+        if i & 8191 == 0 {                                 // ~every 8 k frames: report progress, honor cancel
+            if isCancelled?() == true { return ([], []) }   // empty ⇒ caller writes no file
+            progress?(Double(i) / Double(n))
+        }
         let g = Double(i)
         // advance the FX-automation schedule (mirrors live applyAuto mapping)
         while aIdx < plan.automation.count && plan.automation[aIdx].atSample <= g {
@@ -504,6 +512,7 @@ nonisolated func renderOffline(_ plan: ExportPlan) -> (left: [Float], right: [Fl
             if i >= lastFrame + guardFrames { break }
         }
     }
+    progress?(1.0)
     let end = min(n, lastFrame + 1)
     return (Array(L[0..<end]), Array(R[0..<end]))
 }
@@ -563,28 +572,36 @@ nonisolated func writeAudio(_ format: ExportFormat, left: [Float], right: [Float
     }
     let safe = name.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
     let url = dir.appendingPathComponent("\(safe.isEmpty ? "FD808 Beat" : safe).\(format.ext)")
-    try? FileManager.default.removeItem(at: url)
+    // Atomic write: render into a hidden temp in the SAME dir, close it, then move into place. An
+    // interrupted/failed encode never leaves a partial file at the final path (Phase 8 hardening).
+    let tmp = dir.appendingPathComponent(".\(UUID().uuidString).\(format.ext)")
+    try? FileManager.default.removeItem(at: tmp)
     do {
-        let file = try AVAudioFile(forWriting: url, settings: settings)
-        let pf = file.processingFormat   // always deinterleaved float PCM; the file converts on write
-        let chunk = 16_384               // feed the encoder manageable blocks
-        var i = 0
-        while i < frames {
-            let count = min(chunk, frames - i)
-            guard let buf = AVAudioPCMBuffer(pcmFormat: pf, frameCapacity: AVAudioFrameCount(count)),
-                  let ch = buf.floatChannelData else { return nil }
-            buf.frameLength = AVAudioFrameCount(count)
-            if pf.channelCount >= 2 {
-                for j in 0..<count { ch[0][j] = left[i + j]; ch[1][j] = right[i + j] }
-            } else {
-                for j in 0..<count { ch[0][j] = (left[i + j] + right[i + j]) * 0.5 }
+        do {
+            let file = try AVAudioFile(forWriting: tmp, settings: settings)
+            let pf = file.processingFormat   // always deinterleaved float PCM; the file converts on write
+            let chunk = 16_384               // feed the encoder manageable blocks
+            var i = 0
+            while i < frames {
+                let count = min(chunk, frames - i)
+                guard let buf = AVAudioPCMBuffer(pcmFormat: pf, frameCapacity: AVAudioFrameCount(count)),
+                      let ch = buf.floatChannelData else { throw CocoaError(.fileWriteUnknown) }
+                buf.frameLength = AVAudioFrameCount(count)
+                if pf.channelCount >= 2 {
+                    for j in 0..<count { ch[0][j] = left[i + j]; ch[1][j] = right[i + j] }
+                } else {
+                    for j in 0..<count { ch[0][j] = (left[i + j] + right[i + j]) * 0.5 }
+                }
+                try file.write(from: buf)
+                i += count
             }
-            try file.write(from: buf)
-            i += count
-        }
+        }   // AVAudioFile is flushed + closed here (released), before the move
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: tmp, to: url)
         return url
     } catch {
         print("\(format.ext.uppercased()) export error: \(error)")
+        try? FileManager.default.removeItem(at: tmp)
         return nil
     }
 }

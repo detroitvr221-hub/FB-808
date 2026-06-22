@@ -118,6 +118,7 @@ struct RootView: View {
     @State private var showTour = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var recoverSnap: ProjectSnapshot?
+    @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
 
     private var allowed: [String] { FD_LEVEL_NAV[settings.level] ?? FD_LEVEL_NAV[.creator]! }
     private var nav: [NavItem] { FD_NAV.filter { allowed.contains($0.id) } }
@@ -170,12 +171,13 @@ struct RootView: View {
                 // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
                 // then fall back to the legacy name key (sessions saved before id-keying), then to the
                 // most-recent saved project so the user is never silently dropped to a blank default.
-                if let id = store.lastProjectID, let snap = store.loadByID(id) {
+                let loaded = (store.lastProjectID.flatMap { store.loadByID($0) })
+                    ?? (store.lastProjectName.flatMap { store.loadByName($0) })
+                    ?? (store.items.first.flatMap { store.load($0) })
+                if let snap = loaded {
                     project.restore(snap)
-                } else if let name = store.lastProjectName, let snap = store.loadByName(name) {
-                    project.restore(snap)
-                } else if let recent = store.items.first, let snap = store.load(recent) {
-                    project.restore(snap)
+                    let miss = store.missingAudioAssets(in: snap)   // warn instead of silently playing nothing (Phase 8)
+                    if !miss.isEmpty { missingAudio = miss }
                 }
                 settings.mergeLegacySavedSynths(project.savedSynths)   // migrate per-project saved patches → global library (#67)
                 if store.hasFreshAutosave() { recoverSnap = store.autosaveSnapshot() }   // crash/quit recovery
@@ -200,6 +202,11 @@ struct RootView: View {
             Button("Recover") { if let s = recoverSnap { project.restore(s) }; store.clearAutosave(); recoverSnap = nil }
             Button("Discard", role: .destructive) { store.clearAutosave(); recoverSnap = nil }
         } message: { Text("FD·808 closed with edits that were never saved. Recover them, or keep the last saved version?") }
+        .alert("Some audio is missing", isPresented: Binding(get: { !missingAudio.isEmpty }, set: { if !$0 { missingAudio = [] } })) {
+            Button("OK") { missingAudio = [] }
+        } message: {
+            Text("This project references audio that couldn't be found:\n\n• \(missingAudio.prefix(8).joined(separator: "\n• "))\n\nThe rest of the project loaded fine.")
+        }
         .onChange(of: settings.level) { _, _ in
             if !allowed.contains(tab) { tab = allowed.first ?? "pads" }
         }
