@@ -381,6 +381,7 @@ final class AudioEngine: ObservableObject {
     func stretchSample(ratio: Double) -> (dur: Double, wave: [Double]) { core.stretchSample(ratio: ratio) }
     func resetSample() -> [Double] { core.resetSample() }
     func currentSampleOriginal() -> [Float] { core.currentSampleOriginal() }
+    func currentSampleData() -> [Float] { core.currentSampleData() }   // edited buffer, for the GPU waveform view
     func detectPitch() -> Double { ensure(); return core.detectPitch() }
     func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
     func sampleToSynth() { core.sampleToSynth() }

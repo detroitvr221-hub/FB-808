@@ -4,6 +4,7 @@
 import SwiftUI
 import FD808Engine
 import UniformTypeIdentifiers
+import Waveform   // AudioKit GPU waveform (vendored, MIT) — true min/max draw of the sample buffer
 
 private let SLICE_COUNTS = [4, 8, 16, 32]
 private let SOURCES: [(kind: String, label: String, icon: String)] = [
@@ -35,9 +36,23 @@ struct SampleModeView: View {
     @State private var grainSpread = 0.3
     @State private var grainPitch = 0.0
     @State private var selectedSlice: Int?      // for Split / Merge / Extract
+    @State private var gpuBuf: SampleBuffer?     // memoized GPU waveform buffer (rebuilt only when the audio changes, not on trim drags)
 
     private var sample: SampleState? { project.sample }
     private var has: Bool { sample != nil }
+
+    /// Identity of the underlying AUDIO (not the trim window) — rebuild the GPU buffer only when this changes,
+    /// so dragging the trim handles never re-uploads the whole sample to the GPU.
+    private var sampleSig: String {
+        guard let s = project.sample else { return "" }
+        let tools = s.tools.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")
+        return "\(s.name)|\(String(format: "%.4f", s.dur))|\(s.gain)|\(s.reverseSlices)|\(tools)"
+    }
+    private func refreshGPUWave() {
+        guard project.sample != nil else { gpuBuf = nil; return }
+        let data = engine.currentSampleData()
+        gpuBuf = data.isEmpty ? nil : SampleBuffer(samples: data)
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -73,7 +88,7 @@ struct SampleModeView: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
                 if let s = sample {
                     let trim = s.trim
-                    waveCanvas(s, size: g.size)
+                    sampleWaveLayer(s, size: g.size)
                     dim(x: 0, w: trim[0] * g.size.width)
                     dim(x: trim[1] * g.size.width, w: (1 - trim[1]) * g.size.width)
                     ForEach(Array(s.slices.enumerated()), id: \.offset) { (i, p) in sliceMark(i: i, x: p * g.size.width) }
@@ -106,6 +121,23 @@ struct SampleModeView: View {
             .coordinateSpace(name: "wave")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { refreshGPUWave() }
+        .onChange(of: sampleSig) { _, _ in refreshGPUWave() }
+    }
+
+    /// Base waveform layer: the AudioKit GPU Waveform (true min/max of the edited buffer, themed to the
+    /// accent) when the raw buffer is available; falls back to the CPU peak Canvas (e.g. right after a
+    /// project restore before the engine buffer is rehydrated). Overlays (trim/slices/playhead) sit on top.
+    @ViewBuilder private func sampleWaveLayer(_ s: SampleState, size: CGSize) -> some View {
+        if let buf = gpuBuf, buf.count > 0 {
+            Waveform(samples: buf)
+                .foregroundColor(settings.accent)
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        } else {
+            waveCanvas(s, size: size)
+        }
     }
 
     private func waveCanvas(_ s: SampleState, size: CGSize) -> some View {
