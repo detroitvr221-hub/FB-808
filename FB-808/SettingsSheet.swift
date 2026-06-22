@@ -86,6 +86,12 @@ struct SettingsSheet: View {
                             Text("Constant loudness across the stereo field (centre sits ~3 dB lower)").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
                         }
                     }.tint(settings.accent)
+                    Toggle(isOn: $settings.bandlimitedOsc) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Band-limited oscillators").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                            Text("Cleaner high synth notes — removes saw/square aliasing (PolyBLEP)").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                        }
+                    }.tint(settings.accent)
                     Toggle(isOn: $settings.exportDither) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("16-bit export dither").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)

@@ -23,6 +23,7 @@ final class AppSettings: ObservableObject {
     // Audio-quality modes (opt-in; default off = current behavior). Applied to the engine live; export reads the dither flag.
     @Published var hqInterp: Bool        { didSet { store.set(hqInterp, forKey: "fd.hqInterp") } }
     @Published var equalPowerPan: Bool   { didSet { store.set(equalPowerPan, forKey: "fd.equalPowerPan") } }
+    @Published var bandlimitedOsc: Bool  { didSet { store.set(bandlimitedOsc, forKey: "fd.bandlimitedOsc") } }
     @Published var exportDither: Bool    { didSet { store.set(exportDither, forKey: "fd.exportDither") } }
     // User-saved drum kits (per-pad sound maps), persisted as JSON. Shared across projects.
     @Published var userKits: [UserKitDef] { didSet { saveUserKits() } }
@@ -46,6 +47,7 @@ final class AppSettings: ObservableObject {
         sampleRate = store.object(forKey: "fd.sampleRate") as? Double ?? 48000
         hqInterp = store.object(forKey: "fd.hqInterp") as? Bool ?? false
         equalPowerPan = store.object(forKey: "fd.equalPowerPan") as? Bool ?? false
+        bandlimitedOsc = store.object(forKey: "fd.bandlimitedOsc") as? Bool ?? false
         exportDither = store.object(forKey: "fd.exportDither") as? Bool ?? false
         userKits = AppSettings.loadUserKits()
         savedSynths = AppSettings.loadSavedSynths()

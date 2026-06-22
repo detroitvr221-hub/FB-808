@@ -200,6 +200,7 @@ struct RootView: View {
         .onChange(of: settings.limiterCeilingDb) { _, _ in applyAudio() }
         .onChange(of: settings.hqInterp) { _, _ in applyAudio() }
         .onChange(of: settings.equalPowerPan) { _, _ in applyAudio() }
+        .onChange(of: settings.bandlimitedOsc) { _, _ in applyAudio() }
         .alert("Recover unsaved changes?", isPresented: Binding(get: { recoverSnap != nil }, set: { if !$0 { recoverSnap = nil } })) {
             Button("Recover") { if let s = recoverSnap { project.restore(s) }; store.clearAutosave(); recoverSnap = nil }
             Button("Discard", role: .destructive) { store.clearAutosave(); recoverSnap = nil }
@@ -384,6 +385,7 @@ struct RootView: View {
                                   limiterOn: settings.limiterOn, limiterCeilingDb: settings.limiterCeilingDb)
         engine.setHQInterpolation(settings.hqInterp)        // opt-in audio-quality modes (default off)
         engine.setEqualPowerPan(settings.equalPowerPan)
+        engine.setBandlimitedOsc(settings.bandlimitedOsc)
     }
 
     /// Route CoreMIDI input onto the existing trigger APIs, then start the manager (Phase 6). Idempotent:
