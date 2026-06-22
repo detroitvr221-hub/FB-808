@@ -187,6 +187,7 @@ struct RootView: View {
                 project.persistSampleAudio()   // flush the sampler buffer to disk so crash-recovery can restore it (#review)
                 store.autosave(project.snapshot())
             }
+            if phase == .background { engine.allNotesOff() }   // release any held live notes (no stuck notes on return)
         }
         .onChange(of: settings.audioBufferMs) { _, _ in applyAudio() }
         .onChange(of: settings.polyphony) { _, _ in applyAudio() }
