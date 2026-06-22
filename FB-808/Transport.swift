@@ -139,7 +139,7 @@ final class Transport: ObservableObject {
               let (raw, lat) = engine.stopMicRecordingRaw() else { return }
         let preRoll = max(0, audioRecBar0 - audioRecStartNow)
         let offset = Double(project.audioRecOffsetMs) / 1000.0
-        let trim = Int((preRoll + lat + offset) * 48_000.0)
+        let trim = Int((preRoll + lat + offset) * engine.sampleRate)   // captured at the engine rate, not always 48 k (Phase 5/7)
         var data = raw
         if trim > 0 { data = trim < data.count ? Array(data.dropFirst(trim)) : [] }
         else if trim < 0 { data = Array(repeating: 0, count: -trim) + data }   // push later

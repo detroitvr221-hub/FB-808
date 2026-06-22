@@ -130,6 +130,10 @@ struct SettingsSheet: View {
             diagRow("Sample rate", String(format: "%.0f Hz", d.sampleRate), settings.inkDim)
             diagRow("Route", engine.sessionMgr.summary, settings.inkDim)
             diagRow("MIDI in", midi.summary, settings.inkDim)
+            diagRow("Input", engine.isMicRecording
+                    ? "● \(engine.sessionMgr.inputName) · \(Int((min(1, engine.inputLevel)) * 100))%"
+                    : "idle",
+                    engine.isMicRecording ? settings.theme.miss : settings.inkDim)
             diagRow("Engine restarts", "\(engine.restartCount)\(engine.lastRestartReason.isEmpty ? "" : " · \(engine.lastRestartReason)")", settings.inkDim)
         }
         .padding(12)

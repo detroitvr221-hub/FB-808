@@ -51,7 +51,68 @@ final class AudioSessionManager: ObservableObject {
         return grantedBufferSec
     }
 
+    /// Switch the session to play-and-record for mic/line/USB capture (Phase 7). Mirrors `activatePlayback`
+    /// (preferred SR + buffer + readback + route classify) but with `.playAndRecord`, so recording runs at
+    /// the engine rate and the buffer/route policy stays in this one home. Honors a user-selected input
+    /// (`preferredInputUID`) when set. Returns the granted IO buffer duration. The caller still owns the
+    /// AVAudioEngine graph dance (stop → reconfigure → start); this only owns the session policy.
+    @discardableResult
+    func activateRecording() -> Double {
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playAndRecord, mode: .default,
+                           options: [.defaultToSpeaker, .allowBluetoothA2DP, .allowBluetooth, .mixWithOthers])
+        if preferredSampleRate > 0 { try? s.setPreferredSampleRate(preferredSampleRate) }
+        classifyRoute(s)
+        let sr = max(8000, s.sampleRate)
+        let target = manualBufferSec > 0 ? manualBufferSec : Double(targetFrames) / sr
+        try? s.setPreferredIOBufferDuration(max(0.0026, min(0.046, target)))
+        try? s.setActive(true)
+        applyPreferredInput(s)                              // route to the chosen input device, if any
+        grantedBufferSec = s.ioBufferDuration
+        classifyRoute(s)
+        return grantedBufferSec
+    }
+
     func currentBufferDuration() -> Double { AVAudioSession.sharedInstance().ioBufferDuration }
+
+    // MARK: input selection (Phase 7) — mic / line / Bluetooth / USB capture sources
+
+    struct InputOption: Identifiable, Equatable { let id: String; let name: String; let kind: RouteClass }
+    /// The user's chosen capture input (portUID), or nil for the system default. Applied on the next record activation.
+    private(set) var preferredInputUID: String?
+
+    /// Capture inputs currently available (only meaningful once a record-capable category is active).
+    func availableInputs() -> [InputOption] {
+        (AVAudioSession.sharedInstance().availableInputs ?? []).map {
+            InputOption(id: $0.uid, name: $0.portName, kind: inputKind($0.portType))
+        }
+    }
+
+    /// Choose a capture input by portUID (nil = system default). Applied immediately if recording is live.
+    func setPreferredInput(_ uid: String?) {
+        preferredInputUID = uid
+        let s = AVAudioSession.sharedInstance()
+        if s.category == .playAndRecord { applyPreferredInput(s) }
+    }
+
+    private func applyPreferredInput(_ s: AVAudioSession) {
+        guard let uid = preferredInputUID,
+              let port = (s.availableInputs ?? []).first(where: { $0.uid == uid }) else { return }
+        try? s.setPreferredInput(port)
+    }
+
+    /// Active capture input name (for the record meter / diagnostics), or "—" when none.
+    var inputName: String { AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName ?? "—" }
+
+    private func inputKind(_ t: AVAudioSession.Port) -> RouteClass {
+        switch t {
+        case .builtInMic:                                       return .builtIn
+        case .headsetMic, .headphones:                          return .wired
+        case .bluetoothHFP, .bluetoothLE, .bluetoothA2DP:       return .bluetooth
+        case .usbAudio:                                         return .usb
+        default:                                                return .other
+        }
+    }
 
     /// Human-readable line for the diagnostics panel, e.g. "Built-in · 256 fr · 5.3 ms".
     var summary: String {
