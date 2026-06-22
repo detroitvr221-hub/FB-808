@@ -17,10 +17,14 @@ final class AudioSessionManager: ObservableObject {
     var preferredSampleRate = 0.0                         // request the engine's rate from the hardware (0 = leave default)
 
     /// Frames the policy targets for the current route. 256 is the default low-latency target; Bluetooth
-    /// is inherently high-latency so it gets 512. A manual override (user-picked ms) wins when set.
+    /// is inherently high-latency so it gets a bigger one. A manual override (user-picked ms) wins when set.
+    /// Default is 512 frames (~10.7 ms @48k): our render does real per-sample DSP across many voices, so the
+    /// old 256 left too little time per callback → missed deadlines → crackle. 512 doubles the render budget
+    /// (still well under AudioKit's 1024 default) for negligible added latency. Users who need snappier pads
+    /// can still pick "Low · 3 ms" manually.
     var targetFrames: Int {
         guard manualBufferSec <= 0 else { return Int((manualBufferSec * grantedSampleRate).rounded()) }
-        return routeClass == .bluetooth ? 512 : 256
+        return routeClass == .bluetooth ? 1024 : 512
     }
     private var grantedSampleRate: Double { max(8000, AVAudioSession.sharedInstance().sampleRate) }
 

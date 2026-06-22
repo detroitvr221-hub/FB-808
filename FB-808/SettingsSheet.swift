@@ -60,9 +60,9 @@ struct SettingsSheet: View {
 
                     section("Audio")
                     radioRow(title: "Latency · buffer size",
-                             options: [("Auto · 256", "0"), ("Low · 3 ms", "3"), ("Balanced · 8 ms", "8"), ("Stable · 12 ms", "12"), ("Max · 21 ms", "21")],
+                             options: [("Auto · 512", "0"), ("Low · 3 ms", "3"), ("Balanced · 8 ms", "8"), ("Stable · 12 ms", "12"), ("Max · 21 ms", "21")],
                              selected: "\(Int(settings.audioBufferMs))") { v in settings.audioBufferMs = Double(v) ?? 0 }
-                    Text("Auto targets 256 frames (512 on Bluetooth). Lower = snappier pads; higher = fewer glitches when many sounds play at once.")
+                    Text("Auto targets 512 frames (1024 on Bluetooth) — enough render headroom to avoid crackle. Lower = snappier pads but more risk of dropouts when many sounds play; higher = rock-solid.")
                         .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
                     radioRow(title: "Max voices · polyphony",
                              options: [("32", "32"), ("64", "64"), ("96", "96"), ("128", "128")],
