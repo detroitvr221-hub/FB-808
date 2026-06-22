@@ -78,9 +78,12 @@ struct TrackModeView: View {
     }
 
     private func handleAudioImport(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result, let url = urls.first,
-              let data = engine.decodeAudioFile(url: url) else { return }
-        project.addAudioClip(track: importTrackID, startBar: 0, data: data, name: url.deletingPathExtension().lastPathComponent)
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        let trackID = importTrackID, name = url.deletingPathExtension().lastPathComponent
+        Task {   // off-main decode so importing a long take never hitches the UI (Phase 2)
+            guard let data = await engine.decodeAudioFileAsync(url: url), !data.isEmpty else { return }
+            project.addAudioClip(track: trackID, startBar: 0, data: data, name: name)
+        }
     }
 
     private var exportButton: some View {

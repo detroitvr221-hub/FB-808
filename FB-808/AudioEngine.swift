@@ -397,73 +397,34 @@ final class AudioEngine: ObservableObject {
     /// mono at the engine's sample rate. Returns nil if the file can't be read.
     func importAudio(url: URL, maxSeconds: Double = 30) -> (dur: Double, transients: [Double], wave: [Double])? {
         ensure()
-        guard let data = decode(url: url, maxSeconds: maxSeconds) else { return nil }
+        guard let data = SampleEngine.decode(url: url, targetSR: core.sr, maxSeconds: maxSeconds) else { return nil }
+        return core.loadExternal(data)
+    }
+
+    /// Off-thread decode then load into the sampler buffer (Phase 2) — the UI doesn't block on the file read.
+    func importAudioAsync(url: URL, maxSeconds: Double = 30) async -> (dur: Double, transients: [Double], wave: [Double])? {
+        ensure()
+        guard let data = await SampleEngine.decodeAsync(url: url, targetSR: core.sr, maxSeconds: maxSeconds) else { return nil }
         return core.loadExternal(data)
     }
 
     /// Decode a file to mono @ engine SR *without* touching the sample buffer (for audio clips).
     func decodeAudioFile(url: URL, maxSeconds: Double = 60) -> [Float]? {
-        ensure(); return decode(url: url, maxSeconds: maxSeconds)
+        ensure(); return SampleEngine.decode(url: url, targetSR: core.sr, maxSeconds: maxSeconds)
+    }
+
+    /// Off-thread decode — the UI never blocks on import or large files (Phase 2). Returns on the caller.
+    func decodeAudioFileAsync(url: URL, maxSeconds: Double = 60) async -> [Float]? {
+        ensure(); return await SampleEngine.decodeAsync(url: url, targetSR: core.sr, maxSeconds: maxSeconds)
     }
 
     /// Push a raw mono buffer into the sample slot (used to restore a persisted sample on project load).
     @discardableResult
     func importBuffer(_ data: [Float]) -> (dur: Double, transients: [Double], wave: [Double]) { ensure(); return core.loadExternal(data) }
 
-    private func decode(url: URL, maxSeconds: Double) -> [Float]? {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-        guard let file = try? AVAudioFile(forReading: url) else { return nil }
-        let src = file.processingFormat
-        let frames = AVAudioFrameCount(file.length)
-        guard frames > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: frames) else { return nil }
-        do { try file.read(into: inBuf) } catch { return nil }
-
-        // Fast path: already mono @ engine rate.
-        if src.sampleRate == core.sr && src.channelCount == 1 {
-            let data = Self.floats(from: inBuf, sr: core.sr, maxSeconds: maxSeconds)
-            return data.isEmpty ? nil : data
-        }
-        // Otherwise resample + downmix to mono Float32 @ engine rate.
-        guard let outFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: core.sr, channels: 1, interleaved: false),
-              let conv = AVAudioConverter(from: src, to: outFmt) else { return nil }
-        let cap = AVAudioFrameCount(Double(frames) * core.sr / src.sampleRate) + 2048
-        guard let outBuf = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return nil }
-        var fed = false
-        var err: NSError?
-        conv.convert(to: outBuf, error: &err) { _, status in
-            if fed { status.pointee = .endOfStream; return nil }
-            fed = true; status.pointee = .haveData; return inBuf
-        }
-        guard err == nil else { return nil }
-        let data = Self.floats(from: outBuf, sr: core.sr, maxSeconds: maxSeconds)
-        return data.isEmpty ? nil : data
-    }
-
     func playClip(_ data: [Float], when: Double, gain: Double, channel: Int) {
         ensure()
         core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel)
     }
     func stopClips() { core.stopClips() }
-
-    /// Pull a mono `[Float]` out of a PCM buffer (down-mixing if needed), capped to `maxSeconds`.
-    private static func floats(from buf: AVAudioPCMBuffer, sr: Double, maxSeconds: Double) -> [Float] {
-        let n = Int(buf.frameLength), ch = Int(buf.format.channelCount)
-        guard n > 0, ch > 0, let chans = buf.floatChannelData else { return [] }
-        let cap = min(n, Int(sr * maxSeconds))
-        var out = [Float](repeating: 0, count: cap)
-        if ch == 1 {
-            let p = chans[0]
-            for i in 0..<cap { out[i] = p[i] }
-        } else {
-            let inv = 1 / Float(ch)
-            for i in 0..<cap {
-                var s: Float = 0
-                for c in 0..<ch { s += chans[c][i] }
-                out[i] = s * inv
-            }
-        }
-        return out
-    }
 }

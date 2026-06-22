@@ -239,10 +239,12 @@ struct PadInspectorView: View {
     private func importSample(_ result: Result<[URL], Error>) {
         importError = nil
         guard case .success(let urls) = result, let url = urls.first else { return }
-        guard let data = engine.decodeAudioFile(url: url, maxSeconds: 12), !data.isEmpty else {
-            importError = "Couldn't read that file."; return
+        let padID = pad.id, name = url.deletingPathExtension().lastPathComponent
+        Task {   // decode off the main thread so a big file never hitches the UI (Phase 2)
+            let data = await engine.decodeAudioFileAsync(url: url, maxSeconds: 12)
+            guard let data, !data.isEmpty else { importError = "Couldn't read that file."; return }
+            project.setPadSample(padID, data: data, name: name)
         }
-        project.setPadSample(pad.id, data: data, name: url.deletingPathExtension().lastPathComponent)
     }
 
     private var layersCard: some View {
