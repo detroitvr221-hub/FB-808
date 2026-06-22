@@ -19,6 +19,7 @@ final class AppSettings: ObservableObject {
     @Published var polyphony: Int        { didSet { store.set(polyphony, forKey: "fd.polyphony") } }
     @Published var limiterOn: Bool       { didSet { store.set(limiterOn, forKey: "fd.limiterOn") } }
     @Published var limiterCeilingDb: Double { didSet { store.set(limiterCeilingDb, forKey: "fd.limiterCeilingDb") } }
+    @Published var sampleRate: Double    { didSet { store.set(sampleRate, forKey: "fd.sampleRate") } }   // engine rate; applies on next launch
     // User-saved drum kits (per-pad sound maps), persisted as JSON. Shared across projects.
     @Published var userKits: [UserKitDef] { didSet { saveUserKits() } }
     // User-saved synth patches — a GLOBAL library so they persist across projects (#67, was per-project).
@@ -38,6 +39,7 @@ final class AppSettings: ObservableObject {
         polyphony = store.object(forKey: "fd.polyphony") as? Int ?? 64
         limiterOn = store.object(forKey: "fd.limiterOn") as? Bool ?? true
         limiterCeilingDb = store.object(forKey: "fd.limiterCeilingDb") as? Double ?? -1.0
+        sampleRate = store.object(forKey: "fd.sampleRate") as? Double ?? 48000
         userKits = AppSettings.loadUserKits()
         savedSynths = AppSettings.loadSavedSynths()
     }
