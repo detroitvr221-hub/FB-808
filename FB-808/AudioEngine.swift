@@ -16,7 +16,14 @@ import FD808Engine
 
 @MainActor
 final class AudioEngine: ObservableObject {
-    let core = SynthCore(sampleRate: 48000)
+    /// The engine sample rate, chosen at launch from the persisted setting (44.1/48/88.2/96 kHz; default
+    /// 48k). A live switch would require recreating the core + graph + re-resampling every loaded sample,
+    /// so the rate is fixed per launch (a change applies on the next launch) — safe and behavior-preserving.
+    static func savedSampleRate() -> Double {
+        let v = UserDefaults.standard.object(forKey: "fd.sampleRate") as? Double ?? 48000
+        return [44100.0, 48000, 88200, 96000].contains(v) ? v : 48000
+    }
+    let core = SynthCore(sampleRate: AudioEngine.savedSampleRate())
     private let engine = AVAudioEngine()
     private var srcNode: AVAudioSourceNode!
     private var started = false
@@ -143,6 +150,7 @@ final class AudioEngine: ObservableObject {
 
     func start() {
         guard !engine.isRunning else { started = true; return }   // guard on real engine state, not a cached flag
+        sessionMgr.preferredSampleRate = core.sr   // ask the hardware to run at the engine rate (96k etc.)
         sessionMgr.activatePlayback()   // category + per-route buffer target + activate + read back actual
         do {
             try engine.start()

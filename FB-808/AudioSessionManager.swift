@@ -14,6 +14,7 @@ final class AudioSessionManager: ObservableObject {
     @Published private(set) var routeName = "—"
     @Published private(set) var routeClass: RouteClass = .builtIn
     private var manualBufferSec = 0.0                     // 0 ⇒ Auto (per-route frame-count policy)
+    var preferredSampleRate = 0.0                         // request the engine's rate from the hardware (0 = leave default)
 
     /// Frames the policy targets for the current route. 256 is the default low-latency target; Bluetooth
     /// is inherently high-latency so it gets 512. A manual override (user-picked ms) wins when set.
@@ -39,6 +40,7 @@ final class AudioSessionManager: ObservableObject {
     func activatePlayback() -> Double {
         let s = AVAudioSession.sharedInstance()
         try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        if preferredSampleRate > 0 { try? s.setPreferredSampleRate(preferredSampleRate) }   // match engine rate when the HW can
         classifyRoute(s)                                    // know the route before picking the target
         let sr = max(8000, s.sampleRate)
         let target = manualBufferSec > 0 ? manualBufferSec : Double(targetFrames) / sr
