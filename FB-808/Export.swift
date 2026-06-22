@@ -422,7 +422,10 @@ nonisolated func renderOffline(_ plan: ExportPlan,
     let hasFxAuto = plan.automation.contains { $0.target == "reverb" || $0.target == "delay" }
     let fxActive = plan.fx.reverbMix > 0.0001 || plan.fx.delayMix > 0.0001 || hasFxAuto
     // Mirror the live master chain: automated lowpass sweep + always-on safety limiter (pre soft-clip).
-    var msvfL = SVF(), msvfR = SVF(), mCut = 20_000.0
+    // mCut glides toward its automation target (~12 ms one-pole, per sample) so the bounce matches the
+    // live engine's smoothed sweep instead of stepping at each breakpoint (parity with SynthCore.render).
+    var msvfL = SVF(), msvfR = SVF(), mCutTarget = 20_000.0, mCutSmooth = 20_000.0
+    let mCutCoef = 1 - exp(-1.0 / (0.012 * sr))
     var safety = SafetyLimiter(sr: sr, ceiling: Float(pow(10, plan.safetyCeilingDb / 20)), enabled: plan.safetyEnabled)
     var aIdx = 0
     // per-channel insert FX (mirrors SynthCore so the export matches live playback)
@@ -447,7 +450,7 @@ nonisolated func renderOffline(_ plan: ExportPlan,
         while aIdx < plan.automation.count && plan.automation[aIdx].atSample <= g {
             let ap = plan.automation[aIdx]; aIdx += 1
             switch ap.target {
-            case "filter": mCut = 20 * pow(900, ap.value)
+            case "filter": mCutTarget = 20 * pow(900, ap.value)
             case "reverb": fx.reverbMix = Float(ap.value)
             case "delay":  fx.delayMix = Float(ap.value)
             default: break
@@ -498,9 +501,10 @@ nonisolated func renderOffline(_ plan: ExportPlan,
             let (oL, oR) = fx.process(gL + sL, gR + sR)
             gL = oL - sL; gR = oR - sR
         }
-        if mCut < 18000 {                                  // automated master lowpass sweep (mirrors live)
-            gL = Float(msvfL.lp(Double(gL), mCut, 1.0, sr))
-            gR = Float(msvfR.lp(Double(gR), mCut, 1.0, sr))
+        mCutSmooth += (mCutTarget - mCutSmooth) * mCutCoef   // glide (mirrors live SynthCore per-block smoothing)
+        if mCutTarget < 18000 || mCutSmooth < 18000 {        // automated master lowpass sweep, hysteresis bypass
+            gL = Float(msvfL.lp(Double(gL), mCutSmooth, 1.0, sr))
+            gR = Float(msvfR.lp(Double(gR), mCutSmooth, 1.0, sr))
         }
         if masterActive { (gL, gR) = mbus.process(gL, gR, plan.masterBus) }
         let (lgL, lgR) = safety.process(gL, gR)            // always-on safety limiter, before the soft-clip
