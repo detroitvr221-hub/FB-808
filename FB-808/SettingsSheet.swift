@@ -72,6 +72,27 @@ struct SettingsSheet: View {
                              selected: "\(Int(settings.sampleRate))") { v in settings.sampleRate = Double(v) ?? 48000 }
                     Text("Higher rates reduce aliasing for cleaner synths; the engine adopts the new rate next launch.")
                         .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
+
+                    section("Audio Quality")
+                    Toggle(isOn: $settings.hqInterp) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("HQ sample interpolation").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                            Text("Smoother pitched/chopped samples (cubic) — costs a little CPU").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                        }
+                    }.tint(settings.accent)
+                    Toggle(isOn: $settings.equalPowerPan) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Equal-power panning").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                            Text("Constant loudness across the stereo field (centre sits ~3 dB lower)").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                        }
+                    }.tint(settings.accent)
+                    Toggle(isOn: $settings.exportDither) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("16-bit export dither").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                            Text("Cleaner quiet tails in WAV exports (TPDF dither)").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                        }
+                    }.tint(settings.accent)
+
                     Toggle(isOn: $settings.limiterOn) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Master limiter").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)

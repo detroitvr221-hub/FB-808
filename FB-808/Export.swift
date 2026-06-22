@@ -339,6 +339,13 @@ nonisolated func buildVoices(_ plan: ExportPlan) -> [Voice] {
 /// stems will NOT bit-reconstruct the master WAV (the master bus + reverb tail live only in the full
 /// mix, and the per-stem soft-clip is nonlinear) — by design, stems are clean source material for
 /// re-mixing in another DAW, not a master decomposition. Silent buses are skipped.
+/// Stereo pan gains for a voice — linear (default) or equal-power (opt-in), mirroring SynthCore so the
+/// bounce matches live playback. p in -1..1.
+@inline(__always) nonisolated func exportPanGains(_ p: Double) -> (Float, Float) {
+    if FD808Quality.equalPowerPan { let a = (p + 1) * 0.25 * Double.pi; return (Float(cos(a)), Float(sin(a))) }
+    return (Float(p <= 0 ? 1 : 1 - p), Float(p >= 0 ? 1 : 1 + p))
+}
+
 nonisolated func renderStems(_ plan: ExportPlan) -> [(name: String, left: [Float], right: [Float])] {
     let sr = plan.sr
     let nch = plan.busCount
@@ -382,9 +389,7 @@ nonisolated func renderStems(_ plan: ExportPlan) -> [(name: String, left: [Float
                 let v = active[k]
                 if v.finished { active.remove(at: k); continue }
                 let s = v.next(sr)
-                let p = v.pan
-                if p == 0 { aL += s; aR += s }
-                else { aL += s * Float(p <= 0 ? 1 : 1 - p); aR += s * Float(p >= 0 ? 1 : 1 + p) }
+                let (gl, gr) = exportPanGains(v.pan); aL += s * gl; aR += s * gr
                 if v.finished { active.remove(at: k); continue }
                 k += 1
             }
@@ -477,10 +482,8 @@ nonisolated func renderOffline(_ plan: ExportPlan,
             let v = active[k]
             if v.finished { active.remove(at: k); continue }
             let s = v.next(sr)
-            let p = v.pan
             let ch = (v.channel >= 0 && v.channel < nch) ? v.channel : 0
-            if p == 0 { accL[ch] += s; accR[ch] += s }
-            else { accL[ch] += s * Float(p <= 0 ? 1 : 1 - p); accR[ch] += s * Float(p >= 0 ? 1 : 1 + p) }
+            let (gl, gr) = exportPanGains(v.pan); accL[ch] += s * gl; accR[ch] += s * gr
             if v.finished { active.remove(at: k); continue }
             k += 1
         }
@@ -550,9 +553,16 @@ nonisolated func sweepExportDirs(keepNewest: Int = 3) {
 /// Write the rendered stereo signal to disk in the requested format.
 /// WAV = 16-bit PCM (lossless). M4A = AAC at 192 kbps (native AVFoundation encoder; iOS has no MP3 encoder).
 /// `dir` defaults to a fresh per-call batch dir; batch callers (stems) pass one shared dir. (#227)
-nonisolated func writeAudio(_ format: ExportFormat, left: [Float], right: [Float], sr: Double, name: String, dir: URL = fd808ExportDir()) -> URL? {
+nonisolated func writeAudio(_ format: ExportFormat, left: [Float], right: [Float], sr: Double, name: String, dir: URL = fd808ExportDir(), dither: Bool = false) -> URL? {
     let frames = min(left.count, right.count)
     guard frames > 0 else { return nil }
+    // 16-bit PCM only: TPDF dither (±1 LSB triangular) decorrelates quantization error so quiet
+    // fades/tails dissolve into a faint noise floor instead of gritty truncation distortion. Off by
+    // default ⇒ byte-identical to before. AAC is lossy so dither is pointless there. Seeded → reproducible.
+    let applyDither = dither && format == .wav
+    let lsb: Float = 1.0 / 32768.0
+    var rng: UInt32 = 0x2545_F491
+    func rnd() -> Float { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return Float(rng) / Float(UInt32.max) }
     let settings: [String: Any]
     switch format {
     case .wav:
@@ -592,7 +602,14 @@ nonisolated func writeAudio(_ format: ExportFormat, left: [Float], right: [Float
                       let ch = buf.floatChannelData else { throw CocoaError(.fileWriteUnknown) }
                 buf.frameLength = AVAudioFrameCount(count)
                 if pf.channelCount >= 2 {
-                    for j in 0..<count { ch[0][j] = left[i + j]; ch[1][j] = right[i + j] }
+                    if applyDither {
+                        for j in 0..<count {
+                            ch[0][j] = left[i + j] + (rnd() - rnd()) * lsb
+                            ch[1][j] = right[i + j] + (rnd() - rnd()) * lsb
+                        }
+                    } else {
+                        for j in 0..<count { ch[0][j] = left[i + j]; ch[1][j] = right[i + j] }
+                    }
                 } else {
                     for j in 0..<count { ch[0][j] = (left[i + j] + right[i + j]) * 0.5 }
                 }
