@@ -108,6 +108,7 @@ struct RootView: View {
     @StateObject private var progress = ProgressStore()
     @StateObject private var classroom = ClassroomStore()   // persisted Teacher roster/live/feedback (#159)
     @StateObject private var session = SessionStore()       // live teacher↔student sync (SYSTEM_AUDIT Step 6)
+    @StateObject private var midi = MIDIManager()           // CoreMIDI input → trigger APIs (AUDIO_ENGINE_PLAN Phase 6)
 
     @State private var tab = "pads"
     @State private var showSettings = false
@@ -146,11 +147,13 @@ struct RootView: View {
         .environmentObject(progress)
         .environmentObject(classroom)
         .environmentObject(session)
+        .environmentObject(midi)
         .overlay { if showTour { TourOverlay(settings: settings, show: $showTour) { toured = true } } }
         .onAppear {
             engine.start()
             engine.setVolume(0.9)
             applyAudio()                // push persisted buffer / polyphony / limiter prefs to the engine
+            wireMIDI()                  // CoreMIDI input → existing trigger APIs (Phase 6); no-op when no device
             session.project = project   // received ops apply into the live project
             session.onRemoteTransport = { playing, bar, step in
                 if !playing { transport.stop(); return }
@@ -370,6 +373,30 @@ struct RootView: View {
     private func applyAudio() {
         engine.applyAudioSettings(bufferSec: settings.audioBufferMs / 1000, polyphony: settings.polyphony,
                                   limiterOn: settings.limiterOn, limiterCeilingDb: settings.limiterCeilingDb)
+    }
+
+    /// Route CoreMIDI input onto the existing trigger APIs, then start the manager (Phase 6). Idempotent:
+    /// re-setting the closures on a repeat onAppear is harmless and `midi.start()` self-guards. Mirrors the
+    /// finger-tap path (trigger + visual bump + record-if-armed) so MIDI drumming records like taps.
+    private func wireMIDI() {
+        midi.onPad = { [weak project, weak engine, weak fx, weak transport] idx, vel in
+            guard let project, let engine, idx >= 0 && idx < Kit.pads.count else { return }
+            let padID = Kit.pads[idx].id
+            engine.start()
+            project.triggerPad(padID, accent: vel >= 0.8)
+            fx?.bump(padID)
+            if project.recording {
+                if project.bank == "D", project.synthBank?[padID] != nil {
+                    project.recordSynthPad(padID, transport?.recordFraction() ?? 0)
+                } else {
+                    project.recordHit(padID, transport?.recordFraction() ?? 0, vel: vel)
+                }
+            }
+        }
+        midi.onNoteOn  = { [weak project, weak engine] note, _ in engine?.start(); project?.synthNoteOn("midi-\(note)", midi: note) }
+        midi.onNoteOff = { [weak project] note in project?.synthNoteOff("midi-\(note)") }
+        midi.onPanic   = { [weak engine] in engine?.allNotesOff() }
+        midi.start()
     }
 
     // TEMP: verify export parity — (1) FX automation reaches the offline bounce (a filter sweep to ~20Hz
