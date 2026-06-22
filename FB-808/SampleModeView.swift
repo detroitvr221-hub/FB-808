@@ -438,12 +438,14 @@ struct SampleModeView: View {
         stopAudition()
         guard case .success(let urls) = result, let url = urls.first else { return }
         engine.start()
-        guard let r = engine.importAudio(url: url) else { flash("Couldn't read that audio file"); return }
         let name = url.deletingPathExtension().lastPathComponent
-        project.sample = SampleState(name: name.isEmpty ? "Imported" : name, kind: "import",
-                                     dur: r.dur, wave: r.wave, transients: r.transients)
-        project.sliceBank = nil
-        flash("Imported \(name) · \(String(format: "%.1f", r.dur))s")
+        Task {   // off-main decode so the UI doesn't hitch on a long file (Phase 2)
+            guard let r = await engine.importAudioAsync(url: url) else { flash("Couldn't read that audio file"); return }
+            project.sample = SampleState(name: name.isEmpty ? "Imported" : name, kind: "import",
+                                         dur: r.dur, wave: r.wave, transients: r.transients)
+            project.sliceBank = nil
+            flash("Imported \(name) · \(String(format: "%.1f", r.dur))s")
+        }
     }
 
     /// Load a SoundFont (.sf2) → a multisample instrument on the Synth keyboard.
