@@ -427,4 +427,9 @@ final class AudioEngine: ObservableObject {
         core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel)
     }
     func stopClips() { core.stopClips() }
+
+    /// Panic / all-notes-off — declick every voice and release held live notes (stuck-note recovery).
+    func allNotesOff() { core.releaseAll() }
+    /// Per-channel post-strip peak levels for mixer meters (indexed by bus slot).
+    func channelPeaks() -> [Float] { core.channelPeaks() }
 }
