@@ -34,7 +34,7 @@ final class AppSettings: ObservableObject {
         padLabels = store.object(forKey: "fd.padLabels") as? Bool ?? true
         glow = store.object(forKey: "fd.glow") as? Double ?? 1.0
         mpcCoach = store.object(forKey: "fd.mpcCoach") as? Bool ?? false
-        audioBufferMs = store.object(forKey: "fd.audioBufferMs") as? Double ?? 8
+        audioBufferMs = store.object(forKey: "fd.audioBufferMs") as? Double ?? 0   // 0 = Auto (per-route 256/512-frame policy)
         polyphony = store.object(forKey: "fd.polyphony") as? Int ?? 64
         limiterOn = store.object(forKey: "fd.limiterOn") as? Bool ?? true
         limiterCeilingDb = store.object(forKey: "fd.limiterCeilingDb") as? Double ?? -1.0

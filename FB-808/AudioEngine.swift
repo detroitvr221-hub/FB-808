@@ -21,7 +21,7 @@ final class AudioEngine: ObservableObject {
     private var srcNode: AVAudioSourceNode!
     private var started = false
     private var ioFormat: AVAudioFormat!
-    private var preferredBufferDur: Double = 0.008   // ~8 ms default (was 5 ms) — more stable under heavy polyphony
+    let sessionMgr = AudioSessionManager()            // owns AVAudioSession category + per-route buffer policy
     private var reclaimTimer: Timer?                  // frees finished voices off the audio thread
     private var diagTimer: Timer?                     // samples engine telemetry for the UI (~5 Hz)
     @Published private(set) var diag = AudioDiagnostics()   // live render metrics (Phase 0)
@@ -143,11 +143,8 @@ final class AudioEngine: ObservableObject {
 
     func start() {
         guard !engine.isRunning else { started = true; return }   // guard on real engine state, not a cached flag
+        sessionMgr.activatePlayback()   // category + per-route buffer target + activate + read back actual
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try session.setPreferredIOBufferDuration(preferredBufferDur)
-            try session.setActive(true)
             try engine.start()
             started = true
             startReclaimTimer()
@@ -203,9 +200,10 @@ final class AudioEngine: ObservableObject {
         })
     }
 
-    /// Re-activate the session and restart the engine if it stopped. Idempotent.
+    /// Re-activate the session and restart the engine if it stopped. Idempotent. Re-applies the per-route
+    /// buffer policy (so e.g. switching to Bluetooth re-targets 512 frames) and re-reads the granted buffer.
     func restartAudio(reconfigure: Bool = false) {
-        try? AVAudioSession.sharedInstance().setActive(true)
+        sessionMgr.activatePlayback()
         if reconfigure { rebuildMasterChain() }   // re-establish srcNode→mixer after a graph teardown
         let wasRunning = engine.isRunning
         if !engine.isRunning {
@@ -229,13 +227,11 @@ final class AudioEngine: ObservableObject {
     }
 
     /// The IO buffer the system actually granted (may differ from preferred; the OS quantizes it).
-    func currentBufferDuration() -> Double { AVAudioSession.sharedInstance().ioBufferDuration }
+    func currentBufferDuration() -> Double { sessionMgr.currentBufferDuration() }
 
-    /// Change the IO buffer (latency vs. stability). Restarts the IO if running so it takes effect now.
+    /// Set the buffer policy (sec; pass 0 for the per-route Auto target) and restart the IO if running.
     func setPreferredBuffer(_ sec: Double) {
-        let clamped = max(0.0026, min(0.0464, sec))   // ~2.6 ms … ~46 ms (hardware-supported range)
-        guard abs(clamped - preferredBufferDur) > 1e-6 else { return }
-        preferredBufferDur = clamped
+        guard sessionMgr.setManualBuffer(sec) else { return }   // unchanged → don't restart the IO
         guard engine.isRunning else { return }         // otherwise applied on next start()
         engine.mainMixerNode.outputVolume = 0          // mute across the IO restart to avoid a click
         engine.stop(); started = false

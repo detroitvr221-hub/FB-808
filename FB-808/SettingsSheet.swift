@@ -59,9 +59,9 @@ struct SettingsSheet: View {
 
                     section("Audio")
                     radioRow(title: "Latency · buffer size",
-                             options: [("Low · 3 ms", "3"), ("Balanced · 8 ms", "8"), ("Stable · 12 ms", "12"), ("Max · 21 ms", "21")],
-                             selected: "\(Int(settings.audioBufferMs))") { v in settings.audioBufferMs = Double(v) ?? 8 }
-                    Text("Lower = snappier pads; higher = fewer glitches when many sounds play at once.")
+                             options: [("Auto · 256", "0"), ("Low · 3 ms", "3"), ("Balanced · 8 ms", "8"), ("Stable · 12 ms", "12"), ("Max · 21 ms", "21")],
+                             selected: "\(Int(settings.audioBufferMs))") { v in settings.audioBufferMs = Double(v) ?? 0 }
+                    Text("Auto targets 256 frames (512 on Bluetooth). Lower = snappier pads; higher = fewer glitches when many sounds play at once.")
                         .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
                     radioRow(title: "Max voices · polyphony",
                              options: [("32", "32"), ("64", "64"), ("96", "96"), ("128", "128")],
@@ -122,7 +122,7 @@ struct SettingsSheet: View {
             diagRow("Overruns · clips · steals", "\(d.overruns) · \(d.clips) · \(d.steals)",
                     (d.overruns > 0 ? settings.theme.miss : settings.ink))
             diagRow("Sample rate", String(format: "%.0f Hz", d.sampleRate), settings.inkDim)
-            diagRow("IO buffer", String(format: "%.1f ms", engine.currentBufferDuration() * 1000), settings.inkDim)
+            diagRow("Route", engine.sessionMgr.summary, settings.inkDim)
             diagRow("Engine restarts", "\(engine.restartCount)\(engine.lastRestartReason.isEmpty ? "" : " · \(engine.lastRestartReason)")", settings.inkDim)
         }
         .padding(12)
