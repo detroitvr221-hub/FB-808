@@ -16,6 +16,10 @@ final class Transport: ObservableObject {
     private let fx: PadFX
     var link: LinkClock?               // Ableton Link (A17); nil = no Link
     private var lastSyncedBpm = 0
+    /// Sample-accurate step-fire seam (SequencerEngine, Phase 4): invoked as each 16th is SCHEDULED, with
+    /// (bar, step, absoluteEngineTime). nil by default (zero behavior change); the hook for MIDI clock-out,
+    /// external sync, or a future arranger — deterministic, not asyncAfter-based.
+    var onStep: ((Int, Int, Double) -> Void)?
 
     private let lookahead = 0.025      // s between scheduler ticks
     private let ahead = 0.12           // s scheduled in advance
@@ -156,6 +160,7 @@ final class Transport: ObservableObject {
             engine.trigger("click", vel: s % 16 == 0 ? 0.95 : 0.7, when: time)
         }
         if countSteps > 0 { return }
+        onStep?(barCount, s, time)   // SequencerEngine step-fire seam (sample-accurate; nil = no-op)
 
         // FX automation (A11) — apply the lane value at this step's time (song automation overrides in Song Mode)
         if p.autoTarget != "", s < p.autoLane.count, !(p.songMode && p.songAutoTarget != "") {
