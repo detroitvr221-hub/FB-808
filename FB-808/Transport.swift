@@ -369,8 +369,11 @@ final class Transport: ObservableObject {
     /// Ease FD-808's downbeat toward Link's bar phase (called on each bar line). Tune `outputLatency` on device.
     private func nudgeToLinkPhase() {
         guard let link, link.isOn else { return }
+        // Read the host clock FIRST, then the audio clock: if a main-thread stall lands between the two,
+        // dt comes out slightly smaller, so the projected host time `ht` errs early rather than late.
+        let host = HostClock.now()
         let dt = max(0, nextStepTime - engine.now()) + AVAudioSession.sharedInstance().outputLatency
-        let ht = HostClock.now() &+ HostClock.ticks(forSeconds: dt)
+        let ht = host &+ HostClock.ticks(forSeconds: dt)
         guard let phase = link.phase(atHostTime: ht) else { return }   // 0 ..< quantum (bar)
         let q = link.quantum
         let corrBeats = phase > q / 2 ? (q - phase) : -phase            // shortest shift to phase 0
