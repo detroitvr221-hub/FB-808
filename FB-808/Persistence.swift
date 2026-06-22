@@ -328,4 +328,26 @@ final class ProjectStore: ObservableObject {
             try? FileManager.default.removeItem(at: f)
         }
     }
+
+    // MARK: - Load-time audio integrity check (Phase 8)
+
+    /// Which audio assets a snapshot references but are MISSING on disk — the inverse of `sweepOrphanWAVs`'s
+    /// enumeration. Returns human-readable names so the app can warn ("3 audio files missing") rather than
+    /// silently playing nothing. Purely a read; never deletes or mutates.
+    func missingAudioAssets(in snap: ProjectSnapshot) -> [String] {
+        let fm = FileManager.default
+        let audioDir = fd808AudioDir(), sampleDir = fd808SampleDir()
+        var missing: [String] = []
+        for c in snap.audioClips ?? [] where !fm.fileExists(atPath: audioDir.appendingPathComponent("\(c.id).wav").path) {
+            missing.append("\(c.name.isEmpty ? "Audio clip" : c.name) (recorded take)")
+        }
+        for (pad, pp) in snap.padParams {
+            guard let f = pp.sampleFile, !fm.fileExists(atPath: sampleDir.appendingPathComponent(f).path) else { continue }
+            missing.append("\(pp.sampleName ?? pad) (pad sample)")
+        }
+        if let f = snap.sample?.audioFile, !fm.fileExists(atPath: sampleDir.appendingPathComponent(f).path) {
+            missing.append("sampler buffer")
+        }
+        return missing
+    }
 }
