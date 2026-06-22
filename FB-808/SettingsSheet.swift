@@ -3,10 +3,12 @@
 //  prototype's Tweaks panel.
 
 import SwiftUI
+import FD808Engine   // AudioDiagnostics
 
 struct SettingsSheet: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var progress: ProgressStore
+    @EnvironmentObject var engine: AudioEngine
     @Environment(\.dismiss) private var dismiss
     @State private var showMPCBridge = false
 
@@ -81,6 +83,9 @@ struct SettingsSheet: View {
                         }
                     }
 
+                    section("Diagnostics")
+                    diagnosticsPanel
+
                     section("Progress")
                     radioRow(title: "Daily XP goal",
                              options: [("Casual · 20", "20"), ("Regular · 60", "60"), ("Intense · 120", "120")],
@@ -103,6 +108,33 @@ struct SettingsSheet: View {
 
     private func section(_ s: String) -> some View {
         Text(s.uppercased()).font(FDFont.mono(11, .bold)).tracking(1.6).foregroundStyle(settings.inkFaint)
+    }
+
+    // Live engine telemetry (Phase 0). engine.diag refreshes ~5 Hz; the view re-renders automatically.
+    private var diagnosticsPanel: some View {
+        let d = engine.diag
+        let loadPct = Int((d.cpuLoad * 100).rounded())
+        let loadColor: Color = d.cpuLoad > 0.9 ? settings.theme.miss : (d.cpuLoad > 0.6 ? settings.theme.perfect : settings.theme.good)
+        return VStack(spacing: 7) {
+            diagRow("Render load", "\(loadPct)%  ·  \(String(format: "%.2f/%.2f ms", d.renderMs, d.budgetMs))", loadColor)
+            diagRow("Active voices", "\(d.activeVoices) / \(settings.polyphony)", settings.ink)
+            diagRow("Peak", String(format: "%.2f", d.peak), d.peak >= 1.04 ? settings.theme.perfect : settings.ink)
+            diagRow("Overruns · clips · steals", "\(d.overruns) · \(d.clips) · \(d.steals)",
+                    (d.overruns > 0 ? settings.theme.miss : settings.ink))
+            diagRow("Sample rate", String(format: "%.0f Hz", d.sampleRate), settings.inkDim)
+            diagRow("IO buffer", String(format: "%.1f ms", engine.currentBufferDuration() * 1000), settings.inkDim)
+            diagRow("Engine restarts", "\(engine.restartCount)\(engine.lastRestartReason.isEmpty ? "" : " · \(engine.lastRestartReason)")", settings.inkDim)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+    }
+    private func diagRow(_ label: String, _ value: String, _ color: Color) -> some View {
+        HStack {
+            Text(label).font(FDFont.ui(12.5)).foregroundStyle(settings.inkDim)
+            Spacer()
+            Text(value).font(FDFont.mono(12.5, .bold)).foregroundStyle(color)
+        }
     }
 
     // Surface the achievements that were defined but never shown anywhere (#83).

@@ -23,6 +23,10 @@ final class AudioEngine: ObservableObject {
     private var ioFormat: AVAudioFormat!
     private var preferredBufferDur: Double = 0.008   // ~8 ms default (was 5 ms) — more stable under heavy polyphony
     private var reclaimTimer: Timer?                  // frees finished voices off the audio thread
+    private var diagTimer: Timer?                     // samples engine telemetry for the UI (~5 Hz)
+    @Published private(set) var diag = AudioDiagnostics()   // live render metrics (Phase 0)
+    @Published private(set) var restartCount = 0            // engine restarts (interruption/route/config recovery)
+    @Published private(set) var lastRestartReason = ""
 
     init() { configure(); restoreMasterChain() }
 
@@ -159,6 +163,16 @@ final class AudioEngine: ObservableObject {
         guard reclaimTimer == nil else { return }
         let core = self.core
         reclaimTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in core.drainReclaim() }
+        if diagTimer == nil {
+            diagTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.diag = self?.core.diagnostics() ?? AudioDiagnostics() }
+            }
+        }
+    }
+
+    /// Combined telemetry for the UI: engine render metrics + the session-level facts the engine owns.
+    func diagnosticsSummary() -> (diag: AudioDiagnostics, bufferMs: Double, restarts: Int, reason: String) {
+        (diag, currentBufferDuration() * 1000, restartCount, lastRestartReason)
     }
 
     // MARK: - Interruption / route / configuration recovery
@@ -193,8 +207,13 @@ final class AudioEngine: ObservableObject {
     func restartAudio(reconfigure: Bool = false) {
         try? AVAudioSession.sharedInstance().setActive(true)
         if reconfigure { rebuildMasterChain() }   // re-establish srcNode→mixer after a graph teardown
+        let wasRunning = engine.isRunning
         if !engine.isRunning {
             do { try engine.start() } catch { print("AudioEngine restart error: \(error)") }
+        }
+        if !wasRunning && engine.isRunning {       // diagnostics: count actual recoveries
+            restartCount += 1
+            lastRestartReason = reconfigure ? "config/route" : "interruption/route"
         }
         started = engine.isRunning
     }
