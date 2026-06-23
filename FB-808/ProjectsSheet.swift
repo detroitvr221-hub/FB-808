@@ -214,7 +214,7 @@ struct ProjectsSheet: View {
     }
     private func doOpen(_ item: SavedProject) {
         guard let snap = store.load(item) else { return }
-        project.restore(snap)
+        project.restore(store.repaired(snap))   // item 9: load into a clean, repaired state
         nameField = project.name
         dismiss()
     }

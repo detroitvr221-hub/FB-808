@@ -175,8 +175,8 @@ struct RootView: View {
                     ?? (store.lastProjectName.flatMap { store.loadByName($0) })
                     ?? (store.items.first.flatMap { store.load($0) })
                 if let snap = loaded {
-                    project.restore(snap)
-                    let miss = store.missingAudioAssets(in: snap)   // warn instead of silently playing nothing (Phase 8)
+                    let miss = store.missingAudioAssets(in: snap)   // warn from the RAW snap before repair clears the refs
+                    project.restore(store.repaired(snap))           // load into a clean state (item 9 health repair)
                     if !miss.isEmpty { missingAudio = miss }
                 }
                 settings.mergeLegacySavedSynths(project.savedSynths)   // migrate per-project saved patches → global library (#67)
@@ -202,7 +202,7 @@ struct RootView: View {
         .onChange(of: settings.equalPowerPan) { _, _ in applyAudio() }
         .onChange(of: settings.bandlimitedOsc) { _, _ in applyAudio() }
         .alert("Recover unsaved changes?", isPresented: Binding(get: { recoverSnap != nil }, set: { if !$0 { recoverSnap = nil } })) {
-            Button("Recover") { if let s = recoverSnap { project.restore(s) }; store.clearAutosave(); recoverSnap = nil }
+            Button("Recover") { if let s = recoverSnap { project.restore(store.repaired(s)) }; store.clearAutosave(); recoverSnap = nil }
             Button("Discard", role: .destructive) { store.clearAutosave(); recoverSnap = nil }
         } message: { Text("FD·808 closed with edits that were never saved. Recover them, or keep the last saved version?") }
         .alert("Some audio is missing", isPresented: Binding(get: { !missingAudio.isEmpty }, set: { if !$0 { missingAudio = [] } })) {
