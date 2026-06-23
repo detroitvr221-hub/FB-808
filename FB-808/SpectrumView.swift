@@ -12,6 +12,11 @@ final class SpectrumAnalyzer {
     private let log2n: vDSP_Length
     private let setup: FFTSetup
     private var window: [Float]
+    private var windowed: [Float]
+    private var real: [Float]
+    private var imag: [Float]
+    private var mags: [Float]
+    private var bandsScratch: [Float]
     let bandCount: Int
     private let edges: [Int]   // bin index per band edge (log-spaced)
 
@@ -23,6 +28,11 @@ final class SpectrumAnalyzer {
         window = [Float](repeating: 0, count: n)
         vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
         let half = n / 2
+        windowed = [Float](repeating: 0, count: n)
+        real = [Float](repeating: 0, count: half)
+        imag = [Float](repeating: 0, count: half)
+        mags = [Float](repeating: 0, count: half)
+        bandsScratch = [Float](repeating: 0, count: bands)
         var e: [Int] = []
         for b in 0...bands { e.append(max(1, min(half - 1, Int(pow(Double(half), Double(b) / Double(bands)))))) }
         edges = e
@@ -32,18 +42,19 @@ final class SpectrumAnalyzer {
     /// `bandCount` normalized (0..1) log-spaced magnitudes from the most recent `n` samples.
     func analyze(_ input: [Float]) -> [Float] {
         guard input.count >= n else { return [Float](repeating: 0, count: bandCount) }
-        let recent = Array(input.suffix(n))
-        var windowed = [Float](repeating: 0, count: n)
-        vDSP_vmul(recent, 1, window, 1, &windowed, 1, vDSP_Length(n))
+        input.withUnsafeBufferPointer { ip in
+            guard let base = ip.baseAddress else { return }
+            let start = base.advanced(by: input.count - n)
+            vDSP_vmul(start, 1, window, 1, &windowed, 1, vDSP_Length(n))
+        }
         let half = n / 2
-        var real = [Float](repeating: 0, count: half)
-        var imag = [Float](repeating: 0, count: half)
-        var mags = [Float](repeating: 0, count: half)
         real.withUnsafeMutableBufferPointer { rp in
             imag.withUnsafeMutableBufferPointer { ip in
-                var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                guard let realBase = rp.baseAddress, let imagBase = ip.baseAddress else { return }
+                var split = DSPSplitComplex(realp: realBase, imagp: imagBase)
                 windowed.withUnsafeBufferPointer { wp in
-                    wp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { cp in
+                    guard let winBase = wp.baseAddress else { return }
+                    winBase.withMemoryRebound(to: DSPComplex.self, capacity: half) { cp in
                         vDSP_ctoz(cp, 2, &split, 1, vDSP_Length(half))
                     }
                 }
@@ -51,15 +62,14 @@ final class SpectrumAnalyzer {
                 vDSP_zvabs(&split, 1, &mags, 1, vDSP_Length(half))
             }
         }
-        var bands = [Float](repeating: 0, count: bandCount)
         for b in 0..<bandCount {
             let lo = edges[b], hi = max(lo + 1, edges[b + 1])
             var peak: Float = 0
             for k in lo..<hi { peak = Swift.max(peak, mags[k]) }
             let db = 20 * log10(Swift.max(1e-7, peak / Float(n)))   // ≈ −140..~0 dBFS
-            bands[b] = Swift.max(0, Swift.min(1, (db + 75) / 75))    // map −75..0 dB → 0..1
+            bandsScratch[b] = Swift.max(0, Swift.min(1, (db + 75) / 75))    // map −75..0 dB → 0..1
         }
-        return bands
+        return bandsScratch
     }
 
     /// The center frequency (Hz) of a band, for tests/labels.

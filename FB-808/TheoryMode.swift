@@ -268,8 +268,8 @@ struct EarTrainingView: View {
     }
 
     private func newRound() {
-        root = [55, 57, 60, 62, 64].randomElement()!
-        interval = options.randomElement()!.semi
+        root = [55, 57, 60, 62, 64].randomElement() ?? 60
+        interval = options.randomElement()?.semi ?? 7
         answered = nil
         play()
     }

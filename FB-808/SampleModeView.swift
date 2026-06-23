@@ -483,14 +483,18 @@ struct SampleModeView: View {
     /// Load a SoundFont (.sf2) → a multisample instrument on the Synth keyboard.
     private func handleSF2(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { flash("Couldn't read that .sf2"); return }
         engine.start()
-        if let name = project.loadSoundFont(data) {
-            flash("Loaded \(name) — play it on the Synth keyboard")
-        } else {
-            flash("Couldn't parse that SoundFont")
+        Task {
+            let data: Data?
+            let scoped = url.startAccessingSecurityScopedResource()
+            data = try? Data(contentsOf: url)
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            guard let data else { flash("Couldn't read that .sf2"); return }
+            if let name = project.loadSoundFont(data) {
+                flash("Loaded \(name) — play it on the Synth keyboard")
+            } else {
+                flash("Couldn't parse that SoundFont")
+            }
         }
     }
 

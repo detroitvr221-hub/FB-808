@@ -14,7 +14,10 @@ enum SampleEngine {
 
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let srcFmt = file.processingFormat
-        let frames = AVAudioFrameCount(file.length)
+        guard srcFmt.sampleRate > 0, maxSeconds > 0 else { return nil }
+        let maxSourceFrames = AVAudioFramePosition(ceil(srcFmt.sampleRate * maxSeconds))
+        let readableFrames = min(file.length, maxSourceFrames, AVAudioFramePosition(AVAudioFrameCount.max))
+        let frames = AVAudioFrameCount(readableFrames)
         guard frames > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: srcFmt, frameCapacity: frames) else { return nil }
         do { try file.read(into: inBuf) } catch { return nil }
 

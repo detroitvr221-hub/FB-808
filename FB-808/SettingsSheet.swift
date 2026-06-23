@@ -152,8 +152,8 @@ struct SettingsSheet: View {
             diagRow("Render load", "\(loadPct)%  ·  \(String(format: "%.2f/%.2f ms", d.renderMs, d.budgetMs))", loadColor)
             diagRow("Active voices", "\(d.activeVoices) / \(settings.polyphony)", settings.ink)
             diagRow("Peak", String(format: "%.2f", d.peak), d.peak >= 1.04 ? settings.theme.perfect : settings.ink)
-            diagRow("Overruns · clips · steals", "\(d.overruns) · \(d.clips) · \(d.steals)",
-                    (d.overruns > 0 ? settings.theme.miss : settings.ink))
+            diagRow("Underruns · clips · steals · dropped", "\(d.overruns) · \(d.clips) · \(d.steals) · \(d.droppedCommands)",
+                    ((d.overruns > 0 || d.droppedCommands > 0) ? settings.theme.miss : settings.ink))
             diagRow("Sample rate", String(format: "%.0f Hz", d.sampleRate), settings.inkDim)
             diagRow("Route", engine.sessionMgr.summary, settings.inkDim)
             diagRow("MIDI in", midi.summary, settings.inkDim)
@@ -162,6 +162,21 @@ struct SettingsSheet: View {
                     : "idle",
                     engine.isMicRecording ? settings.theme.miss : settings.inkDim)
             diagRow("Engine restarts", "\(engine.restartCount)\(engine.lastRestartReason.isEmpty ? "" : " · \(engine.lastRestartReason)")", settings.inkDim)
+            let recent = Array(engine.telemetry.suffix(3))
+            if !recent.isEmpty {
+                Divider().overlay(settings.line)
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(recent) { e in
+                        Text("• \(e.kind): \(e.detail)").font(FDFont.mono(10.5)).foregroundStyle(settings.inkFaint)
+                            .lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            ShareLink(item: engine.telemetryReport()) {
+                Text("Copy / share diagnostics").font(FDFont.ui(12.5, .semibold)).foregroundStyle(settings.accent)
+                    .frame(maxWidth: .infinity).frame(height: 34)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent.opacity(0.12)))
+            }.padding(.top, 2)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))

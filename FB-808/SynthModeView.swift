@@ -949,8 +949,8 @@ struct SynthRoll: View {
                 project.drawActiveNote(pitch: pitch, start: cell, len: 1)
                 project.previewNote(midi: pitch)
             }
-        } else if drawDrag!.start >= 0 {
-            project.drawActiveNote(pitch: drawDrag!.pitch, start: drawDrag!.start, len: max(1, cell - drawDrag!.start + 1))
+        } else if let drag = drawDrag, drag.start >= 0 {
+            project.drawActiveNote(pitch: drag.pitch, start: drag.start, len: max(1, cell - drag.start + 1))
         }
     }
 

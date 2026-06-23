@@ -509,10 +509,10 @@ struct SequenceModeView: View {
             painting = (val, col)
             project.setStepVel(padID, col, val)
             if val > 0 { engine.start(); project.triggerPad(padID) }
-        } else if painting!.lastCol != col {
-            project.setStepVel(padID, col, painting!.val)
-            if painting!.val > 0 { project.triggerPad(padID) }
-            painting!.lastCol = col
+        } else if let current = painting, current.lastCol != col {
+            project.setStepVel(padID, col, current.val)
+            if current.val > 0 { project.triggerPad(padID) }
+            painting = (current.val, col)
         }
     }
 

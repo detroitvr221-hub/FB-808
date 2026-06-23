@@ -346,17 +346,18 @@ final class Project: ObservableObject {
     // token stamped into the snapshot a checkpoint captures, so undo/redo can restore the AUDIO too.
     private var sampleBufferRing: [(key: String, buffer: [Float])] = []
     private let sampleBufferRingCap = 12
+    private let sampleBufferRingMaxFrames = 8_000_000   // ~32 MB of Float PCM; avoids runaway undo memory
     private var nextBufferToken = 0
     private var pendingBufferToken: Int? = nil   // read by snapshot() at the next checkpoint
 
     init(engine: AudioEngine) {
         self.engine = engine
-        let l0 = Kit.lanesFromSteps(Kit.pattern("boombap")!.steps)
+        let l0 = Kit.lanesFromSteps(Kit.pattern("boombap")?.steps ?? [])
         self.lanes = l0
         self.sequences = [
             SeqSlot(name: "A", lanes: l0, melody: []),
-            SeqSlot(name: "B", lanes: Kit.lanesFromSteps(Kit.pattern("house")!.steps), melody: []),
-            SeqSlot(name: "C", lanes: Kit.lanesFromSteps(Kit.pattern("trap")!.steps), melody: []),
+            SeqSlot(name: "B", lanes: Kit.lanesFromSteps(Kit.pattern("house")?.steps ?? []), melody: []),
+            SeqSlot(name: "C", lanes: Kit.lanesFromSteps(Kit.pattern("trap")?.steps ?? []), melody: []),
             SeqSlot(name: "D", lanes: [:], melody: []),
         ]
         var m: [String: MixChannel] = [:]
@@ -701,9 +702,10 @@ final class Project: ObservableObject {
         clips[track]?[i].muted.toggle()
     }
     func setClipLength(track: String, id: UUID, _ l: Int) {
-        guard let i = clips[track]?.firstIndex(where: { $0.id == id }) else { return }
+        guard var arr = clips[track], let i = arr.firstIndex(where: { $0.id == id }) else { return }
         checkpoint("cliplen", coalesce: false)
-        clips[track]?[i].l = max(1, min(songBars - clips[track]![i].s, l))
+        arr[i].l = max(1, min(songBars - arr[i].s, l))
+        clips[track] = arr
     }
 
     // MARK: time-range arrangement ops (FL-Mobile Playlist style)
@@ -907,10 +909,10 @@ final class Project: ObservableObject {
     func addAudioClip(track: String, startBar: Int, data: [Float], name: String) {
         guard !data.isEmpty else { return }
         checkpoint("addClip", coalesce: false)
-        let dur = Double(data.count) / 48_000.0
+        let dur = Double(data.count) / engine.sampleRate
         let clip = AudioClip(track: track, startBar: max(0, min(songBars - 1, startBar)),
                              data: data, wave: Project.downsamplePeaks(data), name: name, durSec: dur)
-        writeClipWAV(data, id: clip.id)   // persist audio at creation; metadata saves with the project
+        writeClipWAV(data, id: clip.id, sr: engine.sampleRate)   // persist audio at creation; metadata saves with the project
         audioClips.append(clip)
     }
     func removeAudioClip(_ id: UUID) {
@@ -922,9 +924,9 @@ final class Project: ObservableObject {
     func loadAudioClips(from metas: [AudioClipMeta]) {
         var clips: [AudioClip] = []
         for m in metas {
-            guard let uuid = UUID(uuidString: m.id), let data = readClipWAV(id: uuid), !data.isEmpty else { continue }
+            guard let uuid = UUID(uuidString: m.id), let data = readClipWAV(id: uuid, targetSR: engine.sampleRate), !data.isEmpty else { continue }
             var clip = AudioClip(track: m.track, startBar: m.startBar, data: data,
-                                 wave: Project.downsamplePeaks(data), name: m.name, durSec: m.durSec)
+                                 wave: Project.downsamplePeaks(data), name: m.name, durSec: Double(data.count) / engine.sampleRate)
             clip.id = uuid; clip.gain = m.gain; clip.muted = m.muted
             clips.append(clip)
         }
@@ -951,7 +953,7 @@ final class Project: ObservableObject {
     private func applyPadSample(_ padID: String, data: [Float], name: String) {
         if let old = padParams[padID]?.sampleFile { deletePadSampleWAV(file: old) }
         let file = UUID().uuidString + ".wav"
-        writePadSampleWAV(data, file: file)
+        writePadSampleWAV(data, file: file, sr: engine.sampleRate)
         padSampleData[padID] = data
         engine.registerPadSample(padID, data)
         var p = padParams[padID] ?? PadParam()
@@ -991,7 +993,7 @@ final class Project: ObservableObject {
         let (l, r) = renderOffline(plan)   // trims trailing silence, so it may be shorter than a full bar
         guard !l.isEmpty else { return }
         let barSec = Double(max(1, barSteps)) * (60.0 / Double(bpm)) / 4.0
-        let frames = max(1, Int((Double(bars) * barSec * 48_000.0).rounded()))   // exact bar length → seamless loop
+        let frames = max(1, Int((Double(bars) * barSec * engine.sampleRate).rounded()))   // exact bar length → seamless loop
         var mono = [Float](repeating: 0, count: frames)   // pads with silence to the bar line; truncates any tail past it
         var peak: Float = 0
         for i in 0..<min(frames, l.count) { let v = (l[i] + r[i]) * 0.5; mono[i] = v; peak = max(peak, abs(v)) }
@@ -1059,7 +1061,7 @@ final class Project: ObservableObject {
         for padID in padSampleData.keys { engine.clearPadSample(padID) }   // drop stale registrations
         padSampleData.removeAll()
         for (padID, pp) in padParams {
-            guard let file = pp.sampleFile, let data = readPadSampleWAV(file: file), !data.isEmpty else { continue }
+            guard let file = pp.sampleFile, let data = readPadSampleWAV(file: file, targetSR: engine.sampleRate), !data.isEmpty else { continue }
             padSampleData[padID] = data
             engine.registerPadSample(padID, data)
         }
@@ -1072,12 +1074,12 @@ final class Project: ObservableObject {
         let data = engine.currentSampleOriginal()
         guard !data.isEmpty else { return }
         let file = s.audioFile ?? (UUID().uuidString + ".wav")
-        writePadSampleWAV(data, file: file)
+        writePadSampleWAV(data, file: file, sr: engine.sampleRate)
         if s.audioFile != file { s.audioFile = file; sample = s }
     }
     /// On disk-load, push the saved sample buffer back into the engine and re-apply its tools.
     func loadSampleAudio() {
-        guard let s = sample, let file = s.audioFile, let data = readPadSampleWAV(file: file), !data.isEmpty else { return }
+        guard let s = sample, let file = s.audioFile, let data = readPadSampleWAV(file: file, targetSR: engine.sampleRate), !data.isEmpty else { return }
         _ = engine.importBuffer(data)   // sets engine original + data, recomputes wave
         let edits = (s.tools["normalize"] ?? false) || (s.tools["reverse"] ?? false)
             || (s.tools["fadeIn"] ?? false) || (s.tools["fadeOut"] ?? false) || abs(s.gain - 1) > 0.001
@@ -1134,7 +1136,7 @@ final class Project: ObservableObject {
                 if r < 0.55 { move = Bool.random() ? 1 : -1 }
                 else if r < 0.8 { move = Bool.random() ? 2 : -2 }
                 else if r < 0.92 { move = 0 }
-                else { move = [3, -3, 4, -4].randomElement()! }
+                else { move = [3, -3, 4, -4].randomElement() ?? 3 }
                 idx = max(0, min(ladder.count - 1, idx + move))
             }
             let nextS = k + 1 < onsetSteps.count ? onsetSteps[k + 1] : 16
@@ -1229,7 +1231,14 @@ final class Project: ObservableObject {
     // MARK: sampler-buffer undo (#19)
 
     private func trimSampleRing() {
-        if sampleBufferRing.count > sampleBufferRingCap { sampleBufferRing.removeFirst(sampleBufferRing.count - sampleBufferRingCap) }
+        if sampleBufferRing.count > sampleBufferRingCap {
+            sampleBufferRing.removeFirst(sampleBufferRing.count - sampleBufferRingCap)
+        }
+        var frames = sampleBufferRing.reduce(0) { $0 + $1.buffer.count }
+        while frames > sampleBufferRingMaxFrames, let first = sampleBufferRing.first {
+            frames -= first.buffer.count
+            sampleBufferRing.removeFirst()
+        }
     }
     /// Run a destructive/tool sampler edit as ONE undo step, capturing the engine's pre-edit
     /// `sampleOriginal` so undo/redo can restore the AUDIO, not just SampleState.
