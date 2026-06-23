@@ -30,7 +30,9 @@ class ObservableAUParameterNode {
         case let group as AUParameterGroup:
             return ObservableAUParameterGroup(group)
         default:
-            fatalError("Unexpected AUParameterNode subclass")
+            // A malformed/unknown node type must NOT crash the extension UI — degrade to an empty group.
+            assertionFailure("Unexpected AUParameterNode subclass: \(type(of: parameterNode))")
+            return ObservableAUParameterGroup.empty()
         }
     }
 
@@ -59,33 +61,24 @@ class ObservableAUParameterNode {
 
     subscript(dynamicMember identifier: String) -> ObservableAUParameterNode {
         guard let groupSelf = self as? ObservableAUParameterGroup else {
-            fatalError("Calling subscript is only supported on ObservableAUParameterGroups, you called it on \(self)")
+            assertionFailure("dynamicMember subscript is only valid on a group; called on \(self)")
+            return ObservableAUParameterGroup.empty()
         }
-
         guard let parameter = groupSelf.children[identifier] else {
-            if groupSelf.children.isEmpty {
-                fatalError("This group has no children")
-            }
-
-            let availableChildren = groupSelf.children.keys.joined(separator: "\n")
-
-            print("Parameter Group \(groupSelf) doesn't have a child node named \(identifier), did you mean one of: \n \(availableChildren)")
-            fatalError()
-        }
-
-        return parameter
-    }
-
-    private func asParameter() -> ObservableAUParameter {
-        guard let parameter = self as? ObservableAUParameter else {
-            fatalError("Node is not a parameter")
+            // Missing child (e.g. a malformed/incomplete tree) → empty node instead of a crash; chained
+            // accesses keep degrading to no-ops rather than killing the extension UI.
+            assertionFailure("Parameter group has no child '\(identifier)' (have: \(groupSelf.children.keys.sorted().joined(separator: ", ")))")
+            return ObservableAUParameterGroup.empty()
         }
         return parameter
     }
 
     subscript(dynamicMember keyPath: ReferenceWritableKeyPath<ObservableAUParameter, Float>) -> Float {
-        get { self.asParameter()[keyPath: keyPath] }
-        set { self.asParameter()[keyPath: keyPath] = newValue }
+        get {
+            guard let p = self as? ObservableAUParameter else { assertionFailure("value read on non-parameter node \(self)"); return 0 }
+            return p[keyPath: keyPath]
+        }
+        set { (self as? ObservableAUParameter)?[keyPath: keyPath] = newValue }   // no-op on a non-parameter node
     }
 }
 
@@ -105,6 +98,11 @@ final class ObservableAUParameterGroup: ObservableAUParameterNode {
             dict[node.identifier] = observableNode
         }
     }
+
+    private init(empty: Void) { children = [:] }
+    /// Safe fallback node for malformed/incomplete parameter trees (see ObservableAUParameterNode.create
+    /// and the dynamicMember subscripts) — renders nothing instead of crashing the extension UI.
+    static func empty() -> ObservableAUParameterGroup { ObservableAUParameterGroup(empty: ()) }
 }
 
 /// An Observable version of AUParameter
