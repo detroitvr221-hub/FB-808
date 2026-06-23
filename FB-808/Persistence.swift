@@ -98,7 +98,7 @@ nonisolated func deletePadSampleWAV(file: String) {
     try? FileManager.default.removeItem(at: fd808SampleDir().appendingPathComponent(file))
 }
 
-struct SavedProject: Identifiable, Hashable {
+struct SavedProject: Identifiable, Hashable, Sendable {
     let id: String          // filename stem (file-system identity; Identifiable/list key)
     var projectID: String?  // stable embedded UUID (#219); nil for un-migrated name-keyed files
     var name: String
@@ -118,8 +118,8 @@ final class ProjectStore: ObservableObject {
     private let autosaveStem = "__autosave__"   // crash/quit recovery slot, hidden from the saved list
 
     // Lightweight name/id header — decodes the JSON object without allocating the 58 heavy snapshot fields.
-    private struct ProjectHeader: Decodable { var id: String?; var name: String? }
-    private struct HeaderCacheEntry { var mtime: Date; var size: Int; var id: String?; var name: String }
+    private struct ProjectHeader: Decodable, Sendable { var id: String?; var name: String? }
+    private struct HeaderCacheEntry: Sendable { var mtime: Date; var size: Int; var id: String?; var name: String }
     private var headerCache: [String: HeaderCacheEntry] = [:]   // keyed by file path; reset per launch
     private var autosaveURL: URL { dir.appendingPathComponent("\(autosaveStem).\(ext)") }
 
@@ -146,79 +146,103 @@ final class ProjectStore: ObservableObject {
     }
     private func fileURL(_ name: String) -> URL { dir.appendingPathComponent("\(sanitize(name)).\(ext)") }
 
-    func refresh() {
+    /// Fire-and-forget UI refresh of the saved-project list (post save/delete/rename). The directory scan +
+    /// cold-path header decode run OFF the main actor; `items` updates when done.
+    func refresh() { Task { await reload() } }
+
+    /// Awaitable variant: scans off the main actor and resolves once `items` is populated. The launch path
+    /// awaits this so it can resolve the last project against a ready list (loadByID / items.first).
+    @discardableResult
+    func reload() async -> [SavedProject] {
+        let dirURL = dir, fileExt = ext, autoStem = autosaveStem
+        let cache = headerCache
+        let result = await Task.detached(priority: .utility) {
+            Self.scanProjects(dir: dirURL, ext: fileExt, autosaveStem: autoStem, cache: cache)
+        }.value
+        headerCache = result.cache
+        items = result.items
+        return result.items
+    }
+
+    /// Pure off-main scan: directory listing + per-file {id,name} header decode, reusing `cache` for unchanged
+    /// files (same mtime+size → zero decode, #217). Returns the newest-first list + the pruned cache.
+    nonisolated private static func scanProjects(dir: URL, ext: String, autosaveStem: String,
+                                                 cache: [String: HeaderCacheEntry]) -> (items: [SavedProject], cache: [String: HeaderCacheEntry]) {
         let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])) ?? []
         var out: [SavedProject] = []
-        var seenPaths = Set<String>()
+        var newCache: [String: HeaderCacheEntry] = [:]
         for u in urls where u.pathExtension == ext && u.deletingPathExtension().lastPathComponent != autosaveStem {
-            seenPaths.insert(u.path)
             let stem = u.deletingPathExtension().lastPathComponent
             let rv = try? u.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let mod = rv?.contentModificationDate ?? .distantPast
             let size = rv?.fileSize ?? -1
-            // Warm path: unchanged file (same mtime + size) reuses the cached header with zero decode (#217).
-            if let c = headerCache[u.path], c.mtime == mod, c.size == size {
+            if let c = cache[u.path], c.mtime == mod, c.size == size {   // warm: unchanged → reuse cached header
+                newCache[u.path] = c
                 out.append(SavedProject(id: stem, projectID: c.id, name: c.name, modified: mod, url: u))
                 continue
             }
-            // Cold path: decode ONLY the tiny {id, name} header, not the full 58-field snapshot.
-            var nm = stem
-            var pid: String? = nil
+            var nm = stem; var pid: String? = nil   // cold: decode ONLY the tiny {id,name} header
             if let data = try? Data(contentsOf: u),
                let h = try? JSONDecoder().decode(ProjectHeader.self, from: data) {
                 if let n = h.name, !n.isEmpty { nm = n }
                 pid = h.id
             }
-            headerCache[u.path] = HeaderCacheEntry(mtime: mod, size: size, id: pid, name: nm)
+            newCache[u.path] = HeaderCacheEntry(mtime: mod, size: size, id: pid, name: nm)
             out.append(SavedProject(id: stem, projectID: pid, name: nm, modified: mod, url: u))
         }
-        headerCache = headerCache.filter { seenPaths.contains($0.key) }   // drop entries for deleted files
-        items = out.sorted { $0.modified > $1.modified }
+        return (out.sorted { $0.modified > $1.modified }, newCache)
     }
 
+    /// JSON encode + atomic write run OFF the main actor (the save hitch for large projects); the
+    /// bookkeeping + refresh resume on the main actor. ProjectSnapshot is Sendable so it crosses cleanly.
     @discardableResult
-    func save(_ snap: ProjectSnapshot) -> Bool {
+    func save(_ snap: ProjectSnapshot) async -> Bool {
         let url = fileURL(snap.name)
-        do {
-            let enc = JSONEncoder()
-            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(snap).write(to: url, options: .atomic)
-            lastProjectName = snap.name
-            lastProjectID = snap.id   // snapshot() always stamps a non-nil id by the time save() runs (#219)
-            // If the open project was previously saved under a different name, remove the stale file so a
-            // name change via Save behaves as a MOVE, not an orphaning copy that shares this projectID (#219).
-            if let pid = snap.id {
-                for it in items where it.projectID == pid && it.url.path != url.path {
-                    try? FileManager.default.removeItem(at: it.url)
-                }
+        let ok = await Task.detached(priority: .userInitiated) { Self.writeSnapshot(snap, to: url, pretty: true) }.value
+        guard ok else { print("project save error"); return false }
+        lastProjectName = snap.name
+        lastProjectID = snap.id   // snapshot() always stamps a non-nil id by the time save() runs (#219)
+        // If the open project was previously saved under a different name, remove the stale file so a
+        // name change via Save behaves as a MOVE, not an orphaning copy that shares this projectID (#219).
+        if let pid = snap.id {
+            for it in items where it.projectID == pid && it.url.path != url.path {
+                try? FileManager.default.removeItem(at: it.url)
             }
-            refresh()
-            return true
-        } catch {
-            print("project save error: \(error)")
-            return false
         }
+        refresh()
+        return true
+    }
+    /// Pure encode+atomic-write, safe to call off the main actor (no actor state touched).
+    nonisolated static func writeSnapshot(_ snap: ProjectSnapshot, to url: URL, pretty: Bool) -> Bool {
+        let enc = JSONEncoder(); enc.outputFormatting = pretty ? [.prettyPrinted, .sortedKeys] : [.sortedKeys]
+        do { try enc.encode(snap).write(to: url, options: .atomic); return true } catch { return false }
+    }
+    /// Pure read+decode, safe to call off the main actor.
+    nonisolated static func decodeSnapshot(_ url: URL) -> ProjectSnapshot? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(ProjectSnapshot.self, from: d)
     }
 
-    func load(_ item: SavedProject) -> ProjectSnapshot? {
-        guard let data = try? Data(contentsOf: item.url),
-              let snap = try? JSONDecoder().decode(ProjectSnapshot.self, from: data) else { return nil }
+    /// Read + decode OFF the main actor (no open hitch on large projects), then stamp the "last opened"
+    /// keys back on the main actor.
+    func load(_ item: SavedProject) async -> ProjectSnapshot? {
+        let url = item.url
+        guard let snap = await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url) }).value else { return nil }
         lastProjectName = snap.name
         lastProjectID = snap.id
         return snap
     }
 
-    func loadByName(_ name: String) -> ProjectSnapshot? {
-        guard let data = try? Data(contentsOf: fileURL(name)),
-              let snap = try? JSONDecoder().decode(ProjectSnapshot.self, from: data) else { return nil }
-        return snap
+    func loadByName(_ name: String) async -> ProjectSnapshot? {
+        let url = fileURL(name)
+        return await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url) }).value
     }
 
     /// Load the saved project whose embedded stable id matches (#219). Skips un-migrated
     /// (nil-id) files so nil never matches nil. Uses the cached `items` list to pick the file.
-    func loadByID(_ id: String) -> ProjectSnapshot? {
+    func loadByID(_ id: String) async -> ProjectSnapshot? {
         for it in items where it.projectID == id {
-            if let s = load(it) { return s }
+            if let s = await load(it) { return s }
         }
         return nil
     }
@@ -232,14 +256,8 @@ final class ProjectStore: ObservableObject {
 
     func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: fileURL(name).path) }
 
-    private func decode(_ url: URL) -> ProjectSnapshot? {
-        guard let d = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(ProjectSnapshot.self, from: d)
-    }
-    private func writeSnap(_ snap: ProjectSnapshot, to url: URL) {
-        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? enc.encode(snap).write(to: url, options: .atomic)
-    }
+    private func decode(_ url: URL) -> ProjectSnapshot? { Self.decodeSnapshot(url) }   // rename/duplicate (infrequent, sync)
+    private func writeSnap(_ snap: ProjectSnapshot, to url: URL) { _ = Self.writeSnapshot(snap, to: url, pretty: true) }
     /// True when `name` resolves to a file that belongs to a DIFFERENT project than `item`
     /// (so a rename to it would overwrite). sanitize() can collapse distinct names onto one file,
     /// so this checks the resolved path, not the raw string.
@@ -303,12 +321,12 @@ final class ProjectStore: ObservableObject {
     /// Write the current state to the hidden recovery slot (no list refresh, no lastProject change).
     /// Cheap to call on scenePhase changes; the arrangement is what matters (sample WAVs aren't re-flushed here).
     func autosave(_ snap: ProjectSnapshot) {
-        let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
-        if let data = try? enc.encode(snap) { try? data.write(to: autosaveURL, options: .atomic) }
+        let url = autosaveURL
+        Task.detached(priority: .utility) { _ = Self.writeSnapshot(snap, to: url, pretty: false) }   // off-main, fire-and-forget
     }
-    func autosaveSnapshot() -> ProjectSnapshot? {
-        guard let data = try? Data(contentsOf: autosaveURL) else { return nil }
-        return try? JSONDecoder().decode(ProjectSnapshot.self, from: data)
+    func autosaveSnapshot() async -> ProjectSnapshot? {
+        let url = autosaveURL
+        return await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url) }).value
     }
     /// True when a recovery file exists and is newer than every named save — i.e. the app was quit
     /// or crashed with unsaved edits. (`items` is sorted newest-first and excludes the recovery slot.)
@@ -324,6 +342,14 @@ final class ProjectStore: ObservableObject {
     /// Delete WAVs in FD808Audio / FD808Samples that NO saved project (or the autosave slot) references,
     /// reclaiming storage leaked by deleted clips/samples/projects. Cheap one-shot; call on launch.
     func sweepOrphanWAVs() {
+        let projectDir = dir
+        let projectExt = ext
+        Task.detached(priority: .utility) {
+            Self.sweepOrphanWAVs(projectDir: projectDir, ext: projectExt)
+        }
+    }
+
+    nonisolated private static func sweepOrphanWAVs(projectDir dir: URL, ext: String) {
         var audioFiles = Set<String>()    // FD808Audio/<uuid>.wav
         var sampleFiles = Set<String>()   // FD808Samples/<file>
         let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
@@ -334,10 +360,10 @@ final class ProjectStore: ObservableObject {
             for (_, pp) in snap.padParams { if let f = pp.sampleFile { sampleFiles.insert(f) } }
             if let f = snap.sample?.audioFile { sampleFiles.insert(f) }
         }
-        sweep(fd808AudioDir(), keep: audioFiles)
-        sweep(fd808SampleDir(), keep: sampleFiles)
+        sweepDir(fd808AudioDir(), keep: audioFiles)
+        sweepDir(fd808SampleDir(), keep: sampleFiles)
     }
-    private func sweep(_ d: URL, keep: Set<String>) {
+    nonisolated private static func sweepDir(_ d: URL, keep: Set<String>) {
         let files = (try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: nil)) ?? []
         for f in files where f.pathExtension == "wav" && !keep.contains(f.lastPathComponent) {
             try? FileManager.default.removeItem(at: f)

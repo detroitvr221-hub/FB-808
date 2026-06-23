@@ -168,21 +168,27 @@ struct RootView: View {
             }
             if !didAutoLoad {
                 didAutoLoad = true
-                // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
-                // then fall back to the legacy name key (sessions saved before id-keying), then to the
-                // most-recent saved project so the user is never silently dropped to a blank default.
-                let loaded = (store.lastProjectID.flatMap { store.loadByID($0) })
-                    ?? (store.lastProjectName.flatMap { store.loadByName($0) })
-                    ?? (store.items.first.flatMap { store.load($0) })
-                if let snap = loaded {
-                    let miss = store.missingAudioAssets(in: snap)   // warn from the RAW snap before repair clears the refs
-                    project.restore(store.repaired(snap))           // load into a clean state (item 9 health repair)
-                    if !miss.isEmpty { missingAudio = miss }
+                // Disk reads run off the main actor (no launch hitch on large projects); the sequence below
+                // stays ordered via sequential awaits on the main actor.
+                Task { @MainActor in
+                    await store.reload()   // populate the saved list off-main BEFORE resolving the last project
+                    // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
+                    // then fall back to the legacy name key (pre-id sessions), then to the most-recent save so
+                    // the user is never silently dropped to a blank default.
+                    var loaded: ProjectSnapshot? = nil
+                    if let id = store.lastProjectID { loaded = await store.loadByID(id) }
+                    if loaded == nil, let nm = store.lastProjectName { loaded = await store.loadByName(nm) }
+                    if loaded == nil, let first = store.items.first { loaded = await store.load(first) }
+                    if let snap = loaded {
+                        let miss = store.missingAudioAssets(in: snap)   // warn from the RAW snap before repair clears the refs
+                        project.restore(store.repaired(snap))           // load into a clean state (item 9 health repair)
+                        if !miss.isEmpty { missingAudio = miss }
+                    }
+                    settings.mergeLegacySavedSynths(project.savedSynths)   // migrate per-project saved patches → global library (#67)
+                    if store.hasFreshAutosave() { recoverSnap = await store.autosaveSnapshot() }   // crash/quit recovery
+                    if recoverSnap == nil && !toured { showTour = true }
+                    store.sweepOrphanWAVs()   // reclaim audio leaked by deleted clips/samples/projects
                 }
-                settings.mergeLegacySavedSynths(project.savedSynths)   // migrate per-project saved patches → global library (#67)
-                if store.hasFreshAutosave() { recoverSnap = store.autosaveSnapshot() }   // crash/quit recovery
-                if recoverSnap == nil && !toured { showTour = true }
-                Task { store.sweepOrphanWAVs() }   // reclaim audio leaked by deleted clips/samples/projects
             }
             if !allowed.contains(tab) { tab = allowed.first ?? "pads" }   // route to a level-allowed tab on launch (#263)
         }

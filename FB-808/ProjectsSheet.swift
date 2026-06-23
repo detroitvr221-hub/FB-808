@@ -19,6 +19,7 @@ struct ProjectsSheet: View {
     @State private var renameText = ""
     @State private var renameOverwriteItem: SavedProject?
     @State private var renameOverwriteName = ""
+    @State private var missingAudio: [String] = []
 
     private var trimmedName: String { nameField.trimmingCharacters(in: .whitespaces) }
 
@@ -66,6 +67,11 @@ struct ProjectsSheet: View {
                 renameOverwriteItem = nil
             }
         } message: { Text("A different saved beat already uses this name. Renaming replaces it.") }
+        .alert("Some audio is missing", isPresented: Binding(get: { !missingAudio.isEmpty }, set: { if !$0 { missingAudio = [] } })) {
+            Button("OK") { missingAudio = []; dismiss() }
+        } message: {
+            Text("This project references audio that couldn't be found:\n\n• \(missingAudio.prefix(8).joined(separator: "\n• "))\n\nThe rest of the project loaded fine.")
+        }
     }
 
     /// Rename, but if the target name belongs to a DIFFERENT saved beat, confirm the overwrite first
@@ -135,11 +141,14 @@ struct ProjectsSheet: View {
         project.name = trimmedName.isEmpty ? "Untitled Beat" : trimmedName
         nameField = project.name
         project.persistSampleAudio()   // flush the sampler buffer to disk so it reloads with the project
-        if store.save(project.snapshot()) {
-            project.markSaved()
-            store.clearAutosave()       // explicit save supersedes any recovery file
-            saved = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { saved = false }
+        let snap = project.snapshot()  // capture on the main actor; encode/write happen off-main inside save()
+        Task { @MainActor in
+            if await store.save(snap) {
+                project.markSaved()
+                store.clearAutosave()   // explicit save supersedes any recovery file
+                saved = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { saved = false }
+            }
         }
     }
 
@@ -213,9 +222,16 @@ struct ProjectsSheet: View {
         if project.hasUnsavedChanges { pendingLoad = item } else { doOpen(item) }
     }
     private func doOpen(_ item: SavedProject) {
-        guard let snap = store.load(item) else { return }
-        project.restore(store.repaired(snap))   // item 9: load into a clean, repaired state
-        nameField = project.name
-        dismiss()
+        Task { @MainActor in
+            guard let snap = await store.load(item) else { return }   // read+decode off-main
+            let missing = store.missingAudioAssets(in: snap)
+            project.restore(store.repaired(snap))   // item 9: load into a clean, repaired state
+            nameField = project.name
+            if missing.isEmpty {
+                dismiss()
+            } else {
+                missingAudio = missing
+            }
+        }
     }
 }

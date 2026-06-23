@@ -127,6 +127,8 @@ final class AudioEngine: ObservableObject {
         let unit: AVAudioUnit
     }
     @Published private(set) var masterAUs: [HostedAU] = []
+    private let auQuarantinePrefix = "fd808.auFail."
+    private let auQuarantineThreshold = 2
 
     /// Every installed AUv3 audio effect (+ music effect) the system can load.
     /// Returns nothing in the Simulator — 3rd-party AUv3s only register on device.
@@ -143,6 +145,7 @@ final class AudioEngine: ObservableObject {
 
     /// Instantiate an effect and append it to the master insert chain.
     func addMasterAU(_ comp: AVAudioUnitComponent) async -> Bool {
+        let key = quarantineKey(comp.audioComponentDescription)
         do {
             ensureConfigured()
             let avAU = try await AVAudioUnit.instantiate(with: comp.audioComponentDescription, options: [])
@@ -152,9 +155,11 @@ final class AudioEngine: ObservableObject {
             rebuildMasterChain()
             engine.mainMixerNode.outputVolume = 1
             persistMasterChain()
+            clearAUFailure(key)
             return true
         } catch {
             print("AU load error: \(error)")
+            recordAUFailure(key, name: comp.name)
             return false
         }
     }
@@ -186,6 +191,31 @@ final class AudioEngine: ObservableObject {
 
     // Persist the chain (component IDs + each plugin's fullState) so it reloads next launch.
     private let auChainKey = "fd808.masterAUChain"
+    private let auRestoreSentinelKey = "fd808.auRestoreInFlight"   // set before restore, cleared after → catches a hung/crashed restore
+    struct AUTimeout: Error {}
+    /// Instantiate an AU but give up after `seconds` so a HUNG plugin (which never throws) can't stall
+    /// the restore forever — a timeout is treated as a failure (→ quarantine after repeats).
+    private func instantiateAU(_ desc: AudioComponentDescription, timeout seconds: Double) async throws -> AVAudioUnit {
+        try await withThrowingTaskGroup(of: AVAudioUnit.self) { group in
+            group.addTask { try await AVAudioUnit.instantiate(with: desc, options: []) }
+            group.addTask { try await Task.sleep(nanoseconds: UInt64(seconds * 1e9)); throw AUTimeout() }
+            guard let first = try await group.next() else { throw AUTimeout() }
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private func quarantineKey(_ d: AudioComponentDescription) -> String {
+        "\(auQuarantinePrefix)\(d.componentType)-\(d.componentSubType)-\(d.componentManufacturer)"
+    }
+    private func auFailureCount(_ key: String) -> Int { UserDefaults.standard.integer(forKey: key) }
+    private func isAUQuarantined(_ key: String) -> Bool { auFailureCount(key) >= auQuarantineThreshold }
+    private func recordAUFailure(_ key: String, name: String) {
+        let n = auFailureCount(key) + 1
+        UserDefaults.standard.set(n, forKey: key)
+        logEvent("AUv3 failed", "\(name) · failure \(n)")
+    }
+    private func clearAUFailure(_ key: String) { UserDefaults.standard.removeObject(forKey: key) }
 
     private func persistMasterChain() {
         let arr: [[String: Any]] = masterAUs.map { hosted in
@@ -203,18 +233,39 @@ final class AudioEngine: ObservableObject {
 
     private func restoreMasterChain() {
         guard let arr = UserDefaults.standard.array(forKey: auChainKey) as? [[String: Any]], !arr.isEmpty else { return }
+        // Launch watchdog: if the sentinel is still set, a PREVIOUS launch hung or crashed mid-restore
+        // (a buggy plugin's instantiate/fullState that never returns — which the per-plugin quarantine
+        // can't catch because it never throws). Fail safe: skip AU restore entirely this launch.
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: auRestoreSentinelKey) {
+            defaults.removeObject(forKey: auRestoreSentinelKey); defaults.synchronize()
+            logEvent("AUv3 restore disabled", "previous launch failed mid-restore — skipped; re-add plugins in the mixer")
+            return
+        }
+        defaults.set(true, forKey: auRestoreSentinelKey); defaults.synchronize()   // flush BEFORE the risky work
         Task { @MainActor in
+            defer { defaults.removeObject(forKey: auRestoreSentinelKey); defaults.synchronize() }   // restore finished → clear
             for entry in arr {
                 guard let t = (entry["type"] as? NSNumber)?.uint32Value,
                       let s = (entry["sub"] as? NSNumber)?.uint32Value,
                       let m = (entry["mfr"] as? NSNumber)?.uint32Value else { continue }
                 let desc = AudioComponentDescription(componentType: t, componentSubType: s,
                                                      componentManufacturer: m, componentFlags: 0, componentFlagsMask: 0)
-                guard AVAudioUnitComponentManager.shared().components(matching: desc).first != nil,
-                      let avAU = try? await AVAudioUnit.instantiate(with: desc, options: []) else { continue }
-                if let state = entry["state"] as? [String: Any] { avAU.auAudioUnit.fullState = state }
-                engine.attach(avAU)
-                masterAUs.append(HostedAU(name: avAU.auAudioUnit.audioUnitName ?? "Plugin", unit: avAU))
+                let key = quarantineKey(desc)
+                guard !isAUQuarantined(key) else {
+                    logEvent("AUv3 skipped", "quarantined after repeated restore failures")
+                    continue
+                }
+                guard AVAudioUnitComponentManager.shared().components(matching: desc).first != nil else { continue }
+                do {
+                    let avAU = try await instantiateAU(desc, timeout: 5)   // bound a hung instantiate
+                    if let state = entry["state"] as? [String: Any] { avAU.auAudioUnit.fullState = state }
+                    engine.attach(avAU)
+                    masterAUs.append(HostedAU(name: avAU.auAudioUnit.audioUnitName ?? "Plugin", unit: avAU))
+                    clearAUFailure(key)
+                } catch {
+                    recordAUFailure(key, name: error is AUTimeout ? "Plugin (timed out)" : "Restored plugin")
+                }
             }
             rebuildMasterChain()
         }
