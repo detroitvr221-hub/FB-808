@@ -78,11 +78,11 @@ final class AudioEngine: ObservableObject {
         L.append("Voices      : \(s.diag.activeVoices) · peak \(String(format: "%.2f", s.diag.peak))")
         L.append("Totals      : underruns \(s.diag.overruns) · clips \(s.diag.clips) · steals \(s.diag.steals) · dropped \(s.diag.droppedCommands)")
         L.append(""); L.append("Recent events (newest last):")
-        let fmt = DateFormatter(); fmt.dateFormat = "HH:mm:ss"
         if telemetry.isEmpty { L.append("  (none)") }
-        for e in telemetry.suffix(100) { L.append("  \(fmt.string(from: e.at))  \(e.kind) — \(e.detail)") }
+        for e in telemetry.suffix(100) { L.append("  \(Self.tsFormatter.string(from: e.at))  \(e.kind) — \(e.detail)") }
         return L.joined(separator: "\n")
     }
+    private static let tsFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
 
     init() {}
 

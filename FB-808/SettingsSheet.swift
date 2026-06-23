@@ -232,6 +232,8 @@ struct SettingsSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 10)
                                 .stroke(selected == value ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
                     }.buttonStyle(.plain)
+                        .accessibilityLabel(Text("\(title): \(label)"))
+                        .accessibilityAddTraits(selected == value ? [.isButton, .isSelected] : .isButton)
                 }
             }
         }
@@ -246,6 +248,8 @@ struct SettingsSheet: View {
                         Circle().fill(Color(hex: hex)).frame(width: 34, height: 34)
                             .overlay(Circle().stroke(.white, lineWidth: settings.accentHex == hex ? 2.5 : 0))
                     }.buttonStyle(.plain)
+                        .accessibilityLabel(Text("Accent colour \(hex)"))
+                        .accessibilityAddTraits(settings.accentHex == hex ? [.isButton, .isSelected] : .isButton)
                 }
             }
         }
