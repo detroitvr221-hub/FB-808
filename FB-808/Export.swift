@@ -431,6 +431,8 @@ nonisolated func renderOffline(_ plan: ExportPlan,
     // live engine's smoothed sweep instead of stepping at each breakpoint (parity with SynthCore.render).
     var msvfL = SVF(), msvfR = SVF(), mCutTarget = 20_000.0, mCutSmooth = 20_000.0
     let mCutCoef = 1 - exp(-1.0 / (0.012 * sr))
+    var exPolyGain: Float = 1                                  // polyphony-aware synth gain (mirrors live SynthCore)
+    let exPolyCoef = Float(1 - exp(-1.0 / (0.015 * sr)))
     var safety = SafetyLimiter(sr: sr, ceiling: Float(pow(10, plan.safetyCeilingDb / 20)), enabled: plan.safetyEnabled)
     var aIdx = 0
     // per-channel insert FX (mirrors SynthCore so the export matches live playback)
@@ -477,11 +479,15 @@ nonisolated func renderOffline(_ plan: ExportPlan,
         let scDt = (g - lastKick) / sr
         let scEnv: Float = (scDt >= 0 && scDt < 1) ? Float(exp(-scDt / 0.12)) : 0
         for c in 0..<nch { accL[c] = 0; accR[c] = 0 }
+        var nPoly = 0                                          // polyphony-aware synth gain (mirrors live)
+        for v in active where !v.finished && v.polyScaled { nPoly += 1 }
+        exPolyGain += (Float(1.0 / Double(max(1, nPoly)).squareRoot()) - exPolyGain) * exPolyCoef
         var k = 0
         while k < active.count {
             let v = active[k]
             if v.finished { active.remove(at: k); continue }
-            let s = v.next(sr)
+            var s = v.next(sr)
+            if v.polyScaled { s *= exPolyGain }
             let ch = (v.channel >= 0 && v.channel < nch) ? v.channel : 0
             let (gl, gr) = exportPanGains(v.pan); accL[ch] += s * gl; accR[ch] += s * gr
             if v.finished { active.remove(at: k); continue }
