@@ -43,14 +43,18 @@ enum SoundFont {
     private static func chunks(_ d: Data, from: Int, to: Int) -> [(id: String, off: Int, size: Int)] {
         var out: [(String, Int, Int)] = []
         var p = from
-        while p + 8 <= to {
+        let end = max(0, min(to, d.count))
+        while p >= 0 && p + 8 <= end {
             let id = tag(d, p), size = u32(d, p + 4)
             let body = p + 8
+            guard size >= 0, body <= end, size <= end - body else { break }
             if id == "LIST" {
+                guard size >= 4, body + 4 <= end else { break }
                 out.append((tag(d, body), body + 4, size - 4))   // report the LIST's form-type + inner range
             } else {
                 out.append((id, body, size))
             }
+            guard body + size <= Int.max - 1 else { break }
             p = body + size + (size & 1)   // chunks are word-aligned
         }
         return out
@@ -62,15 +66,25 @@ enum SoundFont {
         // top-level LISTs: INFO, sdta, pdta
         var smplOff = 0, smplLen = 0
         var pdtaRanges: [String: (Int, Int)] = [:]
-        for c in chunks(d, from: 12, to: 8 + u32(d, 4)) {
+        for c in chunks(d, from: 12, to: min(d.count, 8 + u32(d, 4))) {
             if c.id == "sdta" {
-                for s in chunks(d, from: c.off, to: c.off + c.size) where s.id == "smpl" { smplOff = s.off; smplLen = s.size }
+                for s in chunks(d, from: c.off, to: min(d.count, c.off + c.size)) where s.id == "smpl" {
+                    smplOff = s.off
+                    smplLen = s.size
+                }
             } else if c.id == "pdta" {
-                for s in chunks(d, from: c.off, to: c.off + c.size) { pdtaRanges[s.id] = (s.off, s.size) }
+                for s in chunks(d, from: c.off, to: min(d.count, c.off + c.size)) {
+                    pdtaRanges[s.id] = (s.off, s.size)
+                }
             }
         }
         guard smplLen > 0, let shdrR = pdtaRanges["shdr"], let instR = pdtaRanges["inst"],
               let ibagR = pdtaRanges["ibag"], let igenR = pdtaRanges["igen"] else { return nil }
+        guard smplOff >= 0, smplLen >= 0, smplOff <= d.count - smplLen,
+              shdrR.0 >= 0, shdrR.1 >= 0, shdrR.0 <= d.count - shdrR.1,
+              instR.0 >= 0, instR.1 >= 44, instR.0 <= d.count - instR.1,
+              ibagR.0 >= 0, ibagR.1 >= 8, ibagR.0 <= d.count - ibagR.1,
+              igenR.0 >= 0, igenR.1 >= 4, igenR.0 <= d.count - igenR.1 else { return nil }
 
         // sample headers (46 bytes each)
         struct SH { var start: Int; var end: Int; var loopS: Int; var loopE: Int; var rate: Int; var root: Int; var corr: Int }
@@ -89,11 +103,16 @@ enum SoundFont {
         func igen(_ idx: Int) -> (oper: Int, amt: Int) { (u16(d, igenR.0 + idx * 4), u16(d, igenR.0 + idx * 4 + 2)) }
 
         var regions: [SFRegion] = []
-        for bag in firstBag..<max(firstBag, nextBag) {
+        let maxReadableBag = max(0, ibagR.1 / 4 - 1)
+        let genCount = igenR.1 / 4
+        guard firstBag >= 0, firstBag < maxReadableBag else { return nil }
+        let bagEnd = min(max(firstBag, nextBag), maxReadableBag)
+        for bag in firstBag..<bagEnd {
             let gLo = u16(d, ibagR.0 + bag * 4)
             let gHi = u16(d, ibagR.0 + (bag + 1) * 4)
+            guard gLo >= 0, gLo <= genCount else { continue }
             var loKey = 0, hiKey = 127, root = -1, sampleID = -1, loopOn = false
-            for g in gLo..<max(gLo, gHi) {
+            for g in gLo..<min(max(gLo, gHi), genCount) {
                 let (oper, amt) = igen(g)
                 switch oper {
                 case 43: loKey = amt & 0xFF; hiKey = (amt >> 8) & 0xFF      // keyRange
@@ -105,7 +124,8 @@ enum SoundFont {
             }
             guard sampleID >= 0, sampleID < shdr.count else { continue }   // skip global zone
             let sh = shdr[sampleID]
-            guard sh.end > sh.start, smplOff + sh.end * 2 <= smplOff + smplLen else { continue }
+            guard sh.start >= 0, sh.end > sh.start,
+                  sh.start <= smplLen / 2, sh.end <= smplLen / 2 else { continue }
             var pcm = [Float](repeating: 0, count: sh.end - sh.start)
             for i in 0..<pcm.count { pcm[i] = Float(i16(d, smplOff + (sh.start + i) * 2)) / 32768.0 }
             regions.append(SFRegion(loKey: loKey, hiKey: hiKey,

@@ -5,7 +5,7 @@
 
 import SwiftUI
 import Combine
-import AVFoundation
+@preconcurrency import AVFoundation
 
 // MARK: - Audio-clip file store
 
@@ -44,12 +44,26 @@ nonisolated func writeWAVData(_ data: [Float], to url: URL, sr: Double = 48_000)
     } catch { print("wav write error: \(error)"); return false }
 }
 
-nonisolated func readWAVData(at url: URL) -> [Float]? {
+nonisolated func readWAVData(at url: URL, targetSR: Double? = nil) -> [Float]? {
     guard let file = try? AVAudioFile(forReading: url) else { return nil }
-    let fmt = file.processingFormat            // mono float @ 48 kHz (as written)
+    let fmt = file.processingFormat
     let n = AVAudioFrameCount(file.length)
     guard n > 0, let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n) else { return nil }
     do { try file.read(into: buf) } catch { return nil }
+    if let targetSR, abs(fmt.sampleRate - targetSR) > 0.5 {
+        guard let outFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSR, channels: 1, interleaved: false),
+              let conv = AVAudioConverter(from: fmt, to: outFmt) else { return nil }
+        let cap = AVAudioFrameCount(Double(n) * targetSR / fmt.sampleRate) + 2048
+        guard let outBuf = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return nil }
+        var fed = false
+        var err: NSError?
+        conv.convert(to: outBuf, error: &err) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true; status.pointee = .haveData; return buf
+        }
+        guard err == nil, let ch = outBuf.floatChannelData else { return nil }
+        return Array(UnsafeBufferPointer(start: ch[0], count: Int(outBuf.frameLength)))
+    }
     guard let ch = buf.floatChannelData else { return nil }
     return Array(UnsafeBufferPointer(start: ch[0], count: Int(buf.frameLength)))
 }
@@ -58,8 +72,8 @@ nonisolated func readWAVData(at url: URL) -> [Float]? {
 nonisolated func writeClipWAV(_ data: [Float], id: UUID, sr: Double = 48_000) -> Bool {
     writeWAVData(data, to: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"), sr: sr)
 }
-nonisolated func readClipWAV(id: UUID) -> [Float]? {
-    readWAVData(at: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"))
+nonisolated func readClipWAV(id: UUID, targetSR: Double? = nil) -> [Float]? {
+    readWAVData(at: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"), targetSR: targetSR)
 }
 nonisolated func deleteClipWAV(id: UUID) {
     try? FileManager.default.removeItem(at: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"))
@@ -77,8 +91,8 @@ nonisolated func fd808SampleDir() -> URL {
 nonisolated func writePadSampleWAV(_ data: [Float], file: String, sr: Double = 48_000) -> Bool {
     writeWAVData(data, to: fd808SampleDir().appendingPathComponent(file), sr: sr)
 }
-nonisolated func readPadSampleWAV(file: String) -> [Float]? {
-    readWAVData(at: fd808SampleDir().appendingPathComponent(file))
+nonisolated func readPadSampleWAV(file: String, targetSR: Double? = nil) -> [Float]? {
+    readWAVData(at: fd808SampleDir().appendingPathComponent(file), targetSR: targetSR)
 }
 nonisolated func deletePadSampleWAV(file: String) {
     try? FileManager.default.removeItem(at: fd808SampleDir().appendingPathComponent(file))

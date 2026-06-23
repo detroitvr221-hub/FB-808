@@ -136,6 +136,12 @@ final class MIDIManager: ObservableObject {
     private var drainTimer: Timer?
     private var started = false
 
+    deinit {
+        drainTimer?.invalidate()
+        if inPort != 0 { MIDIPortDispose(inPort) }
+        if client != 0 { MIDIClientDispose(client) }
+    }
+
     /// Create the CoreMIDI client + input port, connect to all current sources, and start the drain poll.
     /// Safe to call when no MIDI hardware is present (the common case / simulator) — it simply connects to
     /// zero sources and waits for a setup-changed notification. Never throws into the caller.

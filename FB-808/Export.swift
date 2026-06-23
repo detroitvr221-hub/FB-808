@@ -298,7 +298,7 @@ nonisolated func buildVoices(_ plan: ExportPlan) -> [Voice] {
             voices.append(sv)
             continue
         }
-        let v = DrumVoice(kind: d.sound, vel: d.vel, seed: seed, pitch: pr)
+        let v = DrumVoice(kind: d.sound, vel: d.vel, seed: seed, pitch: pr, sr: plan.sr)
         v.startSample = d.atSample
         v.pan = d.opts.pan
         v.channel = d.busKey.flatMap { plan.busIndex[$0] } ?? (FX_CHANNELS.firstIndex(of: Kit.channelOf(d.sound)) ?? 0)

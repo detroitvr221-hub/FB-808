@@ -120,7 +120,7 @@ struct RootView: View {
     @State private var recoverSnap: ProjectSnapshot?
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
 
-    private var allowed: [String] { FD_LEVEL_NAV[settings.level] ?? FD_LEVEL_NAV[.creator]! }
+    private var allowed: [String] { FD_LEVEL_NAV[settings.level] ?? FD_LEVEL_NAV[.creator, default: FD_NAV.map(\.id)] }
     private var nav: [NavItem] { FD_NAV.filter { allowed.contains($0.id) } }
 
     var body: some View {

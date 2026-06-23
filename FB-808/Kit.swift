@@ -267,7 +267,7 @@ nonisolated enum Kit {
         for (s, cell) in steps.enumerated() {
             for padID in cell {
                 if lanes[padID] == nil { lanes[padID] = Array(repeating: 0, count: 16) }
-                lanes[padID]![s] = (padID == "kick" || padID == "snare") ? 1.0 : 0.8
+                lanes[padID]?[s] = (padID == "kick" || padID == "snare") ? 1.0 : 0.8
             }
         }
         return lanes

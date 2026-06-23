@@ -457,7 +457,7 @@ struct TrackModeView: View {
                 .contentShape(Rectangle())
                 .highPriorityGesture(DragGesture(minimumDistance: 2)
                     .onChanged { v in
-                        let orig = resizeDrag?.track == t.id && resizeDrag?.idx == i ? resizeDrag!.orig : c.l
+                        let orig = (resizeDrag?.track == t.id && resizeDrag?.idx == i) ? (resizeDrag?.orig ?? c.l) : c.l
                         if resizeDrag == nil { project.checkpoint("clipresize", coalesce: false); resizeDrag = (t.id, i, c.l) }
                         let nl = max(1, min(BARS - c.s, Int((CGFloat(orig) * barPx + v.translation.width) / barPx + 0.5)))
                         if var arr = project.clips[t.id], i < arr.count, arr[i].l != nl { arr[i].l = nl; project.clips[t.id] = arr }
@@ -468,7 +468,7 @@ struct TrackModeView: View {
         .offset(x: CGFloat(c.s) * barPx + 1, y: 7)
         .gesture(DragGesture(minimumDistance: 2)
             .onChanged { v in
-                let orig = drag?.track == t.id && drag?.idx == i ? drag!.orig : c.s
+                let orig = (drag?.track == t.id && drag?.idx == i) ? (drag?.orig ?? c.s) : c.s
                 if drag == nil { project.checkpoint("clipmove", coalesce: false); drag = (t.id, i, c.s) }
                 let ns = max(0, min(BARS - c.l, Int((CGFloat(orig) * barPx + v.translation.width) / barPx + 0.5)))
                 if var arr = project.clips[t.id], i < arr.count { arr[i].s = ns; project.clips[t.id] = arr }
@@ -748,7 +748,7 @@ extension TrackModeView {
         .offset(x: CGFloat(clip.startBar) * barPx + 1, y: 7)
         .gesture(DragGesture(minimumDistance: 3)
             .onChanged { v in
-                let orig = audioDrag?.id == clip.id ? audioDrag!.orig : clip.startBar
+                let orig = audioDrag?.id == clip.id ? (audioDrag?.orig ?? clip.startBar) : clip.startBar
                 if audioDrag == nil { audioDrag = (clip.id, clip.startBar) }
                 let nb = max(0, min(BARS - 1, Int((CGFloat(orig) * barPx + v.translation.width) / barPx + 0.5)))
                 project.moveAudioClip(clip.id, toBar: nb)

@@ -19,14 +19,24 @@ import CoreMIDI
 import FD808Engine
 import os
 
-// Lock-protected patch holder: the render thread reads it on each note-on while
-// the main thread may swap it via a preset change. Same os_unfair_lock approach
-// SynthCore uses on the audio thread.
+// Lock-protected patch holder. Render uses `renderGet()` so preset changes never block
+// the realtime callback; it falls back to the last patch successfully seen by render.
 private final class AtomicPatch: @unchecked Sendable {
     private var lock = os_unfair_lock_s()
     private var patch: SynthPatch
-    init(_ p: SynthPatch) { patch = p }
+    private var renderCachedPatch: SynthPatch
+    init(_ p: SynthPatch) {
+        patch = p
+        renderCachedPatch = p
+    }
     func get() -> SynthPatch { os_unfair_lock_lock(&lock); let p = patch; os_unfair_lock_unlock(&lock); return p }
+    func renderGet() -> SynthPatch {
+        guard os_unfair_lock_trylock(&lock) else { return renderCachedPatch }
+        let p = patch
+        renderCachedPatch = p
+        os_unfair_lock_unlock(&lock)
+        return p
+    }
     func set(_ p: SynthPatch) { os_unfair_lock_lock(&lock); patch = p; os_unfair_lock_unlock(&lock) }
 }
 
@@ -74,12 +84,13 @@ public class FD808AUAudioUnit: AUAudioUnit, @unchecked Sendable {
     public override var internalRenderBlock: AUInternalRenderBlock {
         let core = self.core               // captured post-allocate (getter runs after allocateRenderResources)
         let patchBox = self.patchBox
+        var renderSampleCursor = 0.0
         return { _, _, frameCount, _, outputData, renderEvents, _ in
-            let when = core.now() * core.sr
+            let when = renderSampleCursor
             // status: 0x90 note-on / 0x80 note-off (vel 0 on == off). vel is 0...1.
             func note(_ status: UInt8, _ midi: Int, _ vel: Double) {
                 if status == 0x90, vel > 0 {
-                    core.synthOn("au\(midi)", midi: midi, patch: patchBox.get(), vel: vel, whenSample: when)
+                    core.synthOn("au\(midi)", midi: midi, patch: patchBox.renderGet(), vel: vel, whenSample: when)
                 } else if status == 0x80 || (status == 0x90 && vel == 0) {
                     core.synthOff("au\(midi)")
                 }
@@ -116,6 +127,7 @@ public class FD808AUAudioUnit: AUAudioUnit, @unchecked Sendable {
             }
             let abl = UnsafeMutableAudioBufferListPointer(outputData)
             core.render(frames: Int(frameCount), abl: abl)
+            renderSampleCursor += Double(frameCount)
             return noErr
         }
     }

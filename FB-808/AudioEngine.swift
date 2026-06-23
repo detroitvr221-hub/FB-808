@@ -27,6 +27,8 @@ final class AudioEngine: ObservableObject {
     private let engine = AVAudioEngine()
     private var srcNode: AVAudioSourceNode!
     private var started = false
+    private var configured = false
+    private var restoredMasterChain = false
     private var ioFormat: AVAudioFormat!
     let sessionMgr = AudioSessionManager()            // owns AVAudioSession category + per-route buffer policy
     private var reclaimTimer: Timer?                  // frees finished voices off the audio thread
@@ -35,9 +37,67 @@ final class AudioEngine: ObservableObject {
     @Published private(set) var restartCount = 0            // engine restarts (interruption/route/config recovery)
     @Published private(set) var lastRestartReason = ""
 
-    init() { configure(); restoreMasterChain() }
+    // Rolling telemetry history — timestamped audio events (underruns, clips, voice-steal bursts, dropped
+    // commands, restarts, route changes) so a glitch can be diagnosed AFTER the fact on a real device, with
+    // no live console. Sampled from the engine's cumulative counters at ~5 Hz; capped ring, newest last.
+    struct AudioEvent: Identifiable { let id = UUID(); let at = Date(); let kind: String; let detail: String }
+    @Published private(set) var telemetry: [AudioEvent] = []
+    private var lastCounters = (overruns: UInt64(0), clips: UInt64(0), steals: UInt64(0), dropped: UInt64(0))
+    private let telemetryCap = 200
+
+    private func logEvent(_ kind: String, _ detail: String) {
+        telemetry.append(AudioEvent(kind: kind, detail: detail))
+        if telemetry.count > telemetryCap { telemetry.removeFirst(telemetry.count - telemetryCap) }
+    }
+    /// Diff the engine's cumulative counters against the last sample and log notable jumps.
+    private func recordTelemetry(_ d: AudioDiagnostics) {
+        if d.overruns > lastCounters.overruns {
+            logEvent("underrun", "+\(d.overruns - lastCounters.overruns) block(s) · load \(Int(d.cpuLoad * 100))% · \(d.activeVoices) voices")
+        }
+        if d.droppedCommands > lastCounters.dropped {
+            logEvent("dropped cmd", "+\(d.droppedCommands - lastCounters.dropped) (control queue full — overload)")
+        }
+        if d.clips > lastCounters.clips {
+            logEvent("clip", "+\(d.clips - lastCounters.clips) block(s) at ceiling · peak \(String(format: "%.2f", d.peak))")
+        }
+        if d.steals > lastCounters.steals + 8 {   // only bursts (governor / heavy polyphony), not routine stealing
+            logEvent("voice-steal burst", "+\(d.steals - lastCounters.steals) · \(d.activeVoices) voices · load \(Int(d.cpuLoad * 100))%")
+        }
+        lastCounters = (d.overruns, d.clips, d.steals, d.droppedCommands)
+    }
+
+    /// Human-readable diagnostics report for the in-app "Copy diagnostics" button (item: crash diagnostics).
+    func telemetryReport() -> String {
+        let s = diagnosticsSummary()
+        var L = ["FD-808 audio diagnostics — \(Date())", ""]
+        L.append("Sample rate : \(Int(s.diag.sampleRate)) Hz")
+        L.append("Buffer      : \(String(format: "%.1f", s.bufferMs)) ms")
+        L.append("Route       : \(sessionMgr.summary)")
+        L.append("Restarts    : \(s.restarts)\(s.reason.isEmpty ? "" : " (\(s.reason))")")
+        L.append("Render load : \(Int(s.diag.cpuLoad * 100))% (\(String(format: "%.2f", s.diag.renderMs))/\(String(format: "%.2f", s.diag.budgetMs)) ms)")
+        L.append("Voices      : \(s.diag.activeVoices) · peak \(String(format: "%.2f", s.diag.peak))")
+        L.append("Totals      : underruns \(s.diag.overruns) · clips \(s.diag.clips) · steals \(s.diag.steals) · dropped \(s.diag.droppedCommands)")
+        L.append(""); L.append("Recent events (newest last):")
+        let fmt = DateFormatter(); fmt.dateFormat = "HH:mm:ss"
+        if telemetry.isEmpty { L.append("  (none)") }
+        for e in telemetry.suffix(100) { L.append("  \(fmt.string(from: e.at))  \(e.kind) — \(e.detail)") }
+        return L.joined(separator: "\n")
+    }
+
+    init() {}
+
+    deinit {
+        reclaimTimer?.invalidate()
+        diagTimer?.invalidate()
+        for observer in audioObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
 
     private func configure() {
+        guard !configured else { return }
         let fmt = AVAudioFormat(standardFormatWithSampleRate: core.sr, channels: 2)!
         ioFormat = fmt
         let core = self.core
@@ -48,6 +108,15 @@ final class AudioEngine: ObservableObject {
         }
         engine.attach(srcNode)
         engine.connect(srcNode, to: engine.mainMixerNode, format: fmt)
+        configured = true
+    }
+
+    private func ensureConfigured() {
+        if !configured { configure() }
+        if !restoredMasterChain {
+            restoredMasterChain = true
+            restoreMasterChain()
+        }
     }
 
     // MARK: - AUv3 hosting (A15): 3rd-party effects inserted on the master bus
@@ -75,6 +144,7 @@ final class AudioEngine: ObservableObject {
     /// Instantiate an effect and append it to the master insert chain.
     func addMasterAU(_ comp: AVAudioUnitComponent) async -> Bool {
         do {
+            ensureConfigured()
             let avAU = try await AVAudioUnit.instantiate(with: comp.audioComponentDescription, options: [])
             engine.attach(avAU)
             masterAUs.append(HostedAU(name: comp.name, unit: avAU))
@@ -90,6 +160,7 @@ final class AudioEngine: ObservableObject {
     }
 
     func removeMasterAU(_ id: UUID) {
+        ensureConfigured()
         guard let idx = masterAUs.firstIndex(where: { $0.id == id }) else { return }
         let removed = masterAUs.remove(at: idx)
         engine.mainMixerNode.outputVolume = 0   // mute across the rewire (avoids the disconnect click)
@@ -101,6 +172,7 @@ final class AudioEngine: ObservableObject {
 
     /// Re-wire srcNode → [AU…] → mainMixer to reflect the current chain.
     private func rebuildMasterChain() {
+        guard configured else { return }
         let mixer = engine.mainMixerNode
         engine.disconnectNodeOutput(srcNode)
         for au in masterAUs { engine.disconnectNodeOutput(au.unit) }
@@ -152,6 +224,7 @@ final class AudioEngine: ObservableObject {
         guard !engine.isRunning else { started = true; return }   // guard on real engine state, not a cached flag
         sessionMgr.preferredSampleRate = core.sr   // ask the hardware to run at the engine rate (96k etc.)
         sessionMgr.activatePlayback()   // category + per-route buffer target + activate + read back actual
+        ensureConfigured()
         do {
             try engine.start()
             started = true
@@ -173,6 +246,7 @@ final class AudioEngine: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.diag = self.core.diagnostics()
+                    self.recordTelemetry(self.diag)   // diff counters → rolling telemetry history
                     self.inputLevel = self.isMicRecording ? (self.mic?.peakLevel() ?? 0) : 0   // record meter
                 }
             }
@@ -202,7 +276,10 @@ final class AudioEngine: ObservableObject {
             }
         })
         audioObservers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.restartAudio() }            // headphones unplugged / BT switched
+            MainActor.assumeIsolated {
+                self?.logEvent("route change", AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "—")
+                self?.restartAudio()                                     // headphones unplugged / BT switched
+            }
         })
         audioObservers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.restartAudio(reconfigure: true) }   // output rate/route changed
@@ -216,6 +293,7 @@ final class AudioEngine: ObservableObject {
     /// buffer policy (so e.g. switching to Bluetooth re-targets 512 frames) and re-reads the granted buffer.
     func restartAudio(reconfigure: Bool = false) {
         sessionMgr.activatePlayback()
+        ensureConfigured()
         if reconfigure { rebuildMasterChain() }   // re-establish srcNode→mixer after a graph teardown
         let wasRunning = engine.isRunning
         if !engine.isRunning {
@@ -224,6 +302,7 @@ final class AudioEngine: ObservableObject {
         if !wasRunning && engine.isRunning {       // diagnostics: count actual recoveries
             restartCount += 1
             lastRestartReason = reconfigure ? "config/route" : "interruption/route"
+            logEvent("engine restart", "#\(restartCount) · \(lastRestartReason) · \(sessionMgr.summary)")
         }
         started = engine.isRunning
     }
@@ -281,6 +360,7 @@ final class AudioEngine: ObservableObject {
         engine.stop()
         sessionMgr.preferredSampleRate = core.sr            // capture at the engine rate (Phase 5/7)
         sessionMgr.activateRecording()                      // .playAndRecord via the one session-policy home (Phase 7)
+        ensureConfigured()
         let input = engine.inputNode
         let fmt = input.inputFormat(forBus: 0)
         guard fmt.channelCount > 0, fmt.sampleRate > 0, let cap = MicCapture(inputFormat: fmt, sr: core.sr) else {
