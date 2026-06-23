@@ -1231,13 +1231,18 @@ final class Project: ObservableObject {
     // MARK: sampler-buffer undo (#19)
 
     private func trimSampleRing() {
-        if sampleBufferRing.count > sampleBufferRingCap {
-            sampleBufferRing.removeFirst(sampleBufferRing.count - sampleBufferRingCap)
+        // Evict from the MIDDLE (index 1), preserving the OLDEST entry — the pre-edit baseline, i.e. the
+        // original imported buffer — and the most-recent ones. So "undo all the way back to the import"
+        // always restores real audio even after many edits; only intermediate states degrade (and that
+        // degrades gracefully — restoreSampleBufferToken no-ops on a missing token). Was removeFirst(),
+        // which dropped the oldest and silently lost the original.
+        while sampleBufferRing.count > sampleBufferRingCap && sampleBufferRing.count > 1 {
+            sampleBufferRing.remove(at: 1)
         }
         var frames = sampleBufferRing.reduce(0) { $0 + $1.buffer.count }
-        while frames > sampleBufferRingMaxFrames, let first = sampleBufferRing.first {
-            frames -= first.buffer.count
-            sampleBufferRing.removeFirst()
+        while frames > sampleBufferRingMaxFrames && sampleBufferRing.count > 1 {
+            frames -= sampleBufferRing[1].buffer.count
+            sampleBufferRing.remove(at: 1)
         }
     }
     /// Run a destructive/tool sampler edit as ONE undo step, capturing the engine's pre-edit

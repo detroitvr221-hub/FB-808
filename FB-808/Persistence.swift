@@ -109,6 +109,7 @@ struct SavedProject: Identifiable, Hashable {
 @MainActor
 final class ProjectStore: ObservableObject {
     @Published private(set) var items: [SavedProject] = []
+    @Published private(set) var lastRepairs: [String] = []   // what the last repaired() load cleaned up (health check)
 
     private let dir: URL
     private let ext = "fd808json"
@@ -363,5 +364,48 @@ final class ProjectStore: ObservableObject {
             missing.append("sampler buffer")
         }
         return missing
+    }
+
+    // MARK: - Project health check + repair (item 9)
+
+    /// Return a structurally-repaired copy of a loaded snapshot so a corrupt/partial/stale project loads
+    /// into a CLEAN state instead of dangling: clears dead sample-file refs (so they don't persist as
+    /// orphans on the next save), drops orphaned audio clips, de-duplicates track/part IDs, and clamps
+    /// out-of-range indices. `missingAudioAssets` still drives the user-facing "audio missing" warning
+    /// (compute it on the RAW snapshot before calling this). Records what it fixed in `lastRepairs`.
+    func repaired(_ snap: ProjectSnapshot) -> ProjectSnapshot {
+        var s = snap
+        var log: [String] = []
+        let fm = FileManager.default, sampleDir = fd808SampleDir(), audioDir = fd808AudioDir()
+
+        if let f = s.sample?.audioFile, !fm.fileExists(atPath: sampleDir.appendingPathComponent(f).path) {
+            s.sample?.audioFile = nil; log.append("cleared dead sampler audio ref")
+        }
+        for (pad, pp) in s.padParams {
+            if let f = pp.sampleFile, !fm.fileExists(atPath: sampleDir.appendingPathComponent(f).path) {
+                s.padParams[pad]?.sampleFile = nil; s.padParams[pad]?.sampleName = nil
+                log.append("cleared dead pad sample (\(pad))")
+            }
+        }
+        if let clips = s.audioClips {
+            let kept = clips.filter { fm.fileExists(atPath: audioDir.appendingPathComponent("\($0.id).wav").path) }
+            if kept.count != clips.count { s.audioClips = kept; log.append("dropped \(clips.count - kept.count) orphan audio clip(s)") }
+        }
+        if let tracks = s.tracks {
+            var seen = Set<String>(); let deduped = tracks.filter { seen.insert($0.id).inserted }
+            if deduped.count != tracks.count { s.tracks = deduped; log.append("removed \(tracks.count - deduped.count) duplicate track id(s)") }
+        }
+        if let parts = s.parts {
+            var seen = Set<String>(); let deduped = parts.filter { seen.insert($0.id).inserted }
+            if deduped.count != parts.count { s.parts = deduped; log.append("removed \(parts.count - deduped.count) duplicate part id(s)") }
+        }
+        if let ap = s.activePart, ap != "lead", !(s.parts ?? []).contains(where: { $0.id == ap }) {
+            s.activePart = "lead"; log.append("reset orphaned active part")
+        }
+        if !s.sequences.isEmpty, s.activeSeq < 0 || s.activeSeq >= s.sequences.count {
+            s.activeSeq = min(max(0, s.activeSeq), s.sequences.count - 1); log.append("clamped out-of-range active sequence")
+        }
+        lastRepairs = log
+        return s
     }
 }
