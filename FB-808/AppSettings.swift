@@ -45,10 +45,13 @@ final class AppSettings: ObservableObject {
         limiterOn = store.object(forKey: "fd.limiterOn") as? Bool ?? true
         limiterCeilingDb = store.object(forKey: "fd.limiterCeilingDb") as? Double ?? -1.0
         sampleRate = store.object(forKey: "fd.sampleRate") as? Double ?? 48000
-        hqInterp = store.object(forKey: "fd.hqInterp") as? Bool ?? false
+        // Anti-aliasing + dither default ON — the research-confirmed "premium" cleanliness (cubic interpolation,
+        // band-limited oscillators, 16-bit dither). Equal-power pan stays OFF by default (it shifts the centre
+        // level of existing mixes). All remain user-toggleable.
+        hqInterp = store.object(forKey: "fd.hqInterp") as? Bool ?? true
         equalPowerPan = store.object(forKey: "fd.equalPowerPan") as? Bool ?? false
-        bandlimitedOsc = store.object(forKey: "fd.bandlimitedOsc") as? Bool ?? false
-        exportDither = store.object(forKey: "fd.exportDither") as? Bool ?? false
+        bandlimitedOsc = store.object(forKey: "fd.bandlimitedOsc") as? Bool ?? true
+        exportDither = store.object(forKey: "fd.exportDither") as? Bool ?? true
         userKits = AppSettings.loadUserKits()
         savedSynths = AppSettings.loadSavedSynths()
     }
