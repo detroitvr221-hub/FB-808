@@ -702,6 +702,7 @@ struct TrackStrip: View {
     @State private var faderStart: Double?
     @State private var panStart: Double?
     @State private var showFX = false
+    @State private var confirmRemoveBus = false
 
     private var muted: Bool { project.trackMute[track.id] ?? false }
     private var soloed: Bool { project.trackSolo[track.id] ?? false }
@@ -864,11 +865,15 @@ struct TrackStrip: View {
                 }
             }.frame(maxHeight: 420)
             if track.type != .bus {   // a group bus always owns its strip — can't remove it
-                Button(role: .destructive) { project.toggleTrackBus(track.id); showFX = false } label: {
+                Button(role: .destructive) { confirmRemoveBus = true } label: {
                     Text("Remove FX bus").font(FDFont.ui(12.5, .semibold)).foregroundStyle(settings.theme.miss)
                         .frame(maxWidth: .infinity).frame(height: 34)
                         .background(RoundedRectangle(cornerRadius: 9).fill(settings.theme.miss.opacity(0.12)))
                 }.buttonStyle(.plain)
+                .confirmationDialog("Remove this FX bus?", isPresented: $confirmRemoveBus, titleVisibility: .visible) {
+                    Button("Remove FX bus", role: .destructive) { project.toggleTrackBus(track.id); showFX = false }
+                    Button("Cancel", role: .cancel) {}
+                } message: { Text("Clears this track's insert effects. You can undo it afterwards.") }
             }
         }
         .padding(16).frame(width: 280).background(settings.panel).presentationCompactAdaptation(.popover)

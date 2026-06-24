@@ -20,6 +20,7 @@ struct ProjectsSheet: View {
     @State private var renameOverwriteItem: SavedProject?
     @State private var renameOverwriteName = ""
     @State private var missingAudio: [String] = []
+    @State private var loadFailed = false   // surface a decode/read failure instead of a dead Load button
 
     private var trimmedName: String { nameField.trimmingCharacters(in: .whitespaces) }
 
@@ -72,6 +73,9 @@ struct ProjectsSheet: View {
         } message: {
             Text("This project references audio that couldn't be found:\n\n• \(missingAudio.prefix(8).joined(separator: "\n• "))\n\nThe rest of the project loaded fine.")
         }
+        .alert("Couldn't open that project", isPresented: $loadFailed) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("The save file couldn't be read — it may be corrupted. Your other projects are unaffected.") }
     }
 
     /// Rename, but if the target name belongs to a DIFFERENT saved beat, confirm the overwrite first
@@ -223,7 +227,7 @@ struct ProjectsSheet: View {
     }
     private func doOpen(_ item: SavedProject) {
         Task { @MainActor in
-            guard let snap = await store.load(item) else { return }   // read+decode off-main
+            guard let snap = await store.load(item) else { loadFailed = true; return }   // surface a corrupt/unreadable save
             let missing = store.missingAudioAssets(in: snap)
             project.restore(store.repaired(snap))   // item 9: load into a clean, repaired state
             nameField = project.name

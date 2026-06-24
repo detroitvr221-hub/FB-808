@@ -32,6 +32,8 @@ struct TrackModeView: View {
     @State private var renameText = ""
     @State private var importTrackID = "audio"
     @State private var confirmBuildSong = false
+    @State private var confirmDeleteTrack: Track?
+    @State private var confirmDeleteSpace = false
 
     private var phPos: Double {
         guard project.playing else { return 0 }
@@ -75,6 +77,14 @@ struct TrackModeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Build Song") { buildSong() }
         } message: { Text("Replaces the current arrangement with an Intro→Verse→Hook→Verse→Outro layout and turns on Song Mode. You can undo it afterwards.") }
+        .alert("Delete “\(confirmDeleteTrack?.name ?? "track")”?", isPresented: Binding(get: { confirmDeleteTrack != nil }, set: { if !$0 { confirmDeleteTrack = nil } })) {
+            Button("Cancel", role: .cancel) { confirmDeleteTrack = nil }
+            Button("Delete", role: .destructive) { if let t = confirmDeleteTrack { project.removeTrack(t.id) }; confirmDeleteTrack = nil }
+        } message: { Text("Removes the track and all its clips, automation, and recorded takes. You can undo it afterwards.") }
+        .alert("Delete \(rangeLen) bar\(rangeLen == 1 ? "" : "s")?", isPresented: $confirmDeleteSpace) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { project.arrangeDeleteSpace(at: rangeStart, len: rangeLen) }
+        } message: { Text("Removes these bars across every track and section and closes the gap. You can undo it afterwards.") }
     }
 
     private func handleAudioImport(_ result: Result<[URL], Error>) {
@@ -257,7 +267,7 @@ struct TrackModeView: View {
             Rectangle().fill(settings.line).frame(height: 1).padding(.vertical, 2)
             rangeOp("Duplicate", "plus.square.on.square", settings.accent) { project.arrangeDuplicate(from: rangeStart, len: rangeLen) }
             rangeOp("Insert Space", "arrow.right.to.line", settings.inkDim) { project.arrangeInsertSpace(at: rangeStart, len: rangeLen) }
-            rangeOp("Delete Space", "arrow.left.to.line", settings.theme.miss) { project.arrangeDeleteSpace(at: rangeStart, len: rangeLen) }
+            rangeOp("Delete Space", "arrow.left.to.line", settings.theme.miss) { confirmDeleteSpace = true }
             Text("Duplicate copies the bars to the right · Insert opens a gap · Delete removes the bars and closes up. Affects all tracks + sections.")
                 .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
         }
@@ -369,7 +379,7 @@ struct TrackModeView: View {
             }
             if !LEGACY_TRACK_IDS.contains(t.id) {
                 Divider()
-                Button(role: .destructive) { project.removeTrack(t.id) } label: { Label("Delete Track", systemImage: "trash") }
+                Button(role: .destructive) { confirmDeleteTrack = t } label: { Label("Delete Track", systemImage: "trash") }
             }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 12, weight: .bold))
