@@ -227,7 +227,7 @@ struct TransportBar: View {
 
     private func stepBtn(_ s: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(s).font(.system(size: 17, weight: .bold)).foregroundStyle(settings.inkDim)
+            Text(s).font(FDFont.mono(17, .bold)).foregroundStyle(settings.inkDim)
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(settings.line, lineWidth: 1))

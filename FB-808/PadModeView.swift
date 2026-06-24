@@ -300,6 +300,9 @@ struct PadModeView: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(on ? settings.accent.opacity(0.18) : settings.panel2))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(on ? settings.accent.opacity(0.45) : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
+            .accessibilityLabel(Text("Bank \(b) \(Kit.banks[b]?.name ?? "")"))
+            .accessibilityValue(Text(on ? "On" : "Off"))
+            .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     private func kitRow(_ kit: Kit.DrumKitPreset) -> some View {
@@ -343,12 +346,17 @@ struct PadModeView: View {
     }
 
     private func perfButton(_ label: String, on: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        // Strip leading decorative glyphs (⟳ ✎ 📖 → and arrows) so VoiceOver reads the words, not the symbol.
+        let spoken = label.trimmingCharacters(in: CharacterSet(charactersIn: "⟳✎📖→⟶➜… ")).trimmingCharacters(in: .whitespaces)
+        return Button(action: action) {
             Text(label).font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
                 .frame(maxWidth: .infinity).frame(height: 46)
                 .background(RoundedRectangle(cornerRadius: 12).fill(on ? settings.accent.opacity(0.2) : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(on ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
+            .accessibilityLabel(Text(spoken.isEmpty ? label : spoken))
+            .accessibilityValue(Text(on ? "On" : "Off"))
+            .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     private func divButton(_ label: String, on: Bool, _ action: @escaping () -> Void) -> some View {
@@ -358,5 +366,8 @@ struct PadModeView: View {
                 .background(RoundedRectangle(cornerRadius: 9).fill(on ? settings.accent : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(on ? .clear : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
+            .accessibilityLabel(Text(label))
+            .accessibilityValue(Text(on ? "On" : "Off"))
+            .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 }

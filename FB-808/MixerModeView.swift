@@ -320,6 +320,14 @@ struct MixStrip: View {
             HStack(spacing: 5) {
                 Circle().fill(hot ? th.miss : settings.line).frame(width: 7, height: 7)
                     .shadow(color: hot ? th.miss : .clear, radius: 4)
+                    .accessibilityElement()
+                    .accessibilityLabel(Text("Clip indicator"))
+                    .accessibilityValue(Text(hot ? "Clipping" : "OK"))
+                // non-color cue — show "CLIP" text whenever the meter is hot
+                if hot {
+                    Text("CLIP").font(FDFont.mono(8, .bold)).tracking(0.5).foregroundStyle(th.miss)
+                        .accessibilityHidden(true)
+                }
                 Text("\(dbStr(vol)) dB").font(FDFont.mono(10, .bold)).foregroundStyle(th.inkDim)
             }
             // m/s
@@ -472,6 +480,13 @@ struct MixStrip: View {
         .accessibilityLabel(Text("\(name) pan"))
         .accessibilityValue(Text(panLabel))
         .accessibilityHint(Text("Double tap to center"))
+        .accessibilityAdjustableAction { dir in
+            switch dir {
+            case .increment: project.setMix(ch) { $0.pan = max(-1, min(1, $0.pan + 0.1)) }
+            case .decrement: project.setMix(ch) { $0.pan = max(-1, min(1, $0.pan - 0.1)) }
+            default: break
+            }
+        }
     }
 
     private var meterBar: some View {
@@ -519,6 +534,13 @@ struct MixStrip: View {
         .accessibilityLabel(Text("\(name) volume"))
         .accessibilityValue(Text("\(dbStr(vol)) dB"))
         .accessibilityHint(Text("Double tap to reset to 0 dB"))
+        .accessibilityAdjustableAction { dir in
+            switch dir {
+            case .increment: project.setMix(ch) { $0.vol = max(0, min(1.1, $0.vol + 0.05)) }
+            case .decrement: project.setMix(ch) { $0.vol = max(0, min(1.1, $0.vol - 0.05)) }
+            default: break
+            }
+        }
     }
 
     private func msButton(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
@@ -528,7 +550,20 @@ struct MixStrip: View {
                 .frame(maxWidth: .infinity).frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
+                // non-color cue so the active state reads without relying on the fill color
+                .overlay(alignment: .topTrailing) {
+                    if on {
+                        Image(systemName: s == "M" ? "speaker.slash.fill" : "checkmark")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(s == "S" ? Color(hex: "#08240f") : .white)
+                            .padding(2)
+                            .accessibilityHidden(true)
+                    }
+                }
         }.buttonStyle(.plain)
+        .accessibilityLabel(Text("\(name) \(s == "M" ? "mute" : "solo")"))
+        .accessibilityValue(Text(on ? "On" : "Off"))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -725,6 +760,14 @@ struct TrackStrip: View {
             HStack(spacing: 10) { meterBar; fader }.frame(maxHeight: .infinity)
             HStack(spacing: 5) {
                 Circle().fill(hot ? th.miss : settings.line).frame(width: 7, height: 7)
+                    .accessibilityElement()
+                    .accessibilityLabel(Text("Clip indicator"))
+                    .accessibilityValue(Text(hot ? "Clipping" : "OK"))
+                // non-color cue — show "CLIP" text whenever the meter is hot
+                if hot {
+                    Text("CLIP").font(FDFont.mono(8, .bold)).tracking(0.5).foregroundStyle(th.miss)
+                        .accessibilityHidden(true)
+                }
                 Text("\(dbStr(track.vol)) dB").font(FDFont.mono(10, .bold)).foregroundStyle(th.inkDim)
             }
             HStack(spacing: 6) {
@@ -770,6 +813,13 @@ struct TrackStrip: View {
             }
             .onEnded { _ in panStart = nil })
         .accessibilityElement().accessibilityLabel(Text("\(track.name) pan")).accessibilityValue(Text(panLabel))
+        .accessibilityAdjustableAction { dir in
+            switch dir {
+            case .increment: project.setTrackPan(track.id, track.pan + 0.1)
+            case .decrement: project.setTrackPan(track.id, track.pan - 0.1)
+            default: break
+            }
+        }
     }
 
     private var meterBar: some View {
@@ -806,6 +856,13 @@ struct TrackStrip: View {
             }.frame(maxWidth: .infinity, alignment: .center)
         }.frame(width: 46)
         .accessibilityElement().accessibilityLabel(Text("\(track.name) volume")).accessibilityValue(Text("\(dbStr(track.vol)) dB"))
+        .accessibilityAdjustableAction { dir in
+            switch dir {
+            case .increment: project.setTrackVol(track.id, track.vol + 0.05)
+            case .decrement: project.setTrackVol(track.id, track.vol - 0.05)
+            default: break
+            }
+        }
     }
 
     private func msBtn(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
@@ -815,7 +872,20 @@ struct TrackStrip: View {
                 .frame(maxWidth: .infinity).frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain).accessibilityLabel(Text("\(track.name) \(s == "M" ? "mute" : "solo")"))
+                // non-color cue so the active state reads without relying on the fill color
+                .overlay(alignment: .topTrailing) {
+                    if on {
+                        Image(systemName: s == "M" ? "speaker.slash.fill" : "checkmark")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(s == "S" ? Color(hex: "#08240f") : .white)
+                            .padding(2)
+                            .accessibilityHidden(true)
+                    }
+                }
+        }.buttonStyle(.plain)
+        .accessibilityLabel(Text("\(track.name) \(s == "M" ? "mute" : "solo")"))
+        .accessibilityValue(Text(on ? "On" : "Off"))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     // MARK: per-track insert FX (G3) — bound to channelFX[track.id]

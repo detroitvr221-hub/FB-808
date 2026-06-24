@@ -28,7 +28,7 @@ struct ProjectsSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             currentCard
-            Text("SAVED PROJECTS").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint)
+            Text("SAVED PROJECTS").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkDim)
             list
         }
         .padding(24)
@@ -97,20 +97,23 @@ struct ProjectsSheet: View {
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill").font(.system(size: 26))
                     .foregroundStyle(settings.inkFaint)
-            }.buttonStyle(.plain)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(Text("Close"))
         }
     }
 
     private var currentCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("CURRENT BEAT").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint)
+            Text("CURRENT BEAT").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkDim)
             HStack(spacing: 10) {
                 TextField("Beat name", text: $nameField)
                     .font(FDFont.display(17, .semibold)).foregroundStyle(settings.ink)
                     .textFieldStyle(.plain).submitLabel(.done)
+                    .onSubmit { attemptSave() }
                     .padding(.horizontal, 12).frame(height: 42)
                     .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                    .accessibilityLabel(Text("Project name"))
                 saveButton
             }
             HStack(spacing: 10) {
@@ -120,9 +123,10 @@ struct ProjectsSheet: View {
                         .padding(.horizontal, 14).frame(height: 36)
                         .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
                         .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                        .frame(minHeight: 44).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 if store.exists(nameField.trimmingCharacters(in: .whitespaces)) {
-                    Text("Overwrites an existing save").font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                    Text("Overwrites an existing save").font(FDFont.ui(11.5)).foregroundStyle(settings.inkDim)
                 }
                 Spacer()
             }
@@ -193,7 +197,7 @@ struct ProjectsSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).font(FDFont.display(15, .semibold)).foregroundStyle(settings.ink).lineLimit(1)
                 Text(item.modified.formatted(date: .abbreviated, time: .shortened))
-                    .font(FDFont.mono(10)).foregroundStyle(settings.inkFaint)
+                    .font(FDFont.mono(10)).foregroundStyle(settings.inkDim)
             }
             Spacer()
             if isCurrent {
@@ -205,7 +209,8 @@ struct ProjectsSheet: View {
                 Text("Load").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 34)
                     .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent))
-            }.buttonStyle(.plain)
+                    .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(Text("Load \(item.name)"))
             Menu {
                 Button { renameText = item.name; renameItem = item } label: { Label("Rename", systemImage: "pencil") }
                 Button { store.duplicate(item) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
@@ -215,6 +220,7 @@ struct ProjectsSheet: View {
                 Image(systemName: "ellipsis.circle").font(.system(size: 17)).foregroundStyle(settings.inkDim)
                     .frame(width: 34, height: 34)
                     .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
+                    .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(Text("More actions for \(item.name)"))
         }
         .padding(10)

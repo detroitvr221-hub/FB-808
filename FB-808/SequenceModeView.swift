@@ -61,7 +61,11 @@ struct SequenceModeView: View {
                             .frame(width: 30, height: 34)
                             .background(RoundedRectangle(cornerRadius: 9).fill(project.activeSeq == i ? settings.accent : settings.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 9).stroke(project.activeSeq == i ? .clear : settings.line, lineWidth: 1))
-                    }.buttonStyle(.plain)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Sequence \(slot.name)"))
+                    .accessibilityValue(Text(project.activeSeq == i ? "Selected" : "Not selected"))
+                    .accessibilityAddTraits(project.activeSeq == i ? [.isButton, .isSelected] : .isButton)
                 }
             }
             Rectangle().fill(settings.line).frame(width: 1, height: 22)
@@ -86,6 +90,7 @@ struct SequenceModeView: View {
                 .popover(isPresented: $showGenerate) { generatePanel }
             chip(Text("🎲 Randomize \(sel)").foregroundStyle(settings.ink)) { randomize() }
             chip(Text("◓ Euclid").foregroundStyle(settings.ink)) { showEuclid = true }
+                .accessibilityLabel(Text("Euclidean fill"))
                 .popover(isPresented: $showEuclid) { euclidPanel }
             chip(Text("Clear \(sel)").foregroundStyle(settings.ink)) { project.clearRow(sel) }
             chip(Text("Clear all").foregroundStyle(settings.ink)) { confirmClear = true }
@@ -109,7 +114,11 @@ struct SequenceModeView: View {
                             .frame(maxWidth: .infinity).frame(height: 32)
                             .background(RoundedRectangle(cornerRadius: 9).fill(genStyle == st.id ? settings.accent : settings.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
-                    }.buttonStyle(.plain)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("\(st.name) style"))
+                    .accessibilityValue(Text(genStyle == st.id ? "Selected" : "Not selected"))
+                    .accessibilityAddTraits(genStyle == st.id ? [.isButton, .isSelected] : .isButton)
                 }
             }
             HStack(spacing: 8) {
@@ -120,7 +129,11 @@ struct SequenceModeView: View {
                             .foregroundStyle(abs(genDensity - d) < 0.01 ? .white : settings.inkDim)
                             .padding(.horizontal, 9).frame(height: 28)
                             .background(RoundedRectangle(cornerRadius: 8).fill(abs(genDensity - d) < 0.01 ? settings.accent : settings.panel2))
-                    }.buttonStyle(.plain)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("\(name) density"))
+                    .accessibilityValue(Text(abs(genDensity - d) < 0.01 ? "Selected" : "Not selected"))
+                    .accessibilityAddTraits(abs(genDensity - d) < 0.01 ? [.isButton, .isSelected] : .isButton)
                 }
             }
             Button { project.generateBeat(style: genStyle, density: genDensity); progress.awardCreative("genBeat", 8) } label: {
@@ -314,7 +327,20 @@ struct SequenceModeView: View {
                 .frame(width: 19, height: 19)
                 .background(RoundedRectangle(cornerRadius: 5).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? .clear : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
+                // non-color cue: a small slash/check glyph in the corner when active (in addition to the color fill)
+                .overlay(alignment: .topTrailing) {
+                    if on {
+                        Image(systemName: s == "S" ? "checkmark" : "speaker.slash.fill")
+                            .font(.system(size: 6, weight: .black))
+                            .foregroundStyle(s == "S" ? Color(hex: "#08240f") : .white)
+                            .offset(x: 1, y: -1)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(s == "S" ? "Solo" : "Mute"))
+        .accessibilityValue(Text(on ? "On" : "Off"))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     // MARK: velocity lane
@@ -354,6 +380,19 @@ struct SequenceModeView: View {
         ("1:4", "1:4"), ("fill", "FILL"), ("!fill", "¬FILL"),
     ]
     private func hz(_ v: Double) -> String { v >= 1000 ? String(format: "%.1fk", v / 1000) : "\(Int(v))" }
+    // VoiceOver-friendly spoken name for a trig condition (the on-screen glyphs are cryptic)
+    private func condLabel(_ c: String, _ lbl: String) -> String {
+        switch c {
+        case "": return "Condition off"
+        case "1:2": return "Every 2nd loop"
+        case "2:2": return "Other 2nd loop"
+        case "1:3": return "Every 3rd loop"
+        case "1:4": return "Every 4th loop"
+        case "fill": return "Fill only"
+        case "!fill": return "Not on fill"
+        default: return lbl
+        }
+    }
 
     @ViewBuilder private func stepInspector(_ step: Int) -> some View {
         let meta = project.stepMeta[sel]?[step] ?? StepMeta()
@@ -386,7 +425,11 @@ struct SequenceModeView: View {
                             .frame(maxWidth: .infinity).frame(height: 26)
                             .background(RoundedRectangle(cornerRadius: 7).fill(on ? settings.accent : settings.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 7).stroke(on ? Color.clear : settings.line, lineWidth: 1))
-                    }.buttonStyle(.plain)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(condLabel(c, lbl)))
+                    .accessibilityValue(Text(on ? "Selected" : "Not selected"))
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
                 }
             }
             Text("PARAMETER LOCKS").font(FDFont.mono(9, .bold)).tracking(1).foregroundStyle(settings.inkFaint)
@@ -449,6 +492,18 @@ struct SequenceModeView: View {
                 }
                 .onEnded { _ in velDragStart = nil })
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in editStep = i })
+            // VoiceOver: the velocity drag never fires, so expose the bar as an adjustable control.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("\(Kit.padByID[sel]?.label ?? sel) step \(i + 1) velocity"))
+            .accessibilityValue(Text("\(Int(v * 100)) percent"))
+            .accessibilityAdjustableAction { dir in
+                switch dir {
+                case .increment: project.setStepVel(sel, i, min(1, (v > 0 ? v : 0.04) + 0.05))
+                case .decrement: project.setStepVel(sel, i, max(0.04, v - 0.05))
+                default: break
+                }
+            }
+            .accessibilityAction(named: Text("Edit step")) { editStep = i }
         }
         .frame(maxWidth: .infinity)
     }
@@ -496,6 +551,17 @@ struct SequenceModeView: View {
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { val in project.setAutoStep(i, Double(1 - val.location.y / h)) })
+            // VoiceOver: the automation drag never fires, so expose the bar as an adjustable control.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("\(autoLabel) automation step \(i + 1)"))
+            .accessibilityValue(Text("\(Int(v * 100)) percent"))
+            .accessibilityAdjustableAction { dir in
+                switch dir {
+                case .increment: project.setAutoStep(i, min(1, v + 0.05))
+                case .decrement: project.setAutoStep(i, max(0, v - 0.05))
+                default: break
+                }
+            }
         }
         .frame(maxWidth: .infinity)
     }

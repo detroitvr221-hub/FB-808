@@ -59,6 +59,9 @@ struct SettingsSheet: View {
                         }
                         Slider(value: $settings.glow, in: 0.3...1.6, step: 0.1).tint(settings.accent)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(Text("Glow"))
+                    .accessibilityValue(Text(String(format: "%.0f%%", settings.glow * 100)))
 
                     section("Audio")
                     radioRow(title: "Latency · buffer size",
@@ -116,6 +119,9 @@ struct SettingsSheet: View {
                             }
                             Slider(value: $settings.limiterCeilingDb, in: -6...0, step: 0.5).tint(settings.accent)
                         }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(Text("Ceiling"))
+                        .accessibilityValue(Text(String(format: "%.1f decibels", settings.limiterCeilingDb)))
                     }
 
                     section("Diagnostics")
@@ -241,17 +247,40 @@ struct SettingsSheet: View {
         }
     }
 
+    // Map accent hex codes to human-readable names so VoiceOver announces a colour
+    // name instead of a raw hex string.
+    private func accentName(_ hex: String) -> String {
+        switch hex.uppercased() {
+        case "#FF6A2B": return "Orange"
+        case "#FF3D7F": return "Pink"
+        case "#21D0B2": return "Teal"
+        case "#6C7BFF": return "Blue"
+        default: return hex
+        }
+    }
+
     private var accentRow: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Accent").font(FDFont.ui(15, .medium)).foregroundStyle(settings.ink)
             HStack(spacing: 10) {
                 ForEach(Accents.options, id: \.self) { hex in
+                    let isSelected = settings.accentHex == hex
                     Button { settings.accentHex = hex } label: {
                         Circle().fill(Color(hex: hex)).frame(width: 34, height: 34)
-                            .overlay(Circle().stroke(.white, lineWidth: settings.accentHex == hex ? 2.5 : 0))
+                            .overlay(Circle().stroke(.white, lineWidth: isSelected ? 2.5 : 0))
+                            // Non-colour cue: a checkmark marks the selected swatch so the
+                            // selection isn't conveyed by colour/ring alone.
+                            .overlay(
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .opacity(isSelected ? 1 : 0)
+                            )
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                        .accessibilityLabel(Text("Accent colour \(hex)"))
-                        .accessibilityAddTraits(settings.accentHex == hex ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityLabel(Text("Accent colour \(accentName(hex))"))
+                        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
                 }
             }
         }

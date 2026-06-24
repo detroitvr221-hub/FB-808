@@ -54,9 +54,12 @@ struct InfoTip: View {
                 .frame(width: size, height: size)
                 .background(Circle().fill(settings.panel2))
                 .overlay(Circle().stroke(settings.line, lineWidth: 1))
-                .contentShape(Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("About \(term)")
+        .accessibilityHint("Shows an explanation")
         .popover(isPresented: $show) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(term.uppercased())

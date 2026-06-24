@@ -43,13 +43,17 @@ struct TheoryModeView: View {
     }
 
     private func seg(_ label: String, _ id: String) -> some View {
-        Button { mode = id } label: {
+        let selected = mode == id
+        return Button { mode = id } label: {
             Text(label).font(FDFont.ui(13.5, .semibold))
-                .foregroundStyle(mode == id ? settings.ink : settings.inkDim)
+                .foregroundStyle(selected ? settings.ink : settings.inkDim)
                 .padding(.horizontal, 14).frame(height: 34)
-                .background(RoundedRectangle(cornerRadius: 10).fill(mode == id ? settings.accent.opacity(0.18) : settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(mode == id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 10).fill(selected ? settings.accent.opacity(0.18) : settings.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -107,12 +111,22 @@ struct CircularRhythmView: View {
                         let on = i < lane.count && lane[i] > 0
                         let ph = project.playing && project.step == i
                         let beat = i % 4 == 0
+                        let padLabel = Kit.padByID[padID]?.label ?? padID
                         Circle()
                             .fill(on ? color : settings.panel2)
                             .frame(width: on ? 15 : (beat ? 9 : 6), height: on ? 15 : (beat ? 9 : 6))
                             .overlay(Circle().stroke(ph ? settings.ink : (on ? .clear : settings.line), lineWidth: ph ? 2 : 1))
                             .shadow(color: on ? color.opacity(0.6) : .clear, radius: 4)
                             .position(pt(c, radius, i))
+                            .accessibilityElement()
+                            .accessibilityLabel("\(padLabel) step \(i + 1)")
+                            .accessibilityValue(on ? "On" : "Off")
+                            .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                            .accessibilityAction {
+                                engine.start()
+                                project.toggleStep(padID, i)
+                                if (project.lanes[padID]?[safe: i] ?? 0) > 0 { project.triggerPad(padID) }
+                            }
                     }
                 }
                 // rotating playhead
