@@ -28,10 +28,12 @@ struct SettingsSheet: View {
 
                     section("Workspace")
                     radioRow(title: "Interface level",
-                             options: InterfaceLevel.allCases.map { ($0.rawValue.capitalized, $0.rawValue) },
+                             options: InterfaceLevel.allCases.map { ($0.title, $0.rawValue) },
                              selected: settings.level.rawValue) { v in
                         settings.level = InterfaceLevel(rawValue: v) ?? .creator
                     }
+                    Text(settings.level.summary).font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     section("Pads")
                     Toggle(isOn: $settings.padLabels) {

@@ -94,8 +94,8 @@ let FD_NAV: [NavItem] = [
 ]
 let FD_LEVEL_NAV: [InterfaceLevel: [String]] = [
     .beginner: ["pads", "sequence", "synth", "theory", "learn"],
-    .creator: ["pads", "sequence", "synth", "sample", "tracks", "mixer", "theory", "learn", "teacher"],
-    .advanced: ["pads", "sequence", "synth", "sample", "tracks", "mixer", "theory", "learn", "teacher"],
+    .creator: ["pads", "sequence", "synth", "sample", "tracks", "mixer", "theory", "learn"],            // full production (no classroom)
+    .advanced: ["pads", "sequence", "synth", "sample", "tracks", "mixer", "theory", "learn", "teacher"], // + Teacher / classroom
 ]
 
 struct RootView: View {
@@ -119,6 +119,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var recoverSnap: ProjectSnapshot?
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
+    @State private var exporting = false             // rail Share action — export is reachable at EVERY level (not just Tracks)
+    @State private var exportFile: ExportFile?
 
     private var allowed: [String] { FD_LEVEL_NAV[settings.level] ?? FD_LEVEL_NAV[.creator, default: FD_NAV.map(\.id)] }
     private var nav: [NavItem] { FD_NAV.filter { allowed.contains($0.id) } }
@@ -232,6 +234,26 @@ struct RootView: View {
                 .environmentObject(store)
                 .presentationDetents([.large])
         }
+        .sheet(item: $exportFile) { f in ShareSheet(urls: f.urls) }
+    }
+
+    /// Bounce the song to M4A and present the share sheet — a level-independent entry point so Export is
+    /// reachable even at Beginner level (where the Tracks tab, the only other export path, is hidden).
+    private func quickExport() {
+        guard !exporting, project.hasExportableContent else { return }
+        exporting = true
+        let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let dither = settings.exportDither
+        Task {
+            sweepExportDirs()
+            let dir = fd808ExportDir()
+            let url = await Task.detached(priority: .userInitiated) {
+                let (l, r) = renderOffline(plan)
+                return writeAudio(.m4a, left: l, right: r, sr: plan.sr, name: plan.name, dir: dir, dither: dither)
+            }.value
+            exporting = false
+            if let url { exportFile = ExportFile(urls: [url]); progress.awardCreative("export", 10) }
+        }
     }
 
     // MARK: chassis
@@ -297,6 +319,15 @@ struct RootView: View {
             }.buttonStyle(.plain)
             .accessibilityLabel(Text("Projects"))
             .accessibilityValue(Text(project.hasUnsavedChanges ? "Unsaved changes" : ""))
+            if project.hasExportableContent {   // bounce & share from any level (Tracks tab is hidden at Beginner)
+                Button { quickExport() } label: {
+                    Group {
+                        if exporting { ProgressView().controlSize(.small).tint(th.inkFaint) }
+                        else { Image(systemName: "square.and.arrow.up").font(.system(size: 17)).foregroundStyle(th.inkFaint) }
+                    }.frame(width: 44, height: 44)
+                }.buttonStyle(.plain).disabled(exporting)
+                .accessibilityLabel(Text("Export and share this beat"))
+            }
             Button { showTour = true } label: {
                 Image(systemName: "questionmark.circle").font(.system(size: 17)).foregroundStyle(th.inkFaint)
                     .frame(width: 44, height: 44)

@@ -141,6 +141,17 @@ enum Accents {
 enum InterfaceLevel: String, CaseIterable, Identifiable {
     case beginner, creator, advanced
     var id: String { rawValue }
+    var title: String {
+        switch self { case .beginner: "Beginner"; case .creator: "Creator"; case .advanced: "Advanced" }
+    }
+    /// One-line description of what this tier reveals — rendered under the picker so the control isn't opaque.
+    var summary: String {
+        switch self {
+        case .beginner: "Pads, Sequence, Synth, Theory, Learn"
+        case .creator: "+ Sample, Tracks, Mixer (full production)"
+        case .advanced: "+ Teacher / classroom hosting (everything)"
+        }
+    }
 }
 
 // MARK: - Fonts

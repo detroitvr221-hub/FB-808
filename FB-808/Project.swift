@@ -1164,6 +1164,14 @@ final class Project: ObservableObject {
     }
     func clearAuto() { checkpoint("clearAuto", coalesce: false); autoLane = Array(repeating: 1, count: 16) }
 
+    /// True when there's anything to render — guards Export against bouncing silence (#275). Shared by the
+    /// Tracks export button and the level-independent rail Share action so Export is reachable at every level.
+    var hasExportableContent: Bool {
+        lanes.values.contains { $0.contains { $0 != 0 } }
+            || !audioClips.isEmpty || !melody.isEmpty || !parts.isEmpty
+            || tracks.contains { $0.playsAdditively }
+    }
+
     // Song-wide automation (Tracks Tier 3)
     func setSongAutoTarget(_ t: String) {
         if t == "" { engine.resetAutomation() }
