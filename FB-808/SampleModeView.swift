@@ -443,20 +443,27 @@ struct SampleModeView: View {
     private func loadSource(_ kind: String, _ name: String) {
         stopAudition()
         engine.start()
-        let r = engine.makeSample(kind)
-        project.sample = SampleState(name: name, kind: kind, dur: r.dur, wave: r.wave, transients: r.transients)
-        project.sliceBank = nil
+        // Replacing the whole sample is undoable: mutateSample captures the PRIOR sample's audio (engine
+        // buffer) BEFORE makeSample overwrites it, so an accidental source tap can be undone without loss.
+        project.mutateSample("loadSource") {
+            let r = engine.makeSample(kind)
+            project.sample = SampleState(name: name, kind: kind, dur: r.dur, wave: r.wave, transients: r.transients)
+            project.sliceBank = nil
+        }
     }
     /// Record from the microphone into the sampler (toggle).
     private func toggleMic() {
         if engine.isMicRecording {
-            if let r = engine.stopMicRecording() {
-                project.sample = SampleState(name: "Mic Recording", kind: "mic", dur: r.dur, wave: r.wave, transients: r.transients)
-                project.sliceBank = nil
-                flash("Recorded \(String(format: "%.1f", r.dur))s")
-            } else {
-                flash("Nothing recorded")
+            // Undoable: capture the prior sample's audio BEFORE stopMicRecording loads the take over it.
+            var recordedDur: Double? = nil
+            project.mutateSample("mic") {
+                if let r = engine.stopMicRecording() {
+                    project.sample = SampleState(name: "Mic Recording", kind: "mic", dur: r.dur, wave: r.wave, transients: r.transients)
+                    project.sliceBank = nil
+                    recordedDur = r.dur
+                }
             }
+            flash(recordedDur != nil ? "Recorded \(String(format: "%.1f", recordedDur!))s" : "Nothing recorded")
         } else {
             stopAudition()
             engine.startMicRecording { ok in
@@ -471,6 +478,9 @@ struct SampleModeView: View {
         guard case .success(let urls) = result, let url = urls.first else { return }
         engine.start()
         let name = url.deletingPathExtension().lastPathComponent
+        // Checkpoint + capture the prior sample's audio for undo NOW, before the async decode loads the new
+        // file over the engine buffer (mutateSample's capture must run before loadExternal replaces it).
+        project.mutateSample("import") { }
         Task {   // off-main decode so the UI doesn't hitch on a long file (Phase 2)
             guard let r = await engine.importAudioAsync(url: url) else { flash("Couldn't read that audio file"); return }
             project.sample = SampleState(name: name.isEmpty ? "Imported" : name, kind: "import",
@@ -502,10 +512,13 @@ struct SampleModeView: View {
     private func resampleMix() {
         stopAudition()
         engine.start()
-        let r = engine.resampleOutput()
-        project.sample = SampleState(name: "Resampled Mix", kind: "mix", dur: r.dur, wave: r.wave, transients: [])
-        project.sliceBank = nil
-        flash(r.dur > 0.2 ? "Captured \(String(format: "%.1f", r.dur))s of the mix" : "Play a beat, then Resample Mix")
+        // Undoable: capture the prior sample's audio BEFORE resampleOutput overwrites the engine buffer.
+        project.mutateSample("resample") {
+            let r = engine.resampleOutput()
+            project.sample = SampleState(name: "Resampled Mix", kind: "mix", dur: r.dur, wave: r.wave, transients: [])
+            project.sliceBank = nil
+            flash(r.dur > 0.2 ? "Captured \(String(format: "%.1f", r.dur))s of the mix" : "Play a beat, then Resample Mix")
+        }
     }
 
     private func refreshEdits() {

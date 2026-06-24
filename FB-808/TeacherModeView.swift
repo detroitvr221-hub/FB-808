@@ -281,23 +281,27 @@ struct TeacherModeView: View {
                         if session.role == .host { Text("↑\(session.opsSent)").font(FDFont.mono(10)).foregroundStyle(settings.inkFaint) }
                         if session.role == .follow { Text("↓\(session.opsReceived)").font(FDFont.mono(10)).foregroundStyle(settings.inkFaint) }
                     }
-                    HStack(spacing: 8) {
-                        TextField("Class code", text: $joinCode)
-                            .font(FDFont.mono(13, .bold)).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                            .padding(.horizontal, 10).frame(height: 36)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
-                        Button {
-                            let c = joinCode.trimmingCharacters(in: .whitespaces).uppercased()
-                            if !c.isEmpty { session.follow(code: c, name: "Student") }
-                        } label: {
-                            Text("Join").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
-                                .padding(.horizontal, 16).frame(height: 36)
-                                .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent))
-                        }.buttonStyle(.plain).disabled(joinCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                    // Joining as a follower starts with leave(), which for a host POSTs "close" and ends the
+                    // live class for every student — so never show the join field while THIS device is hosting.
+                    if session.role != .host {
+                        HStack(spacing: 8) {
+                            TextField("Class code", text: $joinCode)
+                                .font(FDFont.mono(13, .bold)).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                                .padding(.horizontal, 10).frame(height: 36)
+                                .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
+                                .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                            Button {
+                                let c = joinCode.trimmingCharacters(in: .whitespaces).uppercased()
+                                if !c.isEmpty && session.role != .host { session.follow(code: c, name: "Student") }
+                            } label: {
+                                Text("Join").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+                                    .padding(.horizontal, 16).frame(height: 36)
+                                    .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent))
+                            }.buttonStyle(.plain).disabled(joinCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+                        Text("Students enter the code to follow this class live — they see every edit in real time.")
+                            .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint)
                     }
-                    Text("Students enter the code to follow this class live — they see every edit in real time.")
-                        .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint)
                 }
             }
             .frame(width: 280)

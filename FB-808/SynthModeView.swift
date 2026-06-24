@@ -702,6 +702,12 @@ struct ScaleKeyboard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .shadow(color: .black.opacity(0.3), radius: 2, y: 2)
             .allowsHitTesting(false)
+            // VoiceOver: the container DragGesture never fires under VO, so expose each key as a button
+            // that plays the note (mirrors the accessible pad in PadGridView).
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(Music.name(midi)))
+            .accessibilityAddTraits(down ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { onDown(midi); onUp(midi) }
     }
 }
 
@@ -1061,6 +1067,11 @@ struct SynthKeyboard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .shadow(color: .black.opacity(0.3), radius: 2, y: 2)
             .allowsHitTesting(false)
+            // VoiceOver: container DragGesture never fires under VO — expose each key as a playable button.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(Music.name(midi)))
+            .accessibilityAddTraits(down ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { onDown(midi); onUp(midi) }
     }
     private func blackKey(_ midi: Int, w: CGFloat, x: CGFloat, h: CGFloat) -> some View {
         let down = lit.contains(midi)
@@ -1072,5 +1083,10 @@ struct SynthKeyboard: View {
             .shadow(color: .black.opacity(0.5), radius: 3, y: 3)
             .position(x: x, y: h / 2)
             .allowsHitTesting(false)
+            // VoiceOver: container DragGesture never fires under VO — expose each key as a playable button.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(Music.name(midi)))
+            .accessibilityAddTraits(down ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { onDown(midi); onUp(midi) }
     }
 }

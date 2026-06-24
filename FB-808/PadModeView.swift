@@ -246,10 +246,14 @@ struct PadModeView: View {
             }
         }
         if project.noteRepeat { startRepeat(padID) }
-        // long-press opens the pad editor
+        // Long-press opens the pad editor — but NOT while holding for a Note Repeat roll or during a take,
+        // where a sustained hold is intentional and popping the full-screen editor would break the performance.
+        // (The editor is still reachable via the "Edit a Pad" button and the Edit-mode toggle.)
         longTimer?.invalidate()
-        longTimer = Timer.scheduledTimer(withTimeInterval: 0.48, repeats: false) { _ in
-            Task { @MainActor in editPadID = padID }
+        if !project.noteRepeat && !project.recording {
+            longTimer = Timer.scheduledTimer(withTimeInterval: 0.48, repeats: false) { _ in
+                Task { @MainActor in editPadID = padID }
+            }
         }
     }
 
