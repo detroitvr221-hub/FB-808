@@ -278,6 +278,7 @@ struct RootView: View {
                     .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 4))
             }
             .padding(.top, 22)
+            .accessibilityHidden(true)   // decorative brand mark — no info for VoiceOver
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
@@ -332,13 +333,16 @@ struct RootView: View {
                 Image(systemName: "questionmark.circle").font(.system(size: 17)).foregroundStyle(th.inkFaint)
                     .frame(width: 44, height: 44)
             }.buttonStyle(.plain)
+            .accessibilityLabel(Text("Help"))
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape.fill").font(.system(size: 18)).foregroundStyle(th.inkFaint)
                     .frame(width: 44, height: 44)
             }.buttonStyle(.plain)
+            .accessibilityLabel(Text("Settings"))
             Circle().fill(settings.accent).frame(width: 9, height: 9)
                 .shadow(color: settings.accent, radius: 5)
                 .padding(.bottom, 18)
+                .accessibilityHidden(true)   // decorative status LED — not an interactive/informative element
         }
         .frame(width: 92)
         .frame(maxHeight: .infinity)
@@ -361,6 +365,9 @@ struct RootView: View {
                         .foregroundStyle(progress.streak > 0 ? settings.accent : th.inkFaint)
                     Text("\(progress.streak)").font(FDFont.mono(14, .bold)).foregroundStyle(th.ink)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Daily streak"))
+                .accessibilityValue(Text("\(progress.streak) \(progress.streak == 1 ? "day" : "days")"))
                 // daily goal ring
                 ZStack {
                     Circle().stroke(th.line, lineWidth: 3).frame(width: 26, height: 26)
@@ -369,6 +376,9 @@ struct RootView: View {
                         .rotationEffect(.degrees(-90)).frame(width: 26, height: 26)
                     if progress.goalMet { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(th.good) }
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Daily goal"))
+                .accessibilityValue(Text(progress.goalMet ? "Complete" : "\(Int(progress.goalProgress * 100)) percent"))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("LVL \(level)").font(FDFont.mono(10, .bold)).tracking(0.8).foregroundStyle(th.inkDim)
                     GeometryReader { g in
@@ -379,10 +389,14 @@ struct RootView: View {
                         }
                     }.frame(width: 120, height: 7)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Level \(level)"))
+                .accessibilityValue(Text("\(Int(into * 100)) percent to next level"))
                 RoundedRectangle(cornerRadius: 13)
                     .fill(LinearGradient(colors: [Color(hex: "#6C7BFF"), Color(hex: "#21D0B2")], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 38, height: 38)
                     .overlay(Text("M").font(FDFont.display(17, .bold)).foregroundStyle(.white))
+                    .accessibilityHidden(true)   // decorative profile avatar placeholder
             }
         }
         .padding(.horizontal, 26)

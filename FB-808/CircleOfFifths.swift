@@ -88,14 +88,26 @@ struct CircleOfFifthsView: View {
                 Circle().stroke(settings.line2, lineWidth: 1)
                     .frame(width: side * 0.52, height: side * 0.52).position(c)
                 ForEach(COF) { key in
-                    chip(text: key.major, selected: sel == key.id && !minorMode,
+                    let majSel = sel == key.id && !minorMode
+                    let minSel = sel == key.id && minorMode
+                    chip(text: key.major, selected: majSel,
                          major: true, d: side * 0.155)
                         .position(pos(key.id, center: c, r: rMaj))
                         .onTapGesture { choose(key.id, minor: false) }
-                    chip(text: key.minor, selected: sel == key.id && minorMode,
+                        // VoiceOver: the tap gesture never fires under VoiceOver, so expose the chip as a button.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text("\(key.major) major"))
+                        .accessibilityAddTraits(majSel ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityAction { choose(key.id, minor: false) }
+                    chip(text: key.minor, selected: minSel,
                          major: false, d: side * 0.118)
                         .position(pos(key.id, center: c, r: rMin))
                         .onTapGesture { choose(key.id, minor: true) }
+                        // VoiceOver: the tap gesture never fires under VoiceOver, so expose the chip as a button.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text("\(key.minor) minor"))
+                        .accessibilityAddTraits(minSel ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityAction { choose(key.id, minor: true) }
                 }
                 center(side: side).position(c)
             }

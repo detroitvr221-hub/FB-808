@@ -4,6 +4,7 @@
 
 import SwiftUI
 import Combine
+import UIKit
 
 // MARK: - Practice engine
 
@@ -83,6 +84,19 @@ final class PracticeModel: ObservableObject {
     }
     private func showFeedback(_ padID: String, _ result: String, _ tk: Int) {
         fx.showFeedback(padID, result, tk: tk)
+        // Non-visual feedback so the hit result reaches VoiceOver / no-look players:
+        // result-differentiated notification haptic + a spoken announcement.
+        let label = Kit.padByID[padID]?.label ?? padID
+        let notif: UINotificationFeedbackGenerator.FeedbackType
+        let spoken: String
+        switch result {
+        case "perfect": notif = .success; spoken = "Perfect, \(label)"
+        case "early":   notif = .warning; spoken = "Early, \(label)"
+        case "late":    notif = .warning; spoken = "Late, \(label)"
+        default:        notif = .error;   spoken = "Miss, \(label)"
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(notif)
+        UIAccessibility.post(notification: .announcement, argument: spoken)
         after(0.48) { [weak self] in self?.fx.clearFeedback(padID) }
     }
 
@@ -193,6 +207,9 @@ final class PracticeModel: ObservableObject {
         if autoRamp && stars >= 2 && speed < 1.0 { speed = speed < 0.75 ? 0.75 : 1.0 }   // Auto-BPM ramp
         results = PracticeResults(acc: acc, stars: stars, perfects: perfects, goods: goods, misses: misses, best: best, xp: xp)
         stage = "results"
+        // Announce the round result so VoiceOver users hear the outcome without reading the overlay.
+        UIAccessibility.post(notification: .announcement,
+                             argument: "Round complete. \(Int(acc * 100)) percent, \(stars) of 3 stars. \(perfects) perfect, \(goods) good, \(misses) missed.")
         onXP?(xp)
     }
 }
@@ -825,11 +842,40 @@ struct ChallengeView: View {
         let fill: Color = graded ? (placed && inTarget ? settings.theme.good : (placed ? Color(hex: "#FF9F1C") : base))
                                   : (placed ? color : base)
         let missed = graded && !placed && inTarget
+        // Grading is conveyed by fill color (green/orange/red) only — add a per-state SF Symbol
+        // so correct / extra / missed read without relying on color.
+        let gradeGlyph: String? = graded ? (placed && inTarget ? "checkmark"
+                                                              : (placed ? "plus" : (inTarget ? "circle.dashed" : nil)))
+                                         : nil
+        let gradeWord = graded ? (placed && inTarget ? "Correct"
+                                                     : (placed ? "Extra" : (inTarget ? "Missed" : "Empty")))
+                               : (placed ? "Placed" : "Empty")
+        let label = Kit.padByID[padID]?.label ?? padID
         return RoundedRectangle(cornerRadius: 6).fill(fill)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(missed ? settings.theme.miss : settings.line2, lineWidth: missed ? 2 : 1))
+            .overlay {
+                if let g = gradeGlyph {
+                    Image(systemName: g)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
             .frame(maxWidth: .infinity).frame(height: 34)
             .contentShape(Rectangle())
             .onTapGesture {
+                engine.start()
+                if guess[padID]?.contains(i) == true { guess[padID]?.remove(i) }
+                else { guess[padID, default: []].insert(i); engine.trigger(Kit.padByID[padID]?.sound ?? padID, vel: 0.9) }
+                result = nil
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("\(label) step \(i + 1)"))
+            .accessibilityValue(Text(gradeWord))
+            .accessibilityAddTraits(placed ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction {
                 engine.start()
                 if guess[padID]?.contains(i) == true { guess[padID]?.remove(i) }
                 else { guess[padID, default: []].insert(i); engine.trigger(Kit.padByID[padID]?.sound ?? padID, vel: 0.9) }
@@ -880,5 +926,8 @@ struct StarRow: View {
                     .foregroundStyle(i < n ? settings.theme.perfect : settings.line)
             }
         }
+        // Collapse the three star glyphs into one labelled element so VoiceOver reads the rating, not "star, star, star".
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("\(n) of 3 stars"))
     }
 }

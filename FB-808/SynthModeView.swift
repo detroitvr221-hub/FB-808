@@ -243,6 +243,9 @@ struct SynthModeView: View {
                     miniTog("UNISON", on: patch.unison) { up(\.unison, !patch.unison) }
                     miniTog("SUB", on: patch.sub) { up(\.sub, !patch.sub) }
                     Button { withAnimation(.easeOut(duration: 0.15)) { detail = detail == "osc" ? nil : "osc" } } label: { moreTile("Tune & FM", on: detail == "osc") }
+                        .accessibilityLabel(Text("Tune & FM"))
+                        .accessibilityValue(Text(detail == "osc" ? "Open" : "Closed"))
+                        .accessibilityAddTraits(detail == "osc" ? [.isButton, .isSelected] : .isButton)
                 }
             } else {
                 CoachNote("Playing **\(patch.name)** as a pitched sampler — every key repitches the clip.")
@@ -259,13 +262,28 @@ struct SynthModeView: View {
     }
 
     private func waveButton(_ w: Wave) -> some View {
-        Button { up(\.wave, w) } label: {
-            WaveShape(wave: w).stroke(patch.wave == w ? settings.accent : settings.inkDim, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+        let on = patch.wave == w
+        return Button { up(\.wave, w) } label: {
+            WaveShape(wave: w).stroke(on ? settings.accent : settings.inkDim, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                 .frame(height: 13).padding(.horizontal, 3)
                 .frame(maxWidth: .infinity).frame(height: 38)
-                .background(RoundedRectangle(cornerRadius: 9).fill(patch.wave == w ? settings.accent.opacity(0.16) : settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(patch.wave == w ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
+                .background(RoundedRectangle(cornerRadius: 9).fill(on ? settings.accent.opacity(0.16) : settings.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(on ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        // VoiceOver: the wave shapes are drawn paths with no text — name them and expose selected state.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(waveName(w)))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
+    private func waveName(_ w: Wave) -> String {
+        switch w {
+        case .saw:       return "Sawtooth wave"
+        case .square:    return "Square wave"
+        case .triangle:  return "Triangle wave"
+        case .sine:      return "Sine wave"
+        case .wavetable: return "Wavetable"
+        }
     }
     private func moreTile(_ label: String, on: Bool) -> some View {
         HStack(spacing: 5) {
@@ -525,7 +543,12 @@ struct SynthModeView: View {
             .padding(.horizontal, 16).frame(height: 36)
             .background(RoundedRectangle(cornerRadius: 10).fill(on ? settings.accent.opacity(0.18) : settings.panel2))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
+        }
+        .buttonStyle(.plain)
+        // VoiceOver: selected state is color-only — expose it as a trait/value.
+        .accessibilityLabel(Text(label))
+        .accessibilityValue(Text(on ? "Selected" : ""))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     // the design's ".keys-side" panel: octave control + lock/key/scale + hint
@@ -827,7 +850,9 @@ struct KnobView: View {
         .accessibilityLabel(Text(label))
         .accessibilityValue(Text(format(value)))
         .accessibilityAdjustableAction { dir in
-            let d = step > 0 ? step : (max - min) / 20
+            // Wide audio ranges (e.g. 80–12000 Hz at 20-step) need a coarser VoiceOver nudge than the
+            // drag step or each swipe moves the value imperceptibly: ~1/20 of the range, but never below step.
+            let d = step > 0 ? Swift.max((max - min) / 20, step) : (max - min) / 20
             switch dir {
             case .increment: onChange(Swift.min(max, value + d))
             case .decrement: onChange(Swift.max(min, value - d))
@@ -1043,6 +1068,25 @@ struct SynthRoll: View {
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(ph ? settings.accent.opacity(0.7) : settings.line2, lineWidth: ph ? 1.5 : 1))
             .frame(maxWidth: .infinity).frame(height: 16)
             .contentShape(Rectangle())
+            // VoiceOver: the row DragGesture never fires under VO, so expose each step cell as a togglable
+            // element (mirrors the accessible pad in PadGridView) — the action runs the same draw/erase paths.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("\(Music.name(pitch)), step \(s + 1)"))
+            .accessibilityValue(Text(covered ? "On" : "Off"))
+            .accessibilityAddTraits(covered ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { toggleCell(pitch: pitch, step: s, covered: covered) }
+    }
+
+    /// VoiceOver toggle for a roll cell — draws a 1-step note on an empty cell, erases an existing one,
+    /// matching the tap behavior in `rowDrag`.
+    private func toggleCell(pitch: Int, step: Int, covered: Bool) {
+        engine.start()
+        if covered {
+            project.eraseActiveNote(pitch: pitch, step: step)
+        } else {
+            project.drawActiveNote(pitch: pitch, start: step, len: 1)
+            project.previewNote(midi: pitch)
+        }
     }
 }
 

@@ -2,6 +2,7 @@
 //  shaping (gain/pitch), transient slicing → pads, and sample → playable synth.
 
 import SwiftUI
+import UIKit
 import FD808Engine
 import UniformTypeIdentifiers
 import Waveform   // AudioKit GPU waveform (vendored, MIT) — true min/max draw of the sample buffer
@@ -289,7 +290,7 @@ struct SampleModeView: View {
                     }.buttonStyle(.plain).disabled(!has).opacity(has ? 1 : 0.4)
                     toolButton("Harmonize · 3rd + 5th", on: sample?.harmonize ?? false) { toggleHarmonize() }
                     Text("Detects the sample's pitch and nudges it onto the song scale. Harmonize stacks diatonic voices when you audition or play slices.")
-                        .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                        .font(FDFont.ui(11)).foregroundStyle(settings.inkDim).fixedSize(horizontal: false, vertical: true)
                 }
 
                 PanelCard(title: "Time Stretch") {
@@ -422,6 +423,8 @@ struct SampleModeView: View {
                 Text(readout).font(FDFont.mono(11, .bold)).foregroundStyle(settings.ink)
             }
             Slider(value: value, in: range).tint(settings.accent).disabled(!has)
+                .accessibilityLabel(Text(label))
+                .accessibilityValue(Text(readout))
         }
     }
     private func pitchLabel(_ p: Int) -> String { p == 0 ? "0" : (p > 0 ? "+\(p)" : "\(p)") }
@@ -435,6 +438,7 @@ struct SampleModeView: View {
     }
     private func flash(_ msg: String) {
         withAnimation { confirm = msg }
+        UIAccessibility.post(notification: .announcement, argument: msg)
         Task { @MainActor in try? await Task.sleep(nanoseconds: 1_900_000_000); withAnimation { confirm = nil } }
     }
 

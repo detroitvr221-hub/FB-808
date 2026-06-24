@@ -4,6 +4,7 @@
 
 import SwiftUI
 import AVFoundation
+import UIKit
 
 private let TE_CLASS = "Beat Lab · 4th Period"
 private let TE_CODE = "FD-7K2P"
@@ -178,6 +179,9 @@ struct TeacherModeView: View {
             .background(RoundedRectangle(cornerRadius: 10).fill(tab == id ? settings.accent.opacity(0.18) : settings.panel2))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(tab == id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(badge > 0 ? "\(label), \(badge) pending" : label)
+        .accessibilityAddTraits(tab == id ? [.isButton, .isSelected] : .isButton)
     }
 
     // MARK: roster
@@ -189,6 +193,7 @@ struct TeacherModeView: View {
                 Picker("", selection: $classroom.assignLesson) {
                     ForEach(Kit.lessons) { l in Text("\(l.n). \(l.title)").tag(l.id) }
                 }.pickerStyle(.menu).tint(settings.ink)
+                    .accessibilityLabel("Lesson to assign")
                 Spacer()
                 Button { assign() } label: {
                     Text("Assign to Class").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
@@ -263,11 +268,16 @@ struct TeacherModeView: View {
                 teCard("Class Tempo") {
                     HStack(spacing: 12) {
                         tempoBtn("–") { project.setBpm(project.bpm - 2) }
+                            .accessibilityLabel("Decrease class tempo")
                         VStack(spacing: 0) {
                             Text("\(project.bpm)").font(FDFont.mono(24, .bold)).foregroundStyle(settings.ink)
                             Text("BPM").font(FDFont.mono(9, .bold)).foregroundStyle(settings.inkFaint)
                         }.frame(maxWidth: .infinity)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Class tempo")
+                            .accessibilityValue("\(project.bpm) BPM")
                         tempoBtn("+") { project.setBpm(project.bpm + 2) }
+                            .accessibilityLabel("Increase class tempo")
                     }
                     Text("Sets the tempo for the whole studio — every student follows.")
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
@@ -645,6 +655,7 @@ struct TeacherModeView: View {
 
     private func flash(_ msg: String) {
         withAnimation { toast = msg }
+        UIAccessibility.post(notification: .announcement, argument: msg)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_900_000_000)
             withAnimation { toast = nil }

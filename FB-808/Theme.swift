@@ -105,7 +105,7 @@ struct Theme {
                 bg: Color(hex: "#15151c"), rail: Color(hex: "#0e0e14"),
                 panel: Color(hex: "#1d1f28"), panel2: Color(hex: "#23262f"),
                 capA: Color(hex: "#2b2e3a"), capB: Color(hex: "#191b23"),
-                ink: Color(hex: "#F2EEE3"), inkDim: Color(hex: "#9598a6"), inkFaint: Color(hex: "#62646f"),
+                ink: Color(hex: "#F2EEE3"), inkDim: Color(hex: "#9598a6"), inkFaint: Color(hex: "#8a8da0"),   // inkFaint lifted to clear WCAG AA (4.6:1)
                 line: Color.white.opacity(0.08), line2: Color.white.opacity(0.05),
                 chassisGradient: [Color(hex: "#1b1c24"), Color(hex: "#121319")],
                 chassisGlow: Color.white.opacity(0.04))
@@ -115,7 +115,7 @@ struct Theme {
                 bg: Color(hex: "#08080e"), rail: Color(hex: "#06060c"),
                 panel: Color(hex: "#0e0f1a"), panel2: Color(hex: "#15172a"),
                 capA: Color(hex: "#1a1c30"), capB: Color(hex: "#0b0c16"),
-                ink: Color(hex: "#EDEFFF"), inkDim: Color(hex: "#8a8db0"), inkFaint: Color(hex: "#5a5d80"),
+                ink: Color(hex: "#EDEFFF"), inkDim: Color(hex: "#8a8db0"), inkFaint: Color(hex: "#8488ad"),   // inkFaint lifted to clear WCAG AA (5.1:1)
                 line: Color.white.opacity(0.09), line2: Color.white.opacity(0.05),
                 chassisGradient: [Color(hex: "#0c0d18"), Color(hex: "#06060d")],
                 chassisGlow: Color(hex: "#6C7BFF").opacity(0.14))
@@ -125,7 +125,7 @@ struct Theme {
                 bg: Color(hex: "#e7dec8"), rail: Color(hex: "#ddd2b7"),
                 panel: Color(hex: "#f4eede"), panel2: Color(hex: "#efe7d2"),
                 capA: Color(hex: "#34363f"), capB: Color(hex: "#202229"),
-                ink: Color(hex: "#2c2820"), inkDim: Color(hex: "#7a7361"), inkFaint: Color(hex: "#a89e85"),
+                ink: Color(hex: "#2c2820"), inkDim: Color(hex: "#5f5746"), inkFaint: Color(hex: "#6f6755"),   // both darkened to clear WCAG AA on cream (6.2 / 4.8:1)
                 line: Color(hex: "#3c321e").opacity(0.14), line2: Color(hex: "#3c321e").opacity(0.08),
                 chassisGradient: [Color(hex: "#efe7d3"), Color(hex: "#e2d8be")],
                 chassisGlow: Color.white.opacity(0.5))

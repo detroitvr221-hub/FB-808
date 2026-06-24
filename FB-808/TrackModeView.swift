@@ -310,20 +310,30 @@ struct TrackModeView: View {
                         .font(FDFont.mono(9)).foregroundStyle(settings.inkFaint).lineLimit(1)
                     Spacer()
                     if t.type == .audio {
+                        let armed = project.audioArmedTrack == t.id
                         Button { project.audioArmedTrack = project.audioArmedTrack == t.id ? nil : t.id } label: {
-                            Image(systemName: project.audioArmedTrack == t.id ? "record.circle.fill" : "record.circle")
+                            Image(systemName: armed ? "record.circle.fill" : "record.circle")
                                 .font(.system(size: 15))
-                                .foregroundStyle(project.audioArmedTrack == t.id ? settings.theme.miss : settings.inkFaint)
+                                .foregroundStyle(armed ? settings.theme.miss : settings.inkFaint)
+                                .frame(width: 22, height: 18).contentShape(Rectangle())   // widen tap region; glyph unchanged
                         }.buttonStyle(.plain)
+                        .accessibilityLabel(Text(armed ? "Disarm recording" : "Arm recording"))
+                        .accessibilityValue(Text(armed ? "Armed" : "Off"))
+                        .accessibilityAddTraits(armed ? [.isButton, .isSelected] : .isButton)
                         Button { importTrackID = t.id; importingAudio = true } label: {
                             Image(systemName: "plus.circle.fill").font(.system(size: 15)).foregroundStyle(settings.accent)
+                                .frame(width: 22, height: 18).contentShape(Rectangle())   // widen tap region; glyph unchanged
                         }.buttonStyle(.plain)
+                        .accessibilityLabel(Text("Import audio into \(t.name)"))
+                        .accessibilityAddTraits(.isButton)
                     }
-                    laneFlag("M", on: project.trackMute[t.id] ?? false, color: settings.theme.miss) {
+                    laneFlag("M", on: project.trackMute[t.id] ?? false, color: settings.theme.miss,
+                             a11yLabel: "Mute \(t.name)") {
                         project.checkpoint("trackmute", coalesce: false)
                         project.trackMute[t.id] = !(project.trackMute[t.id] ?? false)
                     }
-                    laneFlag("S", on: project.trackSolo[t.id] ?? false, color: settings.theme.good) {
+                    laneFlag("S", on: project.trackSolo[t.id] ?? false, color: settings.theme.good,
+                             a11yLabel: "Solo \(t.name)") {
                         project.checkpoint("tracksolo", coalesce: false)
                         project.trackSolo[t.id] = !(project.trackSolo[t.id] ?? false)
                     }
@@ -380,10 +390,12 @@ struct TrackModeView: View {
             }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 12, weight: .bold))
-                .foregroundStyle(settings.inkFaint).frame(width: 20, height: 16)
+                .foregroundStyle(settings.inkFaint).frame(width: 28, height: 24)   // widen tap region; glyph unchanged
                 .contentShape(Rectangle())
         }
         .menuStyle(.button).buttonStyle(.plain)
+        .accessibilityLabel(Text("Track options for \(t.name)"))
+        .accessibilityAddTraits(.isButton)
     }
 
     private func sendClipFull(_ t: Track) {
@@ -566,7 +578,11 @@ struct TrackModeView: View {
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
     }
     private func offsetStep(_ s: String) -> some View {
-        Text(s).font(.system(size: 15, weight: .bold)).foregroundStyle(settings.inkDim).frame(width: 22, height: 24)
+        // Glyph stays 15pt; widen the tap region as far as the 32pt-tall host pills allow (a full 44pt
+        // box would distort those compact rows). contentShape makes the padded area tappable.
+        Text(s).font(.system(size: 15, weight: .bold)).foregroundStyle(settings.inkDim)
+            .frame(width: 30, height: 28).contentShape(Rectangle())
+            .accessibilityLabel(Text(s == "+" ? "Increase" : "Decrease"))
     }
 
     private var buildSongButton: some View {
@@ -691,14 +707,20 @@ struct TrackModeView: View {
         }
     }
 
-    private func laneFlag(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
+    private func laneFlag(_ s: String, on: Bool, color: Color, a11yLabel: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(s).font(FDFont.mono(9, .bold))
                 .foregroundStyle(on ? (s == "S" ? Color(hex: "#08240f") : .white) : settings.inkFaint)
                 .frame(width: 18, height: 18)
                 .background(RoundedRectangle(cornerRadius: 5).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? .clear : settings.line, lineWidth: 1))
+                // keep the 18×18 visual; widen the tap region (the fixed 116×64 lane column can't host a
+                // full 44pt box without distorting the row, so we enlarge the hit area as far as it allows).
+                .frame(width: 26, height: 22).contentShape(Rectangle())
         }.buttonStyle(.plain)
+        .accessibilityLabel(Text(a11yLabel ?? s))
+        .accessibilityValue(Text(on ? "On" : "Off"))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     private func addSection(_ sec: Kit.Section) {

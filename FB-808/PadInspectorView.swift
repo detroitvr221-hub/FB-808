@@ -38,9 +38,11 @@ struct PadInspectorView: View {
             Color.black.opacity(0.55).ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { onClose() }
+                .accessibilityHidden(true)
             modal
                 .frame(maxWidth: 880)
                 .padding(20)
+                .accessibilityAddTraits(.isModal)
         }
     }
 
@@ -79,6 +81,7 @@ struct PadInspectorView: View {
                     .frame(width: 36, height: 36)
                     .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
             }.buttonStyle(.plain).padding(.leading, 8)
+            .accessibilityLabel("Close pad editor")
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 14, trailing: 16))
         .overlay(Rectangle().fill(settings.line).frame(height: 1), alignment: .bottom)

@@ -81,6 +81,15 @@ struct PadView: View {
             if muted {   // Mute mode: red wash + border, like an MPC muted pad
                 RoundedRectangle(cornerRadius: 19).fill(Color(hex: "#FF3B30").opacity(0.22))
                 RoundedRectangle(cornerRadius: 19).stroke(Color(hex: "#FF3B30").opacity(0.9), lineWidth: 2)
+                // Non-color cue so the muted state is conveyed without relying on red alone.
+                Image(systemName: "speaker.slash.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color(hex: "#FF3B30"))
+                    .shadow(color: .black.opacity(0.5), radius: 2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(EdgeInsets(top: 0, leading: 0, bottom: 12, trailing: 13))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
         .compositingGroup()
@@ -97,11 +106,18 @@ struct PadView: View {
         .sensoryFeedback(trigger: pressed) { _, isPressed in isPressed ? .impact(flexibility: .solid, intensity: 0.6) : nil }
         // VoiceOver: the DragGesture never fires under VoiceOver, so expose the pad as a button with an action.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(pad.label))
+        .accessibilityLabel(Text(badge != nil ? "\(pad.label) level \(badge!)" : pad.label))
         .accessibilityValue(Text(muted ? "Muted" : ""))
-        .accessibilityHint(Text("Drum pad. Double-tap to play."))
+        .accessibilityHint(Text(accessibilityHintText))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onHit(pad.id); onUp?(pad.id) }
+    }
+
+    // Context-aware VoiceOver hint reflecting the active pad mode.
+    private var accessibilityHintText: String {
+        if muted { return "Muted pad. Double-tap to unmute." }
+        if badge != nil { return "Velocity level pad. Double-tap to play." }
+        return "Drum pad. Double-tap to play."
     }
 
     private func face(_ th: Theme) -> some View {
