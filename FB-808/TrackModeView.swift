@@ -121,12 +121,9 @@ struct TrackModeView: View {
         .opacity(exporting || !hasContent ? 0.55 : 1)
     }
 
-    /// True when there's anything to render — guards against exporting an empty project.
-    private var hasContent: Bool {
-        project.lanes.values.contains { $0.contains { $0 != 0 } }
-            || !project.audioClips.isEmpty || !project.melody.isEmpty || !project.parts.isEmpty
-            || project.tracks.contains { $0.playsAdditively }
-    }
+    /// True when there's anything to render — guards against exporting an empty project. (Shared with the
+    /// level-independent rail Share action via Project.hasExportableContent.)
+    private var hasContent: Bool { project.hasExportableContent }
 
     private func exportSong(_ format: ExportFormat) {
         guard !exporting else { return }

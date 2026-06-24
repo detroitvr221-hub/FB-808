@@ -5,6 +5,7 @@
 //  by the same knob-shaped patch.
 
 import SwiftUI
+import UIKit
 import FD808Engine
 
 struct SynthModeView: View {
@@ -661,23 +662,17 @@ struct ScaleKeyboard: View {
     let lit: Set<Int>
     var onDown: (Int) -> Void
     var onUp: (Int) -> Void
-    @State private var current: Int?     // currently-held midi (one gesture for the whole keyboard → correct hit-testing + slides)
-
     var body: some View {
-        GeometryReader { g in
-            let slot = g.size.width / CGFloat(max(1, notes.count))
+        GeometryReader { _ in
             HStack(spacing: 3) {
                 ForEach(Array(notes.enumerated()), id: \.offset) { (_, midi) in keyView(midi) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in
-                    let idx = max(0, min(notes.count - 1, Int(v.location.x / slot)))
-                    let midi = notes[idx]
-                    if current != midi { if let c = current { onUp(c) }; current = midi; onDown(midi) }
-                }
-                .onEnded { _ in if let c = current { onUp(c); current = nil } })
+            .overlay(MultiTouchKeys(   // per-finger tracking → polyphonic (the single DragGesture was monophonic)
+                hitTest: { loc, size in
+                    let slot = size.width / CGFloat(max(1, notes.count))
+                    return notes[max(0, min(notes.count - 1, Int(loc.x / slot)))]
+                }, onDown: onDown, onUp: onUp))
         }
     }
 
@@ -708,6 +703,57 @@ struct ScaleKeyboard: View {
             .accessibilityLabel(Text(Music.name(midi)))
             .accessibilityAddTraits(down ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction { onDown(midi); onUp(midi) }
+    }
+}
+
+// MARK: - Multi-touch keyboard surface
+
+/// A transparent UIKit surface that tracks EVERY finger independently and maps each to a key via
+/// `hitTest`, firing onDown/onUp per touch. A single SwiftUI DragGesture can only follow one finger, so
+/// the keyboards were monophonic; this lets you hold a chord (the engine already voices notes per "k<midi>").
+struct MultiTouchKeys: UIViewRepresentable {
+    let hitTest: (CGPoint, CGSize) -> Int?
+    let onDown: (Int) -> Void
+    let onUp: (Int) -> Void
+
+    func makeUIView(context: Context) -> TouchView {
+        let v = TouchView()
+        v.backgroundColor = .clear
+        v.isMultipleTouchEnabled = true
+        v.isAccessibilityElement = false   // let VoiceOver fall through to the per-key accessible buttons behind
+        v.hitTestMidi = hitTest; v.onDown = onDown; v.onUp = onUp
+        return v
+    }
+    func updateUIView(_ v: TouchView, context: Context) {
+        v.hitTestMidi = hitTest; v.onDown = onDown; v.onUp = onUp
+    }
+
+    final class TouchView: UIView {
+        var hitTestMidi: ((CGPoint, CGSize) -> Int?)?
+        var onDown: ((Int) -> Void)?
+        var onUp: ((Int) -> Void)?
+        private var held: [ObjectIdentifier: Int] = [:]   // each active touch → the midi it currently holds
+
+        private func midi(for t: UITouch) -> Int? { hitTestMidi?(t.location(in: self), bounds.size) }
+        /// Release `m` only if no OTHER finger is still holding it (so lifting one of two fingers on the
+        /// same key doesn't cut the note).
+        private func release(_ m: Int, except key: ObjectIdentifier) {
+            if !held.contains(where: { $0.key != key && $0.value == m }) { onUp?(m) }
+        }
+        private func update(_ t: UITouch) {
+            let key = ObjectIdentifier(t), now = midi(for: t), old = held[key]
+            if old == now { return }
+            if let old { release(old, except: key) }
+            if let now { held[key] = now; onDown?(now) } else { held[key] = nil }
+        }
+        private func end(_ t: UITouch) {
+            let key = ObjectIdentifier(t)
+            if let m = held[key] { held[key] = nil; release(m, except: key) }
+        }
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { touches.forEach(update) }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { touches.forEach(update) }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { touches.forEach(end) }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { touches.forEach(end) }
     }
 }
 
@@ -1012,8 +1058,6 @@ struct SynthKeyboard: View {
 
     private let whiteSemis = [0, 2, 4, 5, 7, 9, 11]
     private let blackMap: [(Int, Int)] = [(0, 1), (1, 3), (3, 6), (4, 8), (5, 10)]
-    @State private var current: Int?
-
     var body: some View {
         GeometryReader { g in
             let nW = 7 * octaves
@@ -1028,13 +1072,9 @@ struct SynthKeyboard: View {
                     blackKey(midi, w: slot * 0.58, x: CGFloat(gw + 1) * slot, h: g.size.height * 0.6)
                 }
             }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in
-                    let midi = midiAt(v.location, g.size, slot: slot)
-                    if current != midi { if let c = current { onUp(c) }; current = midi; onDown(midi) }
-                }
-                .onEnded { _ in if let c = current { onUp(c); current = nil } })
+            .overlay(MultiTouchKeys(   // per-finger tracking → polyphonic (black keys still win in the upper 60% via midiAt)
+                hitTest: { loc, size in midiAt(loc, size, slot: size.width / CGFloat(7 * octaves)) },
+                onDown: onDown, onUp: onUp))
         }
     }
     /// Hit-test a touch → key. Black keys win in the upper 60%, else the white key under x.
