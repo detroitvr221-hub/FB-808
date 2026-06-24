@@ -24,6 +24,7 @@ struct PadModeView: View {
     @State private var newKitName = ""
     @State private var toast: String?
     @State private var showMPCBridge = false
+    @State private var confirmDeleteKit: UserKitDef?   // deleting a saved kit is outside the project undo system → confirm first
 
     private var sel: String { project.selectedRow }
 
@@ -69,6 +70,15 @@ struct PadModeView: View {
                 project.activeKit = "user:\(id)"
             }
         } message: { Text("Saves the current pad sounds as a reusable kit.") }
+        .alert(item: $confirmDeleteKit) { uk in
+            Alert(title: Text("Delete “\(uk.name)”?"),
+                  message: Text("This removes the saved kit. It can't be undone."),
+                  primaryButton: .destructive(Text("Delete")) {
+                      if project.activeKit == "user:\(uk.id)" { project.activeKit = "" }
+                      settings.deleteUserKit(uk.id)
+                  },
+                  secondaryButton: .cancel())
+        }
     }
 
     // MARK: stage
@@ -323,7 +333,7 @@ struct PadModeView: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(on ? settings.accent.opacity(0.14) : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
             }.buttonStyle(.plain)
-            Button { if on { project.activeKit = "" }; settings.deleteUserKit(uk.id) } label: {
+            Button { confirmDeleteKit = uk } label: {
                 Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(settings.inkFaint)
                     .frame(width: 32, height: 42)
                     .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))

@@ -329,6 +329,8 @@ struct CircleOfFifthsView: View {
         project.checkpoint("key", coalesce: false)
         project.melodyKey = rootPC
         project.melodyScale = scaleID
-        project.generateMelody()
+        // Only auto-generate a starting melody when there's none — don't silently overwrite the user's
+        // existing melody (the button promises a key change, not a rewrite). Undoable either way.
+        if project.melody.isEmpty { project.generateMelody(checkpoint: false) }
     }
 }

@@ -1149,6 +1149,8 @@ final class Project: ObservableObject {
     // MARK: FX automation (A11)
 
     func setAutoTarget(_ t: String) {
+        guard t != autoTarget else { return }   // re-tapping the same target must not re-seed (wipe) the drawn curve
+        checkpoint("autoTarget", coalesce: false)   // switching re-seeds autoLane — make that undoable (was silent loss)
         engine.resetAutomation()   // clear any stale overrides when switching or turning off
         autoTarget = t
         // seed a sensible starting curve: filter open (no effect), reverb/delay dry

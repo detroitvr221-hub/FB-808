@@ -370,7 +370,7 @@ struct SynthModeView: View {
                         .padding(.horizontal, 12).frame(height: 40)
                         .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
-                    Button { project.mapSynthToPads(); flashToast("Mapped this sound across Bank D — finger-drum it on the Pads") } label: {
+                    Button { project.mapSynthToPads(); flashToast("Mapped across Bank D (replaced its previous sounds) — finger-drum it on the Pads") } label: {
                         Text("→ Map to Pads (Bank D)").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 42)
                             .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.24)], startPoint: .top, endPoint: .bottom)))
