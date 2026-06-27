@@ -229,6 +229,21 @@ struct SampleModeView: View {
                     .background(RoundedRectangle(cornerRadius: 12).fill(engine.isMicRecording ? settings.theme.miss.opacity(0.18) : settings.panel2))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(engine.isMicRecording ? settings.theme.miss.opacity(0.6) : settings.accent.opacity(0.5), lineWidth: 1))
                 }.buttonStyle(.plain)
+                // Input device picker right where you record (native iOS 26 picker) — built-in / USB-C
+                // interface (Focusrite) / Bluetooth. Shows the active input; the system remembers it.
+                AudioInputPicker {
+                    HStack(spacing: 8) {
+                        Image(systemName: "mic.and.signal.meter.fill").font(.system(size: 16)).foregroundStyle(settings.accent)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Input").font(FDFont.mono(8, .bold)).tracking(0.5).foregroundStyle(settings.inkFaint)
+                            Text(engine.inputName).font(FDFont.ui(12.5, .semibold)).foregroundStyle(settings.ink).lineLimit(1)
+                        }
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 11)).foregroundStyle(settings.inkDim)
+                    }
+                    .padding(.horizontal, 14).frame(height: 52)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+                }
                 ForEach(SOURCES, id: \.kind) { src in
                     Button { loadSource(src.kind, src.label) } label: {
                         HStack(spacing: 8) {
