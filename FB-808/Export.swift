@@ -504,21 +504,15 @@ nonisolated func renderOffline(_ plan: ExportPlan,
             mixL += l; mixR += r
             if pf.send > 0 { sendL += l * Float(pf.send); sendR += r * Float(pf.send) }
         }
-        var gL = mixL * m, gR = mixR * m
-        if fxActive {
-            let sL = sendL * m, sR = sendR * m
-            let (oL, oR) = fx.process(gL + sL, gR + sR)
-            gL = oL - sL; gR = oR - sR
-        }
-        mCutSmooth += (mCutTarget - mCutSmooth) * mCutCoef   // glide (mirrors live SynthCore per-block smoothing)
-        if mCutTarget < 18000 || mCutSmooth < 18000 {        // automated master lowpass sweep, hysteresis bypass
-            gL = Float(msvfL.lp(Double(gL), mCutSmooth, 1.0, sr))
-            gR = Float(msvfR.lp(Double(gR), mCutSmooth, 1.0, sr))
-        }
-        if masterActive { (gL, gR) = mbus.process(gL, gR, plan.masterBus) }
-        let (lgL, lgR) = safety.process(gL, gR)            // always-on safety limiter, before the soft-clip
-        L[i] = tanhf(lgL * 0.8) * 1.05
-        R[i] = tanhf(lgR * 0.8) * 1.05
+        mCutSmooth += (mCutTarget - mCutSmooth) * mCutCoef   // per-sample glide of the automated master filter
+        let mFilter = mCutTarget < 18000 || mCutSmooth < 18000
+        // Same master chain the live engine runs (FD808Engine.applyMasterBus) — one source of truth so the
+        // bounce can't drift from playback.
+        let (gL, gR) = applyMasterBus(mixL: mixL, mixR: mixR, sendL: sendL, sendR: sendR, master: m,
+            fx: fx, fxActive: fxActive, msvfL: &msvfL, msvfR: &msvfR, mFilter: mFilter, mCut: mCutSmooth,
+            mbus: mbus, masterActive: masterActive, masterBusParams: plan.masterBus, sr: sr)
+        let (fl, fr) = masterFinalize(gL, gR, safety: &safety)
+        L[i] = fl; R[i] = fr
         if max(abs(gL), abs(gR)) > 2e-4 { lastFrame = i }          // last audible frame
         if active.isEmpty && nextIdx >= voices.count {             // every voice has finished
             let guardFrames = fxActive ? Int(0.1 * sr) : 0         // let the reverb/delay tail ring out
