@@ -23,6 +23,7 @@ struct TeacherModeView: View {
 
     @State private var tab = "roster"                  // navigation only — fine to reset on return
     @State private var toast: String?                  // transient
+    @State private var confirmEndLive = false          // guard the destructive "End Live Class" (kicks everyone)
 
     // Live submissions (Submissions tab while HOSTING — real backend data, not the mock roster).
     @State private var remoteSubs: [RemoteSub] = []
@@ -92,6 +93,10 @@ struct TeacherModeView: View {
         .overlay(alignment: .bottom) {
             if let toast { toastView(toast) }
         }
+        .alert("End live class?", isPresented: $confirmEndLive) {
+            Button("End Class", role: .destructive) { toggleLive() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("This disconnects every joined student and ends the session.") }
         // Poll real submissions while hosting (keeps the badge + list live regardless of which tab is open).
         .task(id: session.role) {
             guard session.role == .host else { remoteSubs = []; stopPlayback(); return }
@@ -264,7 +269,7 @@ struct TeacherModeView: View {
                     Text(liveCode).font(FDFont.display(34, .bold)).foregroundStyle(settings.ink).tracking(2)
                         .accessibilityLabel("Class code \(liveCode)")
                     Text("Students join from the home screen").font(FDFont.ui(12)).foregroundStyle(settings.inkDim)
-                    Button { toggleLive() } label: {
+                    Button { if classroom.live { confirmEndLive = true } else { toggleLive() } } label: {
                         HStack(spacing: 8) {
                             Circle().fill(classroom.live ? settings.theme.miss : settings.theme.good).frame(width: 9, height: 9)
                             Text(classroom.live ? "End Live Class" : "Start Live Class").font(FDFont.ui(14, .semibold))

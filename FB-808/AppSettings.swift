@@ -84,8 +84,10 @@ final class AppSettings: ObservableObject {
         return p
     }
     func addSavedSynth(_ patch: SynthPatch) {
-        guard !savedSynths.contains(where: { $0.name == patch.name }) else { return }   // dedupe by name
-        savedSynths.append(patch)
+        // Save-by-name: re-saving a tweaked patch under an existing name UPDATES it (was a silent no-op,
+        // so edits to a saved patch couldn't be kept).
+        if let i = savedSynths.firstIndex(where: { $0.name == patch.name }) { savedSynths[i] = patch }
+        else { savedSynths.append(patch) }
     }
     /// One-time migration: pull a project's legacy per-project saved patches into the global library.
     func mergeLegacySavedSynths(_ patches: [SynthPatch]) {
