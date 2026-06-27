@@ -429,6 +429,8 @@ final class ProjectStore: ObservableObject {
         if !s.sequences.isEmpty, s.activeSeq < 0 || s.activeSeq >= s.sequences.count {
             s.activeSeq = min(max(0, s.activeSeq), s.sequences.count - 1); log.append("clamped out-of-range active sequence")
         }
+        let cb = max(40, min(220, s.bpm)); if cb != s.bpm { s.bpm = cb; log.append("clamped out-of-range tempo") }
+        let cbs = max(1, min(16, s.barSteps ?? 16)); if cbs != (s.barSteps ?? 16) { s.barSteps = cbs; log.append("clamped out-of-range step count") }
         lastRepairs = log
         return s
     }

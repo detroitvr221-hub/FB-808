@@ -43,9 +43,13 @@ final class ClassroomStore: ObservableObject {
         if let data = try? JSONEncoder().encode(students) { store.set(data, forKey: "fd.class.students") }
     }
     private static func loadStudents() -> [Student] {
-        guard let data = UserDefaults.standard.data(forKey: "fd.class.students"),
-              let arr = try? JSONDecoder().decode([Student].self, from: data), !arr.isEmpty
-        else { return seedRoster() }   // first run only; once any edit persists, never re-seeds
+        guard let data = UserDefaults.standard.data(forKey: "fd.class.students") else {
+            return seedRoster()   // genuine first run → example roster
+        }
+        // Data present but unreadable (e.g. a schema change across an app update): do NOT fall back to the
+        // mock roster (it would read as real and could be saved over the original). Return empty and leave
+        // the stored data intact for a future tolerant-decode recovery.
+        guard let arr = try? JSONDecoder().decode([Student].self, from: data), !arr.isEmpty else { return [] }
         return arr
     }
 

@@ -393,8 +393,9 @@ final class Project: ObservableObject {
         emit(.setStep(pad: padID, step: i, vel: lane[i]))
     }
     func setStepVel(_ padID: String, _ i: Int, _ vel: Double) {
-        checkpoint("paint:\(padID)")
         var lane = lanes[padID] ?? Kit.emptyLane()
+        guard lane.indices.contains(i) else { return }   // ignore out-of-range steps (e.g. a malformed remote op)
+        checkpoint("paint:\(padID)")
         lane[i] = max(0, min(1, vel))
         lanes[padID] = lane
         emit(.setStep(pad: padID, step: i, vel: lane[i]))
@@ -1279,7 +1280,11 @@ final class Project: ObservableObject {
     private func applyState(_ s: ProjectSnapshot, resetSample: Bool) {
         isApplyingState = true
         defer { isApplyingState = false }
-        name = s.name; bpm = s.bpm; swing = s.swing; quantize = s.quantize; barSteps = s.barSteps ?? 16; bank = s.bank; fullLevel = s.fullLevel
+        // Clamp numeric fields from the snapshot (corrupt save / malformed fullSync): an unclamped bpm: 0 →
+        // div-by-zero transport, and barSteps > 16 → the 16-element lanes crash on record. (activeSeq below
+        // is already clamped this way.)
+        name = s.name; bpm = max(40, min(220, s.bpm)); swing = max(0, min(0.6, s.swing)); quantize = s.quantize
+        barSteps = max(1, min(16, s.barSteps ?? 16)); bank = s.bank; fullLevel = s.fullLevel
         projectID = s.id ?? UUID().uuidString   // un-migrated (nil-id) saves become id-stable for this session (#219)
         selectedRow = s.selectedRow; rowMute = s.rowMute; rowSolo = s.rowSolo
         sequences = s.sequences

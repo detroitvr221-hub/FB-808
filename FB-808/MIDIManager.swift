@@ -154,10 +154,16 @@ final class MIDIManager: ObservableObject {
         // is touched (the `fifo` reference is Sendable; no main-actor state is read here).
         let fifo = self.fifo
         let readBlock: MIDIReadBlock = { pktList, _ in
-            var packet = pktList.pointee.packet
-            for _ in 0..<Int(pktList.pointee.numPackets) {
-                withUnsafePointer(to: packet) { fifo.ingest($0) }
-                packet = withUnsafePointer(to: packet) { MIDIPacketNext($0).pointee }
+            // Walk the packet list in place — advance the pointer MIDIPacketNext returns; never copy a
+            // packet to a stack local (a copy makes MIDIPacketNext compute the next address off stack
+            // memory, corrupting multi-packet lists like chords or fast CC sweeps).
+            let count = Int(pktList.pointee.numPackets)
+            withUnsafePointer(to: pktList.pointee.packet) { first in
+                var p = first
+                for _ in 0..<count {
+                    fifo.ingest(p)
+                    p = UnsafePointer(MIDIPacketNext(p))
+                }
             }
         }
         status = MIDIInputPortCreateWithBlock(client, "FD808.Input" as CFString, &inPort, readBlock)

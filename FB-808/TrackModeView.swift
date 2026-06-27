@@ -669,7 +669,12 @@ struct TrackModeView: View {
             start += s.len
         }
         project.arrangement = arr
-        project.clips = clipMap
+        // Only the 5 legacy lanes are (re)built by the auto-arranger; preserve clips authored on any
+        // user-added tracks instead of wiping the whole clip map (which contradicted the 99-track feature).
+        let legacy: Set<String> = ["drums", "hats", "bass", "perc", "vox"]
+        var merged = project.clips.filter { !legacy.contains($0.key) }
+        for (k, v) in clipMap { merged[k] = v }
+        project.clips = merged
         project.songMode = true
     }
 
