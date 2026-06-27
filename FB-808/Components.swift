@@ -30,11 +30,15 @@ struct Eyebrow: View {
     }
 }
 
-struct ModeHead: View {
+/// The shared mode header: a 26pt display title + accent eyebrow, an optional inkFaint hint, and an
+/// optional trailing slot for mode-specific controls (so Tracks/Teacher keep their header buttons while
+/// the title/eyebrow styling stays identical across modes).
+struct ModeHead<Trailing: View>: View {
     @EnvironmentObject var settings: AppSettings
     let title: String
     let eyebrow: String
     var hint: String? = nil
+    @ViewBuilder var trailing: Trailing
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text(title).font(FDFont.display(26, .bold)).foregroundStyle(settings.ink)
@@ -44,7 +48,13 @@ struct ModeHead: View {
                 Text(hint).font(FDFont.ui(12.5)).foregroundStyle(settings.inkFaint)
                     .lineLimit(1)
             }
+            trailing
         }
+    }
+}
+extension ModeHead where Trailing == EmptyView {
+    init(title: String, eyebrow: String, hint: String? = nil) {
+        self.init(title: title, eyebrow: eyebrow, hint: hint, trailing: { EmptyView() })
     }
 }
 

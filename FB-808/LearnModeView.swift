@@ -236,11 +236,7 @@ struct LearnModeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text("Learn").font(FDFont.display(26, .bold)).foregroundStyle(settings.ink)
-                Eyebrow(text: "Skills → Real Beats")
-                Spacer()
-            }
+            ModeHead(title: "Learn", eyebrow: "Skills → Real Beats")
             CoachNote("Learning lives **inside** the studio. Pass a follow-the-lights drill and FD808 drops the pattern straight into a real project so you can build on it.")
                 .padding(.top, 10)
             if let note = lessonNote {

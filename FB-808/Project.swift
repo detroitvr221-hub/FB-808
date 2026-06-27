@@ -795,8 +795,8 @@ final class Project: ObservableObject {
         return (i == activeSeq || !sequences.indices.contains(i)) ? parts : sequences[i].parts
     }
 
-    func setBank(_ b: String) { bank = b; emit(.setBank(bank: b)) }   // emit → students' bank follows the teacher live
-    func setBpm(_ v: Int) { bpm = max(40, min(220, v)); emit(.setTempo(bpm: bpm)) }
+    func setBank(_ b: String) { _ = checkpoint("bank", coalesce: false); bank = b; emit(.setBank(bank: b)) }   // emit → students' bank follows the teacher live
+    func setBpm(_ v: Int) { _ = checkpoint("bpm"); bpm = max(40, min(220, v)); emit(.setTempo(bpm: bpm)) }   // coalesced: a tap/drag is one undo step
     func setBpm(_ v: Double) { setBpm(Int(v.rounded())) }
 
     // MARK: synth / melody

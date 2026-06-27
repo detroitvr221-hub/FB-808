@@ -45,10 +45,7 @@ struct TrackModeView: View {
         VStack(spacing: 10) {
             TransportBar()
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text("Tracks").font(FDFont.display(26, .bold)).foregroundStyle(settings.ink)
-                    Eyebrow(text: "Arrangement · \(BARS) Bars")
-                    Spacer()
+                ModeHead(title: "Tracks", eyebrow: "Arrangement · \(BARS) Bars") {
                     Text(project.audioArmedTrack != nil ? "Audio armed · press ● to record over the beat"
                          : (project.songMode ? "Song Mode · clips build the arrangement" : "Tap a lane to add · drag to move · tap a clip to edit"))
                         .font(FDFont.ui(12.5)).foregroundStyle(project.audioArmedTrack != nil ? settings.theme.miss : settings.inkFaint).lineLimit(1)

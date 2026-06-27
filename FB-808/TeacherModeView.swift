@@ -73,10 +73,7 @@ struct TeacherModeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text("Teacher").font(FDFont.display(26, .bold)).foregroundStyle(settings.ink)
-                Eyebrow(text: TE_CLASS)
-                Spacer()
+            ModeHead(title: "Teacher", eyebrow: TE_CLASS) {
                 Text("\(onCount) of \(displayRoster.count) online\(classroom.live ? " · LIVE" : "")")
                     .font(FDFont.ui(12.5)).foregroundStyle(classroom.live ? settings.accent : settings.inkFaint)
             }
@@ -224,6 +221,18 @@ struct TeacherModeView: View {
             }
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel)).overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+
+            if session.role != .host {   // showing the example peers, not a real enrolled class
+                HStack(spacing: 8) {
+                    Image(systemName: "eye").font(.system(size: 12)).foregroundStyle(settings.inkFaint)
+                    Text("Preview — example students. Start a live class to see your real roster.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
+                .accessibilityElement(children: .combine)
+            }
 
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {

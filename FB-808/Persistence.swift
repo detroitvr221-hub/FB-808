@@ -109,6 +109,7 @@ struct SavedProject: Identifiable, Hashable, Sendable {
 final class ProjectStore: ObservableObject {
     @Published private(set) var items: [SavedProject] = []
     @Published private(set) var lastRepairs: [String] = []   // what the last repaired() load cleaned up (health check)
+    func clearRepairs() { lastRepairs = [] }                 // called when the user acknowledges the cleanup notice
 
     private let dir: URL
     private let ext = "fd808json"

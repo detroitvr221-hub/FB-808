@@ -8,13 +8,15 @@ import UniformTypeIdentifiers
 import Waveform   // AudioKit GPU waveform (vendored, MIT) — true min/max draw of the sample buffer
 
 private let SLICE_COUNTS = [4, 8, 16, 32]
+// Built-in DEMO tones — synthesized on the fly (not recordings), so you always have something to
+// chop/stretch/slice without importing. Labelled "Tone" so none of them claims to be a real sample.
 private let SOURCES: [(kind: String, label: String, icon: String)] = [
-    ("vocal", "Vocal Chop", "mic.fill"),
-    ("chop", "Melodic Loop", "square.and.arrow.down.fill"),
-    ("bass", "808 Bass", "waveform.path"),
-    ("piano", "Piano Phrase", "pianokeys"),
+    ("vocal", "Vocal Tone", "mic.fill"),
+    ("chop", "Melodic Tone", "square.and.arrow.down.fill"),
+    ("bass", "808 Tone", "waveform.path"),
+    ("piano", "Keys Tone", "pianokeys"),
     ("stab", "Synth Stab", "bolt.fill"),
-    ("pluck", "Pluck Loop", "music.note"),
+    ("pluck", "Pluck Tone", "music.note"),
 ]
 
 struct SampleModeView: View {
@@ -78,6 +80,8 @@ struct SampleModeView: View {
                      hint: sample.map { String(format: "%.2fs · drag the edges to trim", $0.dur) })
             waveBox
             sourceRow
+            Text("Resample the mix, import or record audio — or load a built-in **demo tone** (synthesized, not a recording) to chop and stretch.")
+                .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

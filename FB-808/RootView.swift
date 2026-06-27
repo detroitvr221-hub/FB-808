@@ -77,6 +77,23 @@ struct AchievementToast: View {
     }
 }
 
+/// Pushes audio-related setting changes to the engine. Extracted from RootView.body as one modifier so
+/// the (already large) body type-checks in reasonable time.
+private struct AudioSettingsSync: ViewModifier {
+    @ObservedObject var settings: AppSettings
+    let apply: () -> Void
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: settings.audioBufferMs) { _, _ in apply() }
+            .onChange(of: settings.polyphony) { _, _ in apply() }
+            .onChange(of: settings.limiterOn) { _, _ in apply() }
+            .onChange(of: settings.limiterCeilingDb) { _, _ in apply() }
+            .onChange(of: settings.hqInterp) { _, _ in apply() }
+            .onChange(of: settings.equalPowerPan) { _, _ in apply() }
+            .onChange(of: settings.bandlimitedOsc) { _, _ in apply() }
+    }
+}
+
 struct NavItem: Identifiable { let id: String; let label: String; let symbol: String }
 
 let FD_NAV: [NavItem] = [
@@ -200,13 +217,7 @@ struct RootView: View {
             }
             if phase == .background { engine.allNotesOff() }   // release any held live notes (no stuck notes on return)
         }
-        .onChange(of: settings.audioBufferMs) { _, _ in applyAudio() }
-        .onChange(of: settings.polyphony) { _, _ in applyAudio() }
-        .onChange(of: settings.limiterOn) { _, _ in applyAudio() }
-        .onChange(of: settings.limiterCeilingDb) { _, _ in applyAudio() }
-        .onChange(of: settings.hqInterp) { _, _ in applyAudio() }
-        .onChange(of: settings.equalPowerPan) { _, _ in applyAudio() }
-        .onChange(of: settings.bandlimitedOsc) { _, _ in applyAudio() }
+        .modifier(AudioSettingsSync(settings: settings, apply: applyAudio))
         .alert("Recover unsaved changes?", isPresented: Binding(get: { recoverSnap != nil }, set: { if !$0 { recoverSnap = nil } })) {
             Button("Recover") { if let s = recoverSnap { project.restore(store.repaired(s)) }; store.clearAutosave(); recoverSnap = nil }
             Button("Discard", role: .destructive) { store.clearAutosave(); recoverSnap = nil }
@@ -215,6 +226,11 @@ struct RootView: View {
             Button("OK") { missingAudio = [] }
         } message: {
             Text("This project references audio that couldn't be found:\n\n• \(missingAudio.prefix(8).joined(separator: "\n• "))\n\nThe rest of the project loaded fine.")
+        }
+        .alert("Project cleaned up on load", isPresented: Binding(get: { !store.lastRepairs.isEmpty }, set: { if !$0 { store.clearRepairs() } })) {
+            Button("OK") { store.clearRepairs() }
+        } message: {
+            Text("Some unreadable or orphaned data was removed so the project opens cleanly:\n\n• \(store.lastRepairs.prefix(8).joined(separator: "\n• "))\n\nSaving the project will make these changes permanent.")
         }
         .onChange(of: settings.level) { _, _ in
             if !allowed.contains(tab) { tab = allowed.first ?? "pads" }
