@@ -78,6 +78,27 @@ struct SettingsSheet: View {
                     Text("Higher rates reduce aliasing for cleaner synths; the engine adopts the new rate next launch.")
                         .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
 
+                    // Audio input device — native iOS 26 picker (built-in mic / wired / USB-C interface / Bluetooth).
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("Recording input").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                        AudioInputPicker {
+                            HStack(spacing: 10) {
+                                Image(systemName: "mic.and.signal.meter.fill").font(.system(size: 15)).foregroundStyle(settings.accent)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Choose input device").font(FDFont.ui(14, .semibold)).foregroundStyle(th.ink)
+                                    Text(engine.inputName).font(FDFont.mono(11)).foregroundStyle(th.inkFaint).lineLimit(1)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.up.chevron.down").font(.system(size: 12)).foregroundStyle(th.inkDim)
+                            }
+                            .padding(.horizontal, 14).frame(height: 52)
+                            .frame(maxWidth: .infinity)
+                            .fdCard(12, fill: settings.panel2)
+                        }
+                        Text("Record through a built-in mic, headset, or a USB-C / Bluetooth audio interface (e.g. Focusrite). The system remembers your choice per app.")
+                            .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
+                    }
+
                     section("Audio Quality")
                     Toggle(isOn: $settings.hqInterp) {
                         VStack(alignment: .leading, spacing: 2) {

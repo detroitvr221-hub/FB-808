@@ -386,6 +386,8 @@ final class AudioEngine: ObservableObject {
 
     /// The IO buffer the system actually granted (may differ from preferred; the OS quantizes it).
     func currentBufferDuration() -> Double { sessionMgr.currentBufferDuration() }
+    /// The active capture-input device name (e.g. "Scarlett 2i2 USB"), or "—" — for the input picker UI.
+    var inputName: String { sessionMgr.inputName }
 
     /// Set the buffer policy (sec; pass 0 for the per-route Auto target) and restart the IO if running.
     func setPreferredBuffer(_ sec: Double) {
