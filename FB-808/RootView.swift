@@ -169,7 +169,7 @@ struct RootView: View {
         .overlay { if showTour { TourOverlay(settings: settings, show: $showTour) { toured = true } } }
         .onAppear {
             engine.start()
-            engine.setVolume(0.9)
+            project.pushMasterVolume()  // live master gain from the master fader (0.9 base × master.vol)
             applyAudio()                // push persisted buffer / polyphony / limiter prefs to the engine
             wireMIDI()                  // CoreMIDI input → existing trigger APIs (Phase 6); no-op when no device
             session.project = project   // received ops apply into the live project

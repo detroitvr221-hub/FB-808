@@ -539,7 +539,17 @@ final class Project: ObservableObject {
         var c = mixer[ch] ?? MixChannel()
         patch(&c)
         mixer[ch] = c
+        if ch == "master" { pushMasterVolume() }   // master fader/mute is LIVE — affects sounding voices immediately
         emit(.setMix(ch: ch, vol: c.vol, pan: c.pan, mute: c.mute, solo: c.solo))
+    }
+
+    /// Drive the engine's (live) master gain from the master-channel fader, so moving the master fader or
+    /// muting it changes sounding voices in real time instead of only the next triggered hit. Level-neutral:
+    /// `0.9` is the engine's existing base trim; `master.vol` was previously baked into every trigger's
+    /// velocity (now removed there), so total master gain is unchanged at any fader position.
+    func pushMasterVolume() {
+        let mst = mixer["master"] ?? MixChannel(vol: 0.9)
+        engine.setVolume(mst.mute ? 0 : 0.9 * mst.vol)
     }
     func anySolo() -> Bool { mixer.values.contains { $0.solo } }
 
@@ -581,7 +591,7 @@ final class Project: ObservableObject {
         if anySolo() && !c.solo { return 0 }
         let master = mixer["master"] ?? MixChannel(vol: 0.9)
         if master.mute { return 0 }
-        return c.vol * master.vol * 1.25
+        return c.vol * 1.25   // master gain is applied live by the engine (pushMasterVolume), not baked here
     }
 
     // MARK: triggering
@@ -803,8 +813,7 @@ final class Project: ObservableObject {
 
     var synthGain: Double {
         let mel = mixer["melody"] ?? MixChannel(vol: 0.85)
-        let master = mixer["master"] ?? MixChannel(vol: 0.9)
-        return mel.vol * master.vol * 1.25
+        return mel.vol * 1.25   // master gain is applied live by the engine (pushMasterVolume), not baked here
     }
 
     // MARK: Play Assist (E2 chords / E3 arpeggiator / E5 strum) — see PlayAssist.swift
@@ -1276,6 +1285,7 @@ final class Project: ObservableObject {
         sequences = s.sequences
         activeSeq = s.sequences.isEmpty ? 0 : max(0, min(s.activeSeq, s.sequences.count - 1))
         mixer = s.mixer
+        pushMasterVolume()   // restore the live engine master from the loaded master fader (was launch-only 0.9)
         arrangement = s.arrangement; clips = s.clips; trackMute = s.trackMute; trackSolo = s.trackSolo; songMode = s.songMode
         melodyKey = s.melodyKey; melodyScale = s.melodyScale; melodyOctave = s.melodyOctave; melodyDensity = s.melodyDensity
         scaleLock = s.scaleLock; rollLen = s.rollLen
