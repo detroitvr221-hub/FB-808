@@ -3,6 +3,7 @@
 
 import SwiftUI
 import FD808Engine
+import os
 import AVFoundation
 #if canImport(UIKit)
 import UIKit
@@ -41,7 +42,6 @@ struct ExportFile: Identifiable { let id = UUID(); let urls: [URL] }
 enum ExportFormat: Sendable {
     case wav, m4a
     nonisolated var ext: String { switch self { case .wav: "wav"; case .m4a: "m4a" } }
-    nonisolated var menuLabel: String { switch self { case .wav: "WAV · lossless"; case .m4a: "M4A · AAC (compressed)" } }
     nonisolated var icon: String { switch self { case .wav: "waveform.path"; case .m4a: "waveform" } }
 }
 
@@ -627,15 +627,10 @@ nonisolated func writeAudio(_ format: ExportFormat, left: [Float], right: [Float
         try FileManager.default.moveItem(at: tmp, to: url)
         return url
     } catch {
-        print("\(format.ext.uppercased()) export error: \(error)")
+        fdLog.error("\(format.ext.uppercased(), privacy: .public) export error: \(error.localizedDescription, privacy: .public)")
         try? FileManager.default.removeItem(at: tmp)
         return nil
     }
-}
-
-// Back-compat shim.
-nonisolated func writeWAV(left: [Float], right: [Float], sr: Double, name: String) -> URL? {
-    writeAudio(.wav, left: left, right: right, sr: sr, name: name)
 }
 
 // MARK: - Share sheet

@@ -7,7 +7,6 @@ import AVFoundation
 import UIKit
 
 private let TE_CLASS = "Beat Lab · 4th Period"
-private let TE_CODE = "FD-7K2P"
 private let TE_TOTAL = 6   // roster-card lesson scale (Student/Submission models live in ClassroomStore.swift)
 
 private func starsFor(_ acc: Double) -> Int { acc >= 0.93 ? 3 : (acc >= 0.78 ? 2 : (acc >= 0.55 ? 1 : 0)) }
@@ -30,7 +29,8 @@ struct TeacherModeView: View {
     @State private var selectedRemoteID: String?
     @State private var remoteFeedback = ""             // teacher's in-progress feedback for the selected sub
     @State private var subsRefreshing = false
-    @State private var audioPlayer: AVPlayer?          // retained so playback isn't deallocated mid-play
+    @State private var reviewEndTask: Task<Void, Never>?   // clears the "playing" cue when the engine clip ends
+    @State private var reviewGen = 0                        // invalidates an in-flight load when the user taps again / stops
     @State private var playingSubID: String?
 
     /// A submission as returned by the `submissions` edge action (token-authorized; teacher-only).
@@ -103,9 +103,6 @@ struct TeacherModeView: View {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { _ in
-            playingSubID = nil
-        }
     }
 
     @MainActor private func refreshSubs() async {
@@ -125,19 +122,43 @@ struct TeacherModeView: View {
     private func playRemote(_ sub: RemoteSub) {
         guard let path = sub.audioPath else { return }
         stopPlayback()   // stop any current submission before starting another (no overlapping audio)
+        let gen = reviewGen
         Task {
-            guard let url = await session.submissionAudioURL(path: path) else { toast = "Couldn't load audio"; return }
-            let player = AVPlayer(url: url)
-            audioPlayer = player
+            guard let url = await session.submissionAudioURL(path: path) else { if gen == reviewGen { toast = "Couldn't load audio" }; return }
+            // Download + decode OFF the main thread, then play THROUGH THE ENGINE (not a side AVPlayer),
+            // so all audio shares the one session/route and the master limiter/volume.
+            guard let local = await downloadTemp(url) else { if gen == reviewGen { toast = "Couldn't load audio" }; return }
+            let pcm = await SampleEngine.decodeAsync(url: local, targetSR: engine.sampleRate)
+            try? FileManager.default.removeItem(at: local)
+            guard gen == reviewGen else { return }                 // superseded by another tap / stop during the await
+            guard let pcm, !pcm.isEmpty else { toast = "Couldn't load audio"; return }
+            engine.start()
+            engine.playReviewClip(pcm)
             playingSubID = sub.id
-            player.play()
+            let dur = Double(pcm.count) / engine.sampleRate
+            reviewEndTask?.cancel()
+            reviewEndTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(dur * 1_000_000_000) + 120_000_000)
+                if !Task.isCancelled, playingSubID == sub.id { playingSubID = nil }
+            }
         }
     }
 
+    /// Download a remote submission WAV to a temp file (AVAudioFile decode needs a local URL).
+    private func downloadTemp(_ url: URL) async -> URL? {
+        do {
+            let (tmp, _) = try await URLSession.shared.download(from: url)
+            let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: tmp, to: dest)
+            return dest
+        } catch { return nil }
+    }
+
     private func stopPlayback() {
-        audioPlayer?.pause()
-        audioPlayer?.replaceCurrentItem(with: nil)
-        audioPlayer = nil
+        reviewGen &+= 1                 // invalidate any in-flight load so it can't start playing after we stop
+        reviewEndTask?.cancel(); reviewEndTask = nil
+        engine.stopReviewClip()
         playingSubID = nil
     }
 
@@ -236,8 +257,7 @@ struct TeacherModeView: View {
                 }
             }
             .padding(13)
-            .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+            .fdCard(14, fill: settings.panel)
         }.buttonStyle(.plain)
     }
 
@@ -298,8 +318,7 @@ struct TeacherModeView: View {
                             TextField("Class code", text: $joinCode)
                                 .font(FDFont.mono(13, .bold)).textInputAutocapitalization(.characters).autocorrectionDisabled()
                                 .padding(.horizontal, 10).frame(height: 36)
-                                .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                                .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                                .fdCard(9, fill: settings.panel2)
                             Button {
                                 let c = joinCode.trimmingCharacters(in: .whitespaces).uppercased()
                                 if !c.isEmpty && session.role != .host { session.follow(code: c, name: "Student") }

@@ -403,16 +403,14 @@ struct SampleModeView: View {
         Button(action: action) {
             Text(label).font(FDFont.ui(12, .semibold)).foregroundStyle(settings.inkDim)
                 .frame(maxWidth: .infinity).frame(height: 38)
-                .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                .fdCard(10, fill: settings.panel2)
         }.buttonStyle(.plain).disabled(!has)
     }
     private func sliceEditButton(_ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label).font(FDFont.ui(12, .semibold)).foregroundStyle(settings.ink)
                 .frame(maxWidth: .infinity).frame(height: 34)
-                .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                .fdCard(9, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
     private func sliderRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, readout: String) -> some View {
@@ -683,7 +681,7 @@ struct SampleModeView: View {
         let delta = snapped - midi
         s.pitch = max(-12, min(12, s.pitch + delta))
         project.sample = s
-        let note = Music.noteNames[((snapped % 12) + 12) % 12]
+        let note = Music.noteName(snapped)
         flash("\(Int(hz)) Hz → \(note) (\(delta >= 0 ? "+" : "")\(delta) st)")
         playOnce(s)
     }

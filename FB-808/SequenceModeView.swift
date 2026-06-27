@@ -175,8 +175,7 @@ struct SequenceModeView: View {
         Button(action: action) {
             Text(s).font(.system(size: 17, weight: .bold)).foregroundStyle(settings.inkDim)
                 .frame(width: 30, height: 30)
-                .background(RoundedRectangle(cornerRadius: 8).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(settings.line, lineWidth: 1))
+                .fdCard(8, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
 
@@ -205,8 +204,7 @@ struct SequenceModeView: View {
                 if arrow { Text("▸").font(.system(size: 13, weight: .bold)).foregroundStyle(settings.inkDim) }
             }
             .padding(.horizontal, 12).frame(height: 34)
-            .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+            .fdCard(10, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
 
@@ -221,8 +219,7 @@ struct SequenceModeView: View {
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
     }
 
     private var stepHeader: some View {
@@ -403,8 +400,7 @@ struct SequenceModeView: View {
                 Button { project.clearStepMeta(sel, step); editStep = nil } label: {
                     Text("Clear").font(FDFont.mono(10, .bold)).foregroundStyle(settings.inkDim)
                         .padding(.horizontal, 8).frame(height: 24)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(settings.panel2))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings.line, lineWidth: 1))
+                        .fdCard(6, fill: settings.panel2)
                 }.buttonStyle(.plain)
             }
             VStack(alignment: .leading, spacing: 3) {
@@ -436,7 +432,7 @@ struct SequenceModeView: View {
             plockRow("Pitch", \.pitch, step, -12, 12, 0) { "\(Int($0)) st" }
             plockRow("Cutoff", \.cutoff, step, 200, 12000, 4000) { hz($0) + " Hz" }
             plockRow("Decay", \.decay, step, 0.02, 1.5, 0.2) { "\(Int($0 * 1000)) ms" }
-            plockRow("Pan", \.pan, step, -1, 1, 0) { $0 == 0 ? "C" : ($0 > 0 ? "R" : "L") + "\(Int(abs($0) * 100))" }
+            plockRow("Pan", \.pan, step, -1, 1, 0) { Music.panLabel($0) }
         }
         .padding(16).frame(width: 290)
         .background(settings.panel)

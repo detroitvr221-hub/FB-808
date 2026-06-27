@@ -246,8 +246,7 @@ struct EarTrainingView: View {
                         Button { play() } label: {
                             HStack(spacing: 7) { Image(systemName: "speaker.wave.2.fill").font(.system(size: 13)); Text("Hear again").font(FDFont.ui(14, .semibold)) }
                                 .foregroundStyle(settings.ink).padding(.horizontal, 16).frame(height: 40)
-                                .background(RoundedRectangle(cornerRadius: 11).fill(settings.panel2))
-                                .overlay(RoundedRectangle(cornerRadius: 11).stroke(settings.line, lineWidth: 1))
+                                .fdCard(11, fill: settings.panel2)
                         }.buttonStyle(.plain)
                     }
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {

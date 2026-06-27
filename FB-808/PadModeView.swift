@@ -339,8 +339,7 @@ struct PadModeView: View {
             Button { confirmDeleteKit = uk } label: {
                 Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(settings.inkFaint)
                     .frame(width: 32, height: 42)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                    .fdCard(10, fill: settings.panel2)
             }.buttonStyle(.plain)
         }
     }

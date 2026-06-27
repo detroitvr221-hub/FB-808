@@ -49,14 +49,6 @@ final class MIDIInputFIFO: @unchecked Sendable {
         os_unfair_lock_unlock(&lock)
     }
 
-    /// Feed a raw MIDI byte stream through the exact same parser `ingest` uses (no MIDIPacket needed).
-    /// Used by the headless parser test; also a clean seam for future MIDI-over-network input.
-    func ingestBytes(_ bytes: [UInt8]) {
-        os_unfair_lock_lock(&lock)
-        for b in bytes { parse(b) }
-        os_unfair_lock_unlock(&lock)
-    }
-
     /// Byte-stream parser with MIDI running status. Must be called with the lock held.
     private func parse(_ byte: UInt8) {
         if byte >= 0xF8 { return }                       // realtime (clock/start/stop) — single byte, ignore here

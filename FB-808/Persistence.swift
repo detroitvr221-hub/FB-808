@@ -5,20 +5,24 @@
 
 import SwiftUI
 import Combine
+import os
 @preconcurrency import AVFoundation
 
 // MARK: - Audio-clip file store
 
-nonisolated func fd808AudioDir() -> URL {
+/// `Documents/<name>/`, created if missing — one home for the app's on-disk subdirectories.
+nonisolated func fd808DocsSubdir(_ name: String) -> URL {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    let d = docs.appendingPathComponent("FD808Audio", isDirectory: true)
+    let d = docs.appendingPathComponent(name, isDirectory: true)
     try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
     return d
 }
 
+nonisolated func fd808AudioDir() -> URL { fd808DocsSubdir("FD808Audio") }
+
 // Mono 16-bit WAV writer shared by clip + pad-sample stores.
 @discardableResult
-nonisolated func writeWAVData(_ data: [Float], to url: URL, sr: Double = 48_000) -> Bool {
+nonisolated func writeWAVData(_ data: [Float], to url: URL, sr: Double = AudioDefaults.sampleRate) -> Bool {
     guard !data.isEmpty else { return false }
     let settings: [String: Any] = [
         AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sr, AVNumberOfChannelsKey: 1,
@@ -41,7 +45,7 @@ nonisolated func writeWAVData(_ data: [Float], to url: URL, sr: Double = 48_000)
             i += count
         }
         return true
-    } catch { print("wav write error: \(error)"); return false }
+    } catch { fdLog.error("wav write error: \(error.localizedDescription, privacy: .public)"); return false }
 }
 
 nonisolated func readWAVData(at url: URL, targetSR: Double? = nil) -> [Float]? {
@@ -69,7 +73,7 @@ nonisolated func readWAVData(at url: URL, targetSR: Double? = nil) -> [Float]? {
 }
 
 @discardableResult
-nonisolated func writeClipWAV(_ data: [Float], id: UUID, sr: Double = 48_000) -> Bool {
+nonisolated func writeClipWAV(_ data: [Float], id: UUID, sr: Double = AudioDefaults.sampleRate) -> Bool {
     writeWAVData(data, to: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"), sr: sr)
 }
 nonisolated func readClipWAV(id: UUID, targetSR: Double? = nil) -> [Float]? {
@@ -81,14 +85,9 @@ nonisolated func deleteClipWAV(id: UUID) {
 
 // MARK: - Pad-sample file store (imported drum one-shots, FD808Samples/<file>)
 
-nonisolated func fd808SampleDir() -> URL {
-    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    let d = docs.appendingPathComponent("FD808Samples", isDirectory: true)
-    try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-    return d
-}
+nonisolated func fd808SampleDir() -> URL { fd808DocsSubdir("FD808Samples") }
 @discardableResult
-nonisolated func writePadSampleWAV(_ data: [Float], file: String, sr: Double = 48_000) -> Bool {
+nonisolated func writePadSampleWAV(_ data: [Float], file: String, sr: Double = AudioDefaults.sampleRate) -> Bool {
     writeWAVData(data, to: fd808SampleDir().appendingPathComponent(file), sr: sr)
 }
 nonisolated func readPadSampleWAV(file: String, targetSR: Double? = nil) -> [Float]? {
@@ -124,9 +123,7 @@ final class ProjectStore: ObservableObject {
     private var autosaveURL: URL { dir.appendingPathComponent("\(autosaveStem).\(ext)") }
 
     init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        dir = docs.appendingPathComponent("FD808Projects", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        dir = fd808DocsSubdir("FD808Projects")
         refresh()
     }
 
@@ -199,7 +196,7 @@ final class ProjectStore: ObservableObject {
     func save(_ snap: ProjectSnapshot) async -> Bool {
         let url = fileURL(snap.name)
         let ok = await Task.detached(priority: .userInitiated) { Self.writeSnapshot(snap, to: url, pretty: true) }.value
-        guard ok else { print("project save error"); return false }
+        guard ok else { fdLog.error("project save error"); return false }
         lastProjectName = snap.name
         lastProjectID = snap.id   // snapshot() always stamps a non-nil id by the time save() runs (#219)
         // If the open project was previously saved under a different name, remove the stale file so a

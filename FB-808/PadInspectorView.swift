@@ -14,7 +14,7 @@ private func piSemi(_ v: Double) -> String { (v > 0 ? "+" : "") + "\(Int(v.round
 private func piHz(_ v: Double) -> String { v >= 17999 ? "OPEN" : (v >= 1000 ? String(format: "%.1fk", v / 1000) : "\(Int(v))") }
 private func piMs(_ v: Double) -> String { v < 1 ? "\(Int(v * 1000))m" : String(format: "%.2fs", v) }
 private func piPct(_ v: Double) -> String { "\(Int(v * 100))" }
-private func piPan(_ v: Double) -> String { v == 0 ? "C" : (v > 0 ? "R" : "L") + "\(Int(abs(v) * 100))" }
+private func piPan(_ v: Double) -> String { Music.panLabel(v) }
 
 struct PadInspectorView: View {
     @EnvironmentObject var project: Project
@@ -73,8 +73,7 @@ struct PadInspectorView: View {
             Button { project.clearPadParam(pad.id) } label: {
                 Text("Reset").font(FDFont.ui(13, .semibold)).foregroundStyle(dirty ? settings.ink : settings.inkFaint)
                     .padding(.horizontal, 14).frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                    .fdCard(10, fill: settings.panel2)
             }.buttonStyle(.plain).disabled(!dirty).opacity(dirty ? 1 : 0.5)
             Button { onClose() } label: {
                 Image(systemName: "xmark").font(.system(size: 15, weight: .bold)).foregroundStyle(settings.inkDim)
@@ -295,8 +294,7 @@ struct PadInspectorView: View {
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+        .fdCard(14, fill: settings.panel2)
     }
 
     private func knob(_ label: String, _ value: Double, _ lo: Double, _ hi: Double, _ step: Double,

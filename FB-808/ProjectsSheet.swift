@@ -111,8 +111,7 @@ struct ProjectsSheet: View {
                     .textFieldStyle(.plain).submitLabel(.done)
                     .onSubmit { attemptSave() }
                     .padding(.horizontal, 12).frame(height: 42)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                    .fdCard(10, fill: settings.panel2)
                     .accessibilityLabel(Text("Project name"))
                 saveButton
             }
@@ -121,8 +120,7 @@ struct ProjectsSheet: View {
                     Label("New", systemImage: "doc.badge.plus").font(FDFont.ui(13, .semibold))
                         .foregroundStyle(settings.inkDim)
                         .padding(.horizontal, 14).frame(height: 36)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                        .fdCard(9, fill: settings.panel2)
                         .frame(minHeight: 44).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 if store.exists(nameField.trimmingCharacters(in: .whitespaces)) {
@@ -132,8 +130,7 @@ struct ProjectsSheet: View {
             }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+        .fdCard(14, fill: settings.panel)
     }
 
     /// Confirm before clobbering a DIFFERENT existing save; a plain re-save of the open project saves directly.

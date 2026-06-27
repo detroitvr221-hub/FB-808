@@ -71,12 +71,6 @@ final class SpectrumAnalyzer {
         }
         return bandsScratch
     }
-
-    /// The center frequency (Hz) of a band, for tests/labels.
-    func bandFreq(_ b: Int, sampleRate: Double = 48000) -> Double {
-        let bin = Double(edges[b] + edges[b + 1]) / 2
-        return bin * sampleRate / Double(n)
-    }
 }
 
 struct SpectrumView: View {

@@ -173,8 +173,7 @@ struct CircleOfFifthsView: View {
                         ForEach(Array(accidentalNotes.enumerated()), id: \.offset) { (_, s) in
                             Text(s).font(FDFont.mono(13, .bold)).foregroundStyle(settings.ink)
                                 .frame(width: 38, height: 30)
-                                .background(RoundedRectangle(cornerRadius: 8).fill(settings.panel2))
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(settings.line, lineWidth: 1))
+                                .fdCard(8, fill: settings.panel2)
                         }
                         Spacer(minLength: 0)
                     }

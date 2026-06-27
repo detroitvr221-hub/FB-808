@@ -51,8 +51,7 @@ struct FreeRollView: View {
                     .allowsHitTesting(false)
                 }
             }
-            .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+            .fdCard(16, fill: settings.panel)
             .overlay(alignment: .topTrailing) {
                 Text("Tap to add · drag to move · drag the right edge to resize · tap a note to delete")
                     .font(FDFont.ui(10.5)).foregroundStyle(settings.inkFaint)

@@ -93,7 +93,7 @@ struct Track: Identifiable, Codable {
     var type: TrackType
     var source: TrackSource = .init()
     var colorHex: String
-    var vol: Double = 0.82
+    var vol: Double = AudioDefaults.unityGain
     var pan: Double = 0
     var height: CGFloat = 64
     var ownsBus: Bool = false        // G3: the track has its own DSP insert-FX strip (channelFX[id])
@@ -111,7 +111,7 @@ struct Track: Identifiable, Codable {
     var playsAdditively: Bool { (isLinked || isFrozen) && !frozenToAudio }
 
     init(id: String, name: String, type: TrackType, source: TrackSource = .init(),
-         colorHex: String, vol: Double = 0.82, pan: Double = 0, height: CGFloat = 64) {
+         colorHex: String, vol: Double = AudioDefaults.unityGain, pan: Double = 0, height: CGFloat = 64) {
         self.id = id; self.name = name; self.type = type; self.source = source
         self.colorHex = colorHex; self.vol = vol; self.pan = pan; self.height = height
     }
@@ -123,7 +123,7 @@ struct Track: Identifiable, Codable {
         type = (try? c.decode(TrackType.self, forKey: .type)) ?? .drumPattern
         source = (try? c.decodeIfPresent(TrackSource.self, forKey: .source)) ?? TrackSource()
         colorHex = (try? c.decode(String.self, forKey: .colorHex)) ?? "#8A8F98"
-        vol = (try? c.decode(Double.self, forKey: .vol)) ?? 0.82
+        vol = (try? c.decode(Double.self, forKey: .vol)) ?? AudioDefaults.unityGain
         pan = (try? c.decode(Double.self, forKey: .pan)) ?? 0
         height = (try? c.decode(CGFloat.self, forKey: .height)) ?? 64
         ownsBus = (try? c.decode(Bool.self, forKey: .ownsBus)) ?? false
@@ -326,12 +326,6 @@ extension Project {
         return true
     }
 
-    func moveTrack(from: Int, to: Int) {
-        guard tracks.indices.contains(from), to >= 0, to <= tracks.count, from != to else { return }
-        checkpoint("movetrack", coalesce: false)
-        let t = tracks.remove(at: from)
-        tracks.insert(t, at: min(to, tracks.count))
-    }
 
     // MARK: routing workflows (the cohesion goals)
 

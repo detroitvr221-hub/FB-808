@@ -10,8 +10,14 @@ extension SynthPatch {
 }
 
 enum Music {
-    static func midiToFreq(_ m: Int) -> Double { 440 * pow(2, Double(m - 69) / 12.0) }
     static let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+    /// Pitch class 0…11 for any (possibly negative) MIDI/interval value.
+    static func pitchClass(_ midi: Int) -> Int { ((midi % 12) + 12) % 12 }
+    /// Note name without octave (e.g. "C", "F#").
+    static func noteName(_ midi: Int) -> String { noteNames[pitchClass(midi)] }
+    /// Pan readout from a -1…1 value: "C" centre, else "L42"/"R30".
+    static func panLabel(_ v: Double) -> String { v == 0 ? "C" : (v > 0 ? "R" : "L") + "\(Int(abs(v) * 100))" }
 
     struct Scale: Identifiable { let id: String; let name: String; let intervals: [Int] }
     static let scales: [Scale] = [
@@ -27,5 +33,5 @@ enum Music {
         Scale(id: "harmonicMinor", name: "Harm. Min", intervals: [0, 2, 3, 5, 7, 8, 11]),
     ]
     static func intervals(_ id: String) -> [Int] { scales.first { $0.id == id }?.intervals ?? [0, 2, 4, 5, 7, 9, 11] }
-    static func name(_ midi: Int) -> String { noteNames[((midi % 12) + 12) % 12] + "\(midi / 12 - 1)" }
+    static func name(_ midi: Int) -> String { noteName(midi) + "\(midi / 12 - 1)" }
 }

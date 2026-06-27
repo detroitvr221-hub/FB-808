@@ -42,7 +42,6 @@ final class Transport: ObservableObject {
         self.fx = fx
     }
 
-    func isPlaying() -> Bool { playing }
     private func secPerStep() -> Double { (60.0 / Double(project.bpm)) / 4 }
 
     func toggle() { playing ? stop() : start() }

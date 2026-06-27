@@ -17,7 +17,4 @@ enum SyncConfig {
         URL(string: "wss://\(projectRef).supabase.co/realtime/v1/websocket?apikey=\(anonKey)&vsn=1.0.0")!
     }
     static func channelTopic(_ roomCode: String) -> String { "realtime:room:\(roomCode)" }
-
-    /// The `room` edge function — the token-based classroom backend (create/join/roster/submit/…).
-    static var functionsURL: URL { URL(string: "https://\(projectRef).supabase.co/functions/v1/room")! }
 }

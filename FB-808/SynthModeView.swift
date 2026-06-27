@@ -137,8 +137,7 @@ struct SynthModeView: View {
                     Image(systemName: "square.grid.2x2.fill").font(.system(size: 13)).foregroundStyle(settings.inkDim)
                 }
                 .padding(.horizontal, 14).frame(height: 46).frame(maxWidth: .infinity)
-                .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+                .fdCard(12, fill: settings.panel)
             }.buttonStyle(.plain)
             Button { cyclePreset(1) } label: { presetArrow("chevron.right") }
             Button { settings.addSavedSynth(project.editPatch) } label: { presetArrow("star") }
@@ -147,8 +146,7 @@ struct SynthModeView: View {
     private func presetArrow(_ icon: String) -> some View {
         Image(systemName: icon).font(.system(size: 15, weight: .semibold)).foregroundStyle(settings.inkDim)
             .frame(width: 46, height: 46)
-            .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+            .fdCard(12, fill: settings.panel2)
     }
     private func applyPreset(_ p: SynthPatch) { project.checkpoint("synth", coalesce: false); project.editPatch = p }
     private func cyclePreset(_ dir: Int) {
@@ -195,8 +193,7 @@ struct SynthModeView: View {
                 }
             }
             .frame(width: 620, height: 500)
-            .background(RoundedRectangle(cornerRadius: 22).fill(settings.panel))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(settings.line, lineWidth: 1))
+            .fdCard(22, fill: settings.panel)
             .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
         }
     }
@@ -345,8 +342,7 @@ struct SynthModeView: View {
         .padding(EdgeInsets(top: 13, leading: 14, bottom: 13, trailing: 14))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .layoutPriority(Double(flex))
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
     }
 
     private func knob(_ label: String, _ value: Double, _ lo: Double, _ hi: Double, _ step: Double,
@@ -387,8 +383,7 @@ struct SynthModeView: View {
                     TextField("Patch name", text: Binding(get: { project.editPatch.name }, set: { project.editPatch.name = $0 }))
                         .font(FDFont.display(15, .semibold)).foregroundStyle(settings.ink)
                         .padding(.horizontal, 12).frame(height: 40)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                        .fdCard(10, fill: settings.panel2)
                     Button { project.mapSynthToPads(); flashToast("Mapped across Bank D (replaced its previous sounds) — finger-drum it on the Pads") } label: {
                         Text("→ Map to Pads (Bank D)").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 42)
@@ -407,8 +402,7 @@ struct SynthModeView: View {
                     Button { settings.addSavedSynth(project.editPatch) } label: {
                         Text("★ Save to Synth Bank").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
                             .frame(maxWidth: .infinity).frame(height: 42)
-                            .background(RoundedRectangle(cornerRadius: 11).fill(settings.panel2))
-                            .overlay(RoundedRectangle(cornerRadius: 11).stroke(settings.line, lineWidth: 1))
+                            .fdCard(11, fill: settings.panel2)
                     }.buttonStyle(.plain)
                 }
             }
@@ -578,8 +572,7 @@ struct SynthModeView: View {
         Button(action: action) {
             Text(s).font(.system(size: 19, weight: .bold)).foregroundStyle(settings.ink)
                 .frame(width: 38, height: 38)
-                .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                .fdCard(10, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
     private func sideToggle(_ icon: String, _ label: String, on: Bool, _ action: @escaping () -> Void) -> some View {
@@ -603,8 +596,7 @@ struct SynthModeView: View {
                 Text(value).font(FDFont.mono(12.5, .bold)).foregroundStyle(settings.accent)
             }
             .padding(.horizontal, 12).frame(height: 36)
-            .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+            .fdCard(10, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
     private var rollToolbar: some View {
@@ -628,8 +620,7 @@ struct SynthModeView: View {
             Button { project.clearMelody() } label: {
                 Text("Clear").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
                     .padding(.horizontal, 12).frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                    .fdCard(9, fill: settings.panel2)
             }.buttonStyle(.plain)
             rollCycle("Key", Music.noteNames[project.melodyKey]) { project.checkpoint("key", coalesce: false); project.melodyKey = (project.melodyKey + 1) % 12; project.generateMelody() }
             rollCycle("Scale", Music.scales.first { $0.id == project.melodyScale }?.name ?? "Major") {
@@ -644,16 +635,14 @@ struct SynthModeView: View {
             styledText([("\(label) ", settings.inkDim, nil), (value, settings.accent, nil)])
                 .font(FDFont.ui(12.5, .semibold))
                 .padding(.horizontal, 11).frame(height: 34)
-                .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                .fdCard(9, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
     private func stepperBtn(_ s: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(s).font(.system(size: 17, weight: .bold)).foregroundStyle(settings.inkDim)
                 .frame(width: 34, height: 32)
-                .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                .fdCard(9, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
 
@@ -671,8 +660,7 @@ struct SynthModeView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
     }
 }
 
@@ -700,7 +688,7 @@ struct ScaleKeyboard: View {
     }
 
     private func keyView(_ midi: Int) -> some View {
-        let isRoot = ((midi - key) % 12 + 12) % 12 == 0
+        let isRoot = Music.pitchClass(midi - key) == 0
         let down = lit.contains(midi)
         let cream: [Color] = isRoot ? [Color(hex: "#fff3e9"), Color(hex: "#f0d9c4")] : [Color(hex: "#fbfaf6"), Color(hex: "#e6e3d8")]
         return UnevenRoundedRectangle(bottomLeadingRadius: 7, bottomTrailingRadius: 7)
@@ -712,7 +700,7 @@ struct ScaleKeyboard: View {
                 if isRoot && !down { RoundedRectangle(cornerRadius: 2).fill(settings.accent).frame(height: 4).padding(.horizontal, 6).padding(.top, 5) }
             }
             .overlay(alignment: .bottom) {
-                Text(Music.noteNames[((midi % 12) + 12) % 12])
+                Text(Music.noteName(midi))
                     .font(FDFont.mono(9, isRoot ? .bold : .regular))
                     .foregroundStyle(down ? .white : .black.opacity(isRoot ? 0.6 : 0.38))
                     .padding(.bottom, 6)
@@ -984,7 +972,7 @@ struct SynthRoll: View {
                 VStack(spacing: 2) {
                     ForEach(ladder, id: \.self) { pitch in
                         HStack(spacing: 2) {
-                            Text(Music.noteNames[((pitch % 12) + 12) % 12])
+                            Text(Music.noteName(pitch))
                                 .font(FDFont.mono(8, .bold)).foregroundStyle(settings.inkFaint)
                                 .frame(width: 28, alignment: .trailing)
                             GeometryReader { g in
@@ -1009,8 +997,7 @@ struct SynthRoll: View {
             velocityLane(color)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
     }
 
     /// Click-drag in a pitch row: tap an empty cell to draw a 1-step note, drag right to lengthen,
@@ -1058,7 +1045,7 @@ struct SynthRoll: View {
     private func cell(pitch: Int, s: Int, covered: Bool, startVel: Double?, other: Bool, color: Color, ghost: Color?) -> some View {
         let beat = s % 4 == 0
         let ph = project.step == s && project.playing
-        let root = ((pitch - project.melodyKey) % 12 + 12) % 12 == 0
+        let root = Music.pitchClass(pitch - project.melodyKey) == 0
         let baseFill = root ? settings.panel2.darker(0.02) : (beat ? settings.panel2.darker(0.06) : settings.panel2.darker(0.14))
         // start cells brighten with velocity; continuation cells are dimmer
         let coverFill = startVel.map { color.opacity(0.5 + 0.5 * $0) } ?? color.opacity(0.55)

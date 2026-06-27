@@ -44,7 +44,7 @@ final class AppSettings: ObservableObject {
         polyphony = store.object(forKey: "fd.polyphony") as? Int ?? 64
         limiterOn = store.object(forKey: "fd.limiterOn") as? Bool ?? true
         limiterCeilingDb = store.object(forKey: "fd.limiterCeilingDb") as? Double ?? -1.0
-        sampleRate = store.object(forKey: "fd.sampleRate") as? Double ?? 48000
+        sampleRate = store.object(forKey: "fd.sampleRate") as? Double ?? AudioDefaults.sampleRate
         // Anti-aliasing + dither default ON — the research-confirmed "premium" cleanliness (cubic interpolation,
         // band-limited oscillators, 16-bit dither). Equal-power pan stays OFF by default (it shifts the centre
         // level of existing mixes). All remain user-toggleable.
@@ -87,7 +87,6 @@ final class AppSettings: ObservableObject {
         guard !savedSynths.contains(where: { $0.name == patch.name }) else { return }   // dedupe by name
         savedSynths.append(patch)
     }
-    func deleteSavedSynth(_ name: String) { savedSynths.removeAll { $0.name == name } }
     /// One-time migration: pull a project's legacy per-project saved patches into the global library.
     func mergeLegacySavedSynths(_ patches: [SynthPatch]) {
         for p in patches where !savedSynths.contains(where: { $0.name == p.name }) { savedSynths.append(p) }

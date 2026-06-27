@@ -38,8 +38,7 @@ struct TourOverlay: View {
                     Button { show = false } label: {   // Skip dismisses but stays un-toured so it re-prompts next launch (#tour)
                         Text("Skip").font(FDFont.ui(15, .semibold)).foregroundStyle(settings.inkDim)
                             .padding(.horizontal, 22).frame(height: 46)
-                            .background(RoundedRectangle(cornerRadius: 13).fill(settings.panel2))
-                            .overlay(RoundedRectangle(cornerRadius: 13).stroke(settings.line, lineWidth: 1))
+                            .fdCard(13, fill: settings.panel2)
                     }.buttonStyle(.plain)
                     Button { if step < steps.count - 1 { step += 1 } else { finish() } } label: {
                         Text(step < steps.count - 1 ? "Next" : "Start making beats").font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
@@ -50,8 +49,7 @@ struct TourOverlay: View {
             }
             .padding(EdgeInsets(top: 34, leading: 40, bottom: 30, trailing: 40))
             .frame(maxWidth: 520)
-            .background(RoundedRectangle(cornerRadius: 26).fill(settings.panel))
-            .overlay(RoundedRectangle(cornerRadius: 26).stroke(settings.line, lineWidth: 1))
+            .fdCard(26, fill: settings.panel)
             .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
         }
         .animation(.easeOut(duration: 0.2), value: step)
@@ -463,36 +461,6 @@ struct RootView: View {
         midi.onNoteOff = { [weak project] note in project?.synthNoteOff("midi-\(note)") }
         midi.onPanic   = { [weak engine] in engine?.allNotesOff() }
         midi.start()
-    }
-
-    // TEMP: verify export parity — (1) FX automation reaches the offline bounce (a filter sweep to ~20Hz
-    // kills the highs), (2) the SafetyLimiter runs in the offline path (a hot chord keeps more dynamics
-    // — higher crest — with it on vs off).
-    @MainActor private func runAudioExportSelfTest() {
-        func rms(_ a: [Float]) -> Float { a.isEmpty ? 0 : sqrtf(a.reduce(0) { $0 + $1 * $1 } / Float(a.count)) }
-        func pk(_ a: [Float]) -> Float { a.reduce(0) { Swift.max($0, abs($1)) } }
-        func finite(_ a: [Float]) -> Bool { a.allSatisfy { $0.isFinite } }
-
-        let p = Project(engine: engine)
-        p.melody = []; p.placeMelodyNote(step: 0, pitch: 72, len: 16)
-        let dry = renderOffline(p.buildExportPlan(loopBarsOverride: 1)).left
-        p.autoTarget = "filter"; p.autoLane = [Double](repeating: 0, count: 16)   // cutoff → 20 Hz
-        let fp = p.buildExportPlan(loopBarsOverride: 1)
-        let filt = renderOffline(fp).left
-        let autoCaptured = fp.automation.count > 0
-        let autoApplied = rms(dry) > 0 && rms(filt) < rms(dry) * 0.5
-
-        let q = Project(engine: engine)
-        q.melody = []; for n in [48, 52, 55, 59, 62] { q.placeMelodyNote(step: 0, pitch: n, len: 16) }
-        q.mixer["master"] = MixChannel(vol: 2.0)   // drive the master hot so the limiter engages
-        let on = renderOffline(q.buildExportPlan(loopBarsOverride: 1, safetyEnabled: true)).left
-        let off = renderOffline(q.buildExportPlan(loopBarsOverride: 1, safetyEnabled: false)).left
-        let crestOn = pk(on) / max(1e-6, rms(on)), crestOff = pk(off) / max(1e-6, rms(off))
-        let limiterInExport = crestOn > crestOff && finite(on) && finite(off)
-
-        UserDefaults.standard.set(String(format: "autoCap=%@ autoApplied=%@ crestOn=%.2f crestOff=%.2f limiter=%@ finite=%@",
-            autoCaptured ? "Y" : "N", autoApplied ? "Y" : "N", crestOn, crestOff, limiterInExport ? "Y" : "N",
-            (finite(dry) && finite(filt)) ? "Y" : "N"), forKey: "fd.selftest.audio2")
     }
 
     @ViewBuilder private func content(_ th: Theme) -> some View {

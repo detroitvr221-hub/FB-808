@@ -12,6 +12,22 @@ import Combine
 import os
 import FD808Engine
 
+/// App-wide logger — replaces scattered `print` for engine/file/export errors (shows in Console.app,
+/// off the hot path). Errors are logged `.public` so they're readable in release builds.
+let fdLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FD808", category: "fd808")
+
+/// Shared audio defaults — one source of truth for the engine sample rate so the validator, the settings
+/// UI, the persisted fallback, and the WAV writers can't drift apart. Nonisolated so the `nonisolated`
+/// file-writers in Persistence can use them.
+enum AudioDefaults {
+    static let sampleRate: Double = 48_000
+    /// Selectable engine sample rates (Hz). Adding one here surfaces it in Settings AND the validator.
+    static let supportedSampleRates: [Double] = [44_100, 48_000, 88_200, 96_000]
+    /// Unity channel level (linear). Reads as 0 dB on the mixer, the default channel/track volume, and
+    /// the fader double-tap reset — kept here so the dB readout and the reset value can't drift apart.
+    static let unityGain: Double = 0.82
+}
+
 // MARK: - Engine wrapper (main actor)
 
 @MainActor
@@ -20,8 +36,8 @@ final class AudioEngine: ObservableObject {
     /// 48k). A live switch would require recreating the core + graph + re-resampling every loaded sample,
     /// so the rate is fixed per launch (a change applies on the next launch) — safe and behavior-preserving.
     static func savedSampleRate() -> Double {
-        let v = UserDefaults.standard.object(forKey: "fd.sampleRate") as? Double ?? 48000
-        return [44100.0, 48000, 88200, 96000].contains(v) ? v : 48000
+        let v = UserDefaults.standard.object(forKey: "fd.sampleRate") as? Double ?? AudioDefaults.sampleRate
+        return AudioDefaults.supportedSampleRates.contains(v) ? v : AudioDefaults.sampleRate
     }
     let core = SynthCore(sampleRate: AudioEngine.savedSampleRate())
     private let engine = AVAudioEngine()
@@ -158,7 +174,7 @@ final class AudioEngine: ObservableObject {
             clearAUFailure(key)
             return true
         } catch {
-            print("AU load error: \(error)")
+            fdLog.error("AU load error: \(error.localizedDescription, privacy: .public)")
             recordAUFailure(key, name: comp.name)
             return false
         }
@@ -282,7 +298,7 @@ final class AudioEngine: ObservableObject {
             startReclaimTimer()
             installAudioObservers()
         } catch {
-            print("AudioEngine start error: \(error)")
+            fdLog.error("AudioEngine start error: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -348,7 +364,7 @@ final class AudioEngine: ObservableObject {
         if reconfigure { rebuildMasterChain() }   // re-establish srcNode→mixer after a graph teardown
         let wasRunning = engine.isRunning
         if !engine.isRunning {
-            do { try engine.start() } catch { print("AudioEngine restart error: \(error)") }
+            do { try engine.start() } catch { fdLog.error("AudioEngine restart error: \(error.localizedDescription, privacy: .public)") }
         }
         if !wasRunning && engine.isRunning {       // diagnostics: count actual recoveries
             restartCount += 1
@@ -422,7 +438,7 @@ final class AudioEngine: ObservableObject {
         do {
             try engine.start()
         } catch {
-            print("mic record start error: \(error)")
+            fdLog.error("mic record start error: \(error.localizedDescription, privacy: .public)")
             input.removeTap(onBus: 0); mic = nil; started = false; start()   // restore playback
             return false
         }
@@ -543,24 +559,11 @@ final class AudioEngine: ObservableObject {
         return core.makeSampleBuffer(kind)
     }
 
-    /// Decode a user audio file (from Files / iCloud) into the sample buffer as
-    /// mono at the engine's sample rate. Returns nil if the file can't be read.
-    func importAudio(url: URL, maxSeconds: Double = 30) -> (dur: Double, transients: [Double], wave: [Double])? {
-        ensure()
-        guard let data = SampleEngine.decode(url: url, targetSR: core.sr, maxSeconds: maxSeconds) else { return nil }
-        return core.loadExternal(data)
-    }
-
     /// Off-thread decode then load into the sampler buffer (Phase 2) — the UI doesn't block on the file read.
     func importAudioAsync(url: URL, maxSeconds: Double = 30) async -> (dur: Double, transients: [Double], wave: [Double])? {
         ensure()
         guard let data = await SampleEngine.decodeAsync(url: url, targetSR: core.sr, maxSeconds: maxSeconds) else { return nil }
         return core.loadExternal(data)
-    }
-
-    /// Decode a file to mono @ engine SR *without* touching the sample buffer (for audio clips).
-    func decodeAudioFile(url: URL, maxSeconds: Double = 60) -> [Float]? {
-        ensure(); return SampleEngine.decode(url: url, targetSR: core.sr, maxSeconds: maxSeconds)
     }
 
     /// Off-thread decode — the UI never blocks on import or large files (Phase 2). Returns on the caller.
@@ -577,6 +580,18 @@ final class AudioEngine: ObservableObject {
         core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel)
     }
     func stopClips() { core.stopClips() }
+
+    /// Out-of-band review playback (e.g. a student submission in the Teacher console). Routes a fully
+    /// decoded clip through the engine's master graph instead of a side `AVPlayer`, so ALL audio runs
+    /// through FD808Engine (one session, one route, the master limiter/volume). It plays on a dedicated
+    /// review channel and stops channel-scoped, so it never disturbs transport track clips.
+    func playReviewClip(_ data: [Float]) {
+        guard !data.isEmpty else { return }
+        ensure()
+        core.stopClips(channel: Self.sampleChannel)   // never overlap review clips
+        core.playClip(data: data, whenSample: (core.now() + 0.05) * core.sr, gain: 1, channel: Self.sampleChannel)
+    }
+    func stopReviewClip() { core.stopClips(channel: Self.sampleChannel) }
 
     /// Panic / all-notes-off — declick every voice and release held live notes (stuck-note recovery).
     func allNotesOff() { core.releaseAll() }

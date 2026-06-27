@@ -385,8 +385,7 @@ struct PracticeView: View {
                             Button { model.watch(p) } label: {
                                 Label("Watch it first", systemImage: "eye").font(FDFont.ui(15, .semibold)).foregroundStyle(settings.ink)
                                     .padding(.vertical, 13).padding(.horizontal, 20)
-                                    .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel2))
-                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+                                    .fdCard(14, fill: settings.panel2)
                             }.buttonStyle(.plain)
                             Button { model.play(p) } label: {
                                 HStack(spacing: 9) { Triangle().fill(.white).frame(width: 11, height: 13); Text("I'm ready") }
@@ -398,8 +397,7 @@ struct PracticeView: View {
                     }
                     .padding(34)
                     .frame(maxWidth: 460)
-                    .background(RoundedRectangle(cornerRadius: 24).fill(settings.panel))
-                    .overlay(RoundedRectangle(cornerRadius: 24).stroke(settings.line, lineWidth: 1))
+                    .fdCard(24, fill: settings.panel)
                     .shadow(color: .black.opacity(0.4), radius: 30, y: 20)
                     Spacer()
                 }
@@ -470,8 +468,7 @@ struct PracticeView: View {
                     }
                     .foregroundStyle(settings.inkDim)
                     .padding(.vertical, 8).padding(.horizontal, 13)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(settings.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.line, lineWidth: 1))
+                    .fdCard(10, fill: settings.panel2)
                 }.buttonStyle(.plain)
             }
         }
@@ -546,22 +543,19 @@ struct PracticeView: View {
                         Button { if let p = model.pattern { model.stage = "ready"; model.pattern = p } } label: {
                             Text("Try again").font(FDFont.ui(15, .semibold)).foregroundStyle(settings.ink)
                                 .frame(maxWidth: .infinity).padding(.vertical, 13)
-                                .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel2))
-                                .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+                                .fdCard(14, fill: settings.panel2)
                         }.buttonStyle(.plain)
                         Button { model.results = nil; fx.reset(); onExit(); model.reset() } label: {
                             Text("Done").font(FDFont.ui(15, .semibold)).foregroundStyle(settings.ink)
                                 .frame(maxWidth: .infinity).padding(.vertical, 13)
-                                .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel2))
-                                .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+                                .fdCard(14, fill: settings.panel2)
                         }.buttonStyle(.plain)
                     }
                 }.padding(.top, 4)
             }
             .padding(EdgeInsets(top: 34, leading: 40, bottom: 34, trailing: 40))
             .frame(minWidth: 380)
-            .background(RoundedRectangle(cornerRadius: 26).fill(settings.panel))
-            .overlay(RoundedRectangle(cornerRadius: 26).stroke(settings.line, lineWidth: 1))
+            .fdCard(26, fill: settings.panel)
             .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
         }
     }
@@ -692,8 +686,7 @@ struct PatternCard: View {
         }
         .padding(22)
         .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 20).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(settings.line, lineWidth: 1))
+        .fdCard(20, fill: settings.panel)
     }
 }
 
@@ -828,8 +821,7 @@ struct ChallengeView: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
     }
 
     private func cell(_ padID: String, _ i: Int) -> some View {

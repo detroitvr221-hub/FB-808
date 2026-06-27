@@ -73,8 +73,8 @@ struct SettingsSheet: View {
                              options: [("32", "32"), ("64", "64"), ("96", "96"), ("128", "128")],
                              selected: "\(settings.polyphony)") { v in settings.polyphony = Int(v) ?? 64 }
                     radioRow(title: "Sample rate · applies on restart",
-                             options: [("44.1k", "44100"), ("48k", "48000"), ("88.2k", "88200"), ("96k", "96000")],
-                             selected: "\(Int(settings.sampleRate))") { v in settings.sampleRate = Double(v) ?? 48000 }
+                             options: AudioDefaults.supportedSampleRates.map { (String(format: "%gk", $0 / 1000), "\(Int($0))") },
+                             selected: "\(Int(settings.sampleRate))") { v in settings.sampleRate = Double(v) ?? AudioDefaults.sampleRate }
                     Text("Higher rates reduce aliasing for cleaner synths; the engine adopts the new rate next launch.")
                         .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
 
@@ -187,8 +187,7 @@ struct SettingsSheet: View {
             }.padding(.top, 2)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+        .fdCard(12, fill: settings.panel2)
     }
     private func diagRow(_ label: String, _ value: String, _ color: Color) -> some View {
         HStack {

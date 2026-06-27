@@ -19,7 +19,7 @@ extension Project {
             let iv = Music.intervals(melodyScale)
             let n = iv.count
             guard n >= 3 else { return [midi] }
-            let pc = (((midi - melodyKey) % 12) + 12) % 12
+            let pc = Music.pitchClass(midi - melodyKey)
             guard let deg = iv.firstIndex(of: pc) else {
                 return chordMode == "7th" ? [midi, midi + 4, midi + 7, midi + 11]
                                           : [midi, midi + 4, midi + 7]

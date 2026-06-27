@@ -208,6 +208,8 @@ nonisolated enum Kit {
         return m
     }()
     static func channelOf(_ id: String) -> String { padChannel[id] ?? soundChannel[id] ?? "drums" }
+    /// The mixer channel's accent color — one source of truth so clip/track tints can't drift from it.
+    static func channelColor(_ id: String) -> Color { channels.first { $0.id == id }?.color ?? .gray }
 
     // Which arrangement track (Track Mode) each pad belongs to — lets the Tracks
     // tab's mute/solo gate playback. ("vox" carries audio/vocal clips, no pads.)

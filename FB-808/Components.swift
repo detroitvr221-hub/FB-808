@@ -50,6 +50,23 @@ struct ModeHead: View {
 
 // MARK: - Panel card
 
+/// The app's standard card chrome — a filled rounded rect with the hairline border — as one modifier
+/// instead of the `.background(RoundedRectangle…fill).overlay(RoundedRectangle…stroke)` pair repeated
+/// across every panel. `radius` and `fill` vary per site; the stroke is always the theme hairline.
+struct FDCard: ViewModifier {
+    @EnvironmentObject var settings: AppSettings
+    let radius: CGFloat
+    let fill: Color
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius).fill(fill))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(settings.line, lineWidth: 1))
+    }
+}
+extension View {
+    func fdCard(_ radius: CGFloat, fill: Color) -> some View { modifier(FDCard(radius: radius, fill: fill)) }
+}
+
 struct PanelCard<Content: View>: View {
     @EnvironmentObject var settings: AppSettings
     var title: String? = nil
@@ -70,8 +87,7 @@ struct PanelCard<Content: View>: View {
             content
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
     }
 }
 
@@ -229,8 +245,7 @@ struct TransportBar: View {
         Button(action: action) {
             Text(s).font(FDFont.mono(17, .bold)).foregroundStyle(settings.inkDim)
                 .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 8).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(settings.line, lineWidth: 1))
+                .fdCard(8, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
 
@@ -252,8 +267,7 @@ struct TransportBar: View {
             Image(systemName: system).font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(enabled ? settings.inkDim : settings.inkFaint.opacity(0.4))
                 .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+                .fdCard(9, fill: settings.panel2)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

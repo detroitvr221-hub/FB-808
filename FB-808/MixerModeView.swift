@@ -17,7 +17,7 @@ private let FX_BY_CH: [String: [String]] = [
 
 private func dbStr(_ v: Double) -> String {
     if v <= 0.001 { return "-∞" }
-    let db = 20 * log10(v / 0.82)
+    let db = 20 * log10(v / AudioDefaults.unityGain)
     return (db >= 0 ? "+" : "") + String(format: "%.1f", db)
 }
 
@@ -345,10 +345,7 @@ struct MixStrip: View {
         }
     }
 
-    private var panLabel: String {
-        if m.pan == 0 { return "C" }
-        return (m.pan > 0 ? "R" : "L") + "\(Int(abs(m.pan) * 100))"
-    }
+    private var panLabel: String { Music.panLabel(m.pan) }
 
     // MARK: per-channel insert FX (EQ / comp / drive)
 
@@ -495,7 +492,7 @@ struct MixStrip: View {
                 RoundedRectangle(cornerRadius: 6).fill(settings.panel2.darker(0.2))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings.line2, lineWidth: 1))
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(LinearGradient(colors: [settings.theme.meterLow, settings.theme.perfect, settings.theme.miss], startPoint: .bottom, endPoint: .top))
+                    .fill(settings.theme.meterGradient)
                     .frame(height: g.size.height * min(1, meter))
             }
         }
@@ -527,7 +524,7 @@ struct MixStrip: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { project.setMix(ch) { $0.vol = 0.82 } }   // double-tap returns the fader to 0 dB (unity)
+            .onTapGesture(count: 2) { project.setMix(ch) { $0.vol = AudioDefaults.unityGain } }   // double-tap returns the fader to 0 dB (unity)
         }
         .frame(width: 46)
         .accessibilityElement()
@@ -618,8 +615,7 @@ struct MasterFXBar: View {
             }
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
         }
-        .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+        .fdCard(14, fill: settings.panel)
     }
 
     private var masterGroup: some View {
@@ -694,8 +690,7 @@ struct MasterFXBar: View {
         Button(action: action) {
             Text(s).font(FDFont.mono(11, .bold)).foregroundStyle(settings.inkDim)
                 .frame(width: 34, height: 22)
-                .background(RoundedRectangle(cornerRadius: 6).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings.line, lineWidth: 1))
+                .fdCard(6, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
 
@@ -717,8 +712,7 @@ struct LUFSReadout: View {
             let col: Color = v > -9 ? settings.theme.miss : (v > -16 ? settings.theme.good : settings.inkDim)
             Text("\(txt) LUFS").font(FDFont.mono(10, .bold)).foregroundStyle(col)
                 .padding(.horizontal, 7).frame(height: 18)
-                .background(RoundedRectangle(cornerRadius: 5).fill(settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(settings.line, lineWidth: 1))
+                .fdCard(5, fill: settings.panel2)
         }
     }
 }
@@ -741,7 +735,7 @@ struct TrackStrip: View {
 
     private var muted: Bool { project.trackMute[track.id] ?? false }
     private var soloed: Bool { project.trackSolo[track.id] ?? false }
-    private var panLabel: String { track.pan == 0 ? "C" : (track.pan > 0 ? "R" : "L") + "\(Int(abs(track.pan) * 100))" }
+    private var panLabel: String { Music.panLabel(track.pan) }
 
     var body: some View {
         let th = settings.theme
@@ -827,7 +821,7 @@ struct TrackStrip: View {
             ZStack(alignment: .bottom) {
                 RoundedRectangle(cornerRadius: 6).fill(settings.panel2.darker(0.2))
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(LinearGradient(colors: [settings.theme.meterLow, settings.theme.perfect, settings.theme.miss], startPoint: .bottom, endPoint: .top))
+                    .fill(settings.theme.meterGradient)
                     .frame(height: g.size.height * min(1, meter))
             }
         }.frame(width: 12)

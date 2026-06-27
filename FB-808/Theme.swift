@@ -94,6 +94,11 @@ struct Theme {
     let miss = Color(hex: "#FF6B6B")
     let meterLow = Color(hex: "#4DD07A")
 
+    /// Bottom→top level-meter gradient (green→amber→red), shared by the channel + track meters.
+    var meterGradient: LinearGradient {
+        LinearGradient(colors: [meterLow, perfect, miss], startPoint: .bottom, endPoint: .top)
+    }
+
     var chassisGradient: [Color]   // diagonal base
     var chassisGlow: Color         // radial highlight
 

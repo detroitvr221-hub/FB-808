@@ -165,8 +165,7 @@ struct TrackModeView: View {
             ruler
             lanes
         }
-        .background(RoundedRectangle(cornerRadius: 16).fill(settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(settings.line, lineWidth: 1))
+        .fdCard(16, fill: settings.panel)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .frame(maxHeight: .infinity)
     }
@@ -562,8 +561,7 @@ struct TrackModeView: View {
             Button { project.punchInBar = min(BARS - 1, project.punchInBar + 1) } label: { offsetStep("+") }
         }
         .padding(.horizontal, 8).frame(height: 32)
-        .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+        .fdCard(9, fill: settings.panel2)
     }
     private var recOffset: some View {
         HStack(spacing: 4) {
@@ -574,8 +572,7 @@ struct TrackModeView: View {
             Button { project.audioRecOffsetMs += 5 } label: { offsetStep("+") }
         }
         .padding(.horizontal, 8).frame(height: 32)
-        .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+        .fdCard(9, fill: settings.panel2)
     }
     private func offsetStep(_ s: String) -> some View {
         // Glyph stays 15pt; widen the tap region as far as the 32pt-tall host pills allow (a full 44pt
@@ -648,8 +645,7 @@ struct TrackModeView: View {
                     })
                 }
                 .frame(height: 44)
-                .background(RoundedRectangle(cornerRadius: 8).fill(settings.panel))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(settings.line, lineWidth: 1))
+                .fdCard(8, fill: settings.panel)
             }
         }
     }

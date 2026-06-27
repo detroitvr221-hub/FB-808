@@ -7,7 +7,7 @@ import FD808Engine
 import Combine
 
 struct MixChannel: Codable {
-    var vol: Double = 0.82
+    var vol: Double = AudioDefaults.unityGain
     var pan: Double = 0
     var mute: Bool = false
     var solo: Bool = false
@@ -374,11 +374,11 @@ final class Project: ObservableObject {
             ArrItem(id: "a5", section: "outro", start: 14, len: 2, seq: 0),
         ]
         self.clips = [
-            "drums": [Clip(s: 0, l: 16, color: Color(hex: "#FF5A3C"))],
-            "hats":  [Clip(s: 2, l: 12, color: Color(hex: "#33E0D4"))],
-            "bass":  [Clip(s: 2, l: 12, color: Color(hex: "#FF7A1A"))],
-            "perc":  [Clip(s: 6, l: 4, color: Color(hex: "#C77DFF")), Clip(s: 10, l: 4, color: Color(hex: "#C77DFF"))],
-            "vox":   [Clip(s: 6, l: 4, color: Color(hex: "#E879F9"))],
+            "drums": [Clip(s: 0, l: 16, color: Kit.channelColor("drums"))],
+            "hats":  [Clip(s: 2, l: 12, color: Kit.channelColor("hats"))],
+            "bass":  [Clip(s: 2, l: 12, color: Kit.channelColor("bass"))],
+            "perc":  [Clip(s: 6, l: 4, color: Kit.channelColor("perc")), Clip(s: 10, l: 4, color: Kit.channelColor("perc"))],
+            "vox":   [Clip(s: 6, l: 4, color: Color(hex: "#E879F9"))],   // vox has no mixer channel
         ]
         self.tracks = Project.seedTracks()
     }
@@ -668,12 +668,6 @@ final class Project: ObservableObject {
         }
     }
 
-    /// In Song Mode, a track only plays in bars covered by one of its arrangement clips.
-    func trackHasClip(_ track: String, atBar bar: Int) -> Bool {
-        guard let cs = clips[track] else { return false }
-        return cs.contains { bar >= $0.s && bar < $0.s + $0.l && !$0.muted }
-    }
-
     /// Song-Mode playback gate. A track that has NO clips authored at all plays everywhere (so a
     /// beat you made but never drew clips for isn't silently dropped — fixes the 808/bass-drop bug);
     /// once any clip exists, the track plays only where a clip covers the bar.
@@ -783,14 +777,6 @@ final class Project: ObservableObject {
         if !(activePart == "lead" || parts.contains { $0.id == activePart }) { activePart = "lead" }
         emit(.switchSequence(index: i))
     }
-    /// Queue a sequence to launch on the next bar (Performance mode). nil → switch immediately when stopped.
-    func queueSequence(_ i: Int) {
-        guard i != activeSeq else { queuedSeq = nil; return }
-        if playing { queuedSeq = i } else { switchSequence(i, record: false) }
-    }
-    /// Live part mute (Performance mode) — no undo checkpoint.
-    func perfToggleMute(_ ch: String) { var c = mixer[ch] ?? MixChannel(); c.mute.toggle(); mixer[ch] = c }
-    func isPartMuted(_ ch: String) -> Bool { mixer[ch]?.mute ?? false }
     func sequenceIndexForBar(_ bar: Int) -> Int {
         arrangement.first { bar >= $0.start && bar < $0.start + $0.len }?.seq ?? activeSeq
     }
@@ -879,10 +865,6 @@ final class Project: ObservableObject {
         synthPatch.bufferKind = kind
         synthPatch.baseMidi = 60
         synthPatch.name = kind == "vocal" ? "Recorded Sound" : "Sampled Inst"
-    }
-
-    func toggleMelodyNote(step: Int, pitch: Int) {
-        placeMelodyNote(step: step, pitch: pitch, len: 1)
     }
 
     /// Place a note of `len` 16th-steps (1/16…1/1) at step/pitch, or toggle it off.
