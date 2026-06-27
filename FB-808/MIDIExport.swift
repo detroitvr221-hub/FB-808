@@ -24,6 +24,10 @@ extension Project {
         let ppq = 480, tick16 = ppq / 4
         let n = max(1, barSteps)              // steps per bar (honor the time signature, not a literal 16)
         let totalBars = songMode ? songBars : 4
+        // Swing: playback delays every off-beat 16th by swing·0.66 of a step (Transport.scheduler), applied
+        // to the whole step — so MIDI offsets any note on an odd step by the same amount to match the groove.
+        let swingTk = Int((Double(tick16) * swing * 0.66).rounded())
+        func onTick(_ bar: Int, _ step: Int) -> Int { bar * n * tick16 + step * tick16 + (step % 2 == 1 ? swingTk : 0) }
 
         var events: [(tick: Int, data: [UInt8])] = []
         let mpq = 60_000_000 / max(1, bpm)   // microseconds per quarter note
@@ -33,34 +37,52 @@ extension Project {
         events.append((0, [0xFF, 0x03, UInt8(nameBytes.count)] + nameBytes))
         events.append((0, [0xFF, 0x58, 0x04, UInt8(max(1, n / 4)), 2, 24, 8]))   // numerator = steps/4, denom = quarter
 
+        // Emit a drum hit / melodic note with swing-aware timing.
+        func drum(_ note: UInt8, _ vel01: Double, bar: Int, step: Int) {
+            let vel = UInt8(max(1, min(127, Int(vel01 * 127))))
+            let on = onTick(bar, step)
+            events.append((on, [0x99, note, vel]))
+            events.append((on + tick16 / 2, [0x89, note, 0]))
+        }
+        func melodic(_ pitch: Int, _ vel01: Double, dur: Int, bar: Int, step: Int) {
+            let note = UInt8(max(0, min(127, pitch)))
+            let vel = UInt8(max(1, min(127, Int(vel01 * 127))))
+            let on = onTick(bar, step)
+            events.append((on, [0x90, note, vel]))
+            events.append((on + max(1, dur) * tick16, [0x80, note, 0]))
+        }
+
         for bar in 0..<totalBars {
             let curLanes = songMode ? lanesForBar(bar) : lanes
             let curMelody = songMode ? melodyForBar(bar) : melody
             let curParts = songMode ? partsForBar(bar) : parts
-            let barTick = bar * n * tick16
             for (padID, lane) in curLanes {
                 guard let note = GM_DRUM[padID] else { continue }
-                for s in 0..<min(n, lane.count) where lane[s] > 0 {
-                    let vel = UInt8(max(1, min(127, Int(lane[s] * 127))))
-                    let on = barTick + s * tick16
-                    events.append((on, [0x99, note, vel]))
-                    events.append((on + tick16 / 2, [0x89, note, 0]))
-                }
+                for s in 0..<min(n, lane.count) where lane[s] > 0 { drum(note, lane[s], bar: bar, step: s) }
             }
-            for nt in curMelody {
-                let note = UInt8(max(0, min(127, nt.pitch)))
-                let vel = UInt8(max(1, min(127, Int(nt.vel * 127))))
-                let on = barTick + nt.step * tick16
-                events.append((on, [0x90, note, vel]))
-                events.append((on + max(1, nt.dur) * tick16, [0x80, note, 0]))
-            }
+            for nt in curMelody { melodic(nt.pitch, nt.vel, dur: nt.dur, bar: bar, step: nt.step) }
             for part in curParts where !part.muted {   // extra instrument parts on channel 1 too (were dropped)
-                for nt in part.notes {
-                    let note = UInt8(max(0, min(127, nt.pitch)))
-                    let vel = UInt8(max(1, min(127, Int(nt.vel * 127))))
-                    let on = barTick + nt.step * tick16
-                    events.append((on, [0x90, note, vel]))
-                    events.append((on + max(1, nt.dur) * tick16, [0x80, note, 0]))
+                for nt in part.notes { melodic(nt.pitch, nt.vel, dur: nt.dur, bar: bar, step: nt.step) }
+            }
+            // FROZEN arrangement tracks (promoted melodies / sent drum tracks) — their captured content
+            // lives in track.source, NOT in lanes/melody/parts, so it was previously omitted. Linked tracks
+            // are already covered by the classic walk above; only frozen additive tracks are added here, so
+            // there's no double-count. Honor track mute + Song-Mode clip gating (solo is a transient monitor
+            // state, not arrangement, so it's intentionally ignored for export).
+            for track in tracks where track.isFrozen && track.playsAdditively {
+                if trackMute[track.id] == true { continue }
+                if songMode && !trackPlaysInSong(track.id, atBar: bar) { continue }
+                switch track.type {
+                case .drumPattern:
+                    guard let tl = trackLanes(track, atBar: bar) else { break }
+                    for (padID, lane) in tl {
+                        guard let note = GM_DRUM[padID] else { continue }
+                        for s in 0..<min(n, lane.count) where lane[s] > 0 { drum(note, lane[s], bar: bar, step: s) }
+                    }
+                case .synthPart:
+                    guard let (notes, _) = trackNotes(track, atBar: bar) else { break }
+                    for nt in notes { melodic(nt.pitch, nt.vel, dur: nt.dur, bar: bar, step: nt.step) }
+                default: break
                 }
             }
         }
