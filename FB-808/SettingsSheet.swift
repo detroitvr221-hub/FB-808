@@ -97,6 +97,12 @@ struct SettingsSheet: View {
                         }
                         Text("Record through a built-in mic, headset, or a USB-C / Bluetooth audio interface (e.g. Focusrite). The system remembers your choice per app.")
                             .font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint).fixedSize(horizontal: false, vertical: true)
+                        Toggle(isOn: $settings.stereoInput) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Stereo recording").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                                Text("Capture both channels of a stereo interface. Off = mono (uses the left/first input).").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                            }
+                        }.tint(settings.accent)
                     }
 
                     section("Audio Quality")

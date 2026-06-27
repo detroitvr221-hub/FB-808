@@ -13,7 +13,7 @@ import UIKit
 
 struct ExportDrum: Sendable { var sound: String; var vel: Double; var opts: TriggerOpts; var atSample: Double; var sampleData: [Float]? = nil; var busKey: String? = nil }
 struct ExportSynth: Sendable { var patch: SynthPatch; var midi: Int; var dur: Double; var vel: Double; var atSample: Double; var pan: Double = 0; var busKey: String? = nil }
-struct ExportClip: Sendable { var data: [Float]; var atSample: Double; var gain: Double; var channel: Int }
+struct ExportClip: Sendable { var data: [Float]; var dataR: [Float]? = nil; var atSample: Double; var gain: Double; var channel: Int }
 struct ExportPlan: Sendable {
     var drums: [ExportDrum]
     var synths: [ExportSynth]
@@ -224,7 +224,7 @@ extension Project {
             if trackSoloOn && !(trackSolo[clip.track] ?? false) { continue }
             if clip.startBar >= totalBars { continue }
             let atSample = Double(clip.startBar) * stepDur * Double(n) * sr
-            clips.append(ExportClip(data: clip.data, atSample: atSample, gain: clip.gain, channel: AudioEngine.melodyChannel))
+            clips.append(ExportClip(data: clip.data, dataR: clip.dataR, atSample: atSample, gain: clip.gain, channel: AudioEngine.melodyChannel))
             audioEnd = max(audioEnd, atSample + Double(clip.data.count))
         }
 
@@ -327,6 +327,12 @@ nonisolated func buildVoices(_ plan: ExportPlan) -> [Voice] {
         let v = AudioClipVoice(data: c.data, gain: c.gain)
         v.startSample = c.atSample
         v.channel = c.channel
+        if let r = c.dataR {                     // stereo take → two hard-panned voices (matches live playback)
+            v.pan = -1
+            let vr = AudioClipVoice(data: r, gain: c.gain)
+            vr.startSample = c.atSample; vr.channel = c.channel; vr.pan = 1
+            voices.append(vr)
+        }
         voices.append(v)
     }
     return voices

@@ -196,12 +196,14 @@ struct AudioClip: Identifiable {
     var id = UUID()
     var track: String
     var startBar: Int
-    var data: [Float]      // mono @ 48 kHz
+    var data: [Float]      // left / mono @ engine SR
+    var dataR: [Float]? = nil   // right channel for a stereo take (nil = mono); plays as a 2nd hard-panned voice
     var wave: [Float]      // downsampled peaks for display
     var name: String
     var gain: Double = 1
     var durSec: Double
     var muted: Bool = false   // mute alternate takes for manual comping (A5 Phase 3)
+    var isStereo: Bool { dataR != nil }
 }
 
 // Lightweight, Codable clip metadata persisted in the snapshot; the audio itself
@@ -898,13 +900,15 @@ final class Project: ObservableObject {
 
     // MARK: audio clips (A5)
 
-    func addAudioClip(track: String, startBar: Int, data: [Float], name: String) {
+    func addAudioClip(track: String, startBar: Int, data: [Float], dataR: [Float]? = nil, name: String) {
         guard !data.isEmpty else { return }
         checkpoint("addClip", coalesce: false)
         let dur = Double(data.count) / engine.sampleRate
+        let r = (dataR?.isEmpty == false) ? dataR : nil   // treat empty right as mono
         let clip = AudioClip(track: track, startBar: max(0, min(songBars - 1, startBar)),
-                             data: data, wave: Project.downsamplePeaks(data), name: name, durSec: dur)
+                             data: data, dataR: r, wave: Project.downsamplePeaks(data), name: name, durSec: dur)
         writeClipWAV(data, id: clip.id, sr: engine.sampleRate)   // persist audio at creation; metadata saves with the project
+        if let r { writeClipWAVRight(r, id: clip.id, sr: engine.sampleRate) }
         audioClips.append(clip)
     }
     func removeAudioClip(_ id: UUID) {
@@ -918,6 +922,7 @@ final class Project: ObservableObject {
         for m in metas {
             guard let uuid = UUID(uuidString: m.id), let data = readClipWAV(id: uuid, targetSR: engine.sampleRate), !data.isEmpty else { continue }
             var clip = AudioClip(track: m.track, startBar: m.startBar, data: data,
+                                 dataR: readClipWAVRight(id: uuid, targetSR: engine.sampleRate),
                                  wave: Project.downsamplePeaks(data), name: m.name, durSec: Double(data.count) / engine.sampleRate)
             clip.id = uuid; clip.gain = m.gain; clip.muted = m.muted
             clips.append(clip)

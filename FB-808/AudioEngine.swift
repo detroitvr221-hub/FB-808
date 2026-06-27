@@ -405,6 +405,7 @@ final class AudioEngine: ObservableObject {
 
     @Published private(set) var isMicRecording = false
     @Published private(set) var inputLevel: Float = 0   // record-meter input peak (0…1), published ~5 Hz while recording
+    var stereoCapture = false                           // opt-in: capture 2 channels (set from AppSettings before recording)
     private(set) var micStartTime = 0.0   // engine time when the input tap began (for record alignment)
     private var mic: MicCapture?
 
@@ -432,7 +433,8 @@ final class AudioEngine: ObservableObject {
         ensureConfigured()
         let input = engine.inputNode
         let fmt = input.inputFormat(forBus: 0)
-        guard fmt.channelCount > 0, fmt.sampleRate > 0, let cap = MicCapture(inputFormat: fmt, sr: core.sr) else {
+        guard fmt.channelCount > 0, fmt.sampleRate > 0,
+              let cap = MicCapture(inputFormat: fmt, sr: core.sr, channels: stereoCapture ? 2 : 1) else {
             started = false; start(); return false           // restore playback
         }
         mic = cap
@@ -449,17 +451,18 @@ final class AudioEngine: ObservableObject {
         return true
     }
 
-    /// Tear down the tap, return captured mono audio, restore the .playback session.
-    private func endMicCapture() -> [Float]? {
+    /// Tear down the tap, return captured audio (left + optional right), restore the .playback session.
+    private func endMicCaptureStereo() -> (l: [Float], r: [Float]?)? {
         guard isMicRecording else { return nil }
         isMicRecording = false
         engine.inputNode.removeTap(onBus: 0)
-        let data = mic?.take() ?? []
+        let st = mic?.takeStereo() ?? (l: [], r: nil)
         mic = nil
         engine.stop()
         started = false; start()                          // back to .playback
-        return data.isEmpty ? nil : data
+        return st.l.isEmpty ? nil : st
     }
+    private func endMicCapture() -> [Float]? { endMicCaptureStereo()?.l }   // mono path (Sample buffer)
 
     /// Stop recording → load into the Sample buffer (Sample mode "Record Mic").
     func stopMicRecording() -> (dur: Double, transients: [Double], wave: [Double])? {
@@ -467,12 +470,12 @@ final class AudioEngine: ObservableObject {
         return core.loadExternal(data)
     }
 
-    /// Stop recording → return raw mono audio + reported round-trip latency (for clip recording).
-    func stopMicRecordingRaw() -> (data: [Float], latency: Double)? {
+    /// Stop recording → return raw audio (left + optional right for stereo) + round-trip latency (for clip recording).
+    func stopMicRecordingRaw() -> (data: [Float], dataR: [Float]?, latency: Double)? {
         let s = AVAudioSession.sharedInstance()
         let lat = s.inputLatency + s.outputLatency
-        guard let data = endMicCapture() else { return nil }
-        return (data, lat)
+        guard let st = endMicCaptureStereo() else { return nil }
+        return (st.l, st.r, lat)
     }
 
     func now() -> Double { core.now() }
@@ -577,9 +580,9 @@ final class AudioEngine: ObservableObject {
     @discardableResult
     func importBuffer(_ data: [Float]) -> (dur: Double, transients: [Double], wave: [Double]) { ensure(); return core.loadExternal(data) }
 
-    func playClip(_ data: [Float], when: Double, gain: Double, channel: Int) {
+    func playClip(_ data: [Float], when: Double, gain: Double, channel: Int, pan: Double = 0) {
         ensure()
-        core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel)
+        core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel, pan: pan)
     }
     func stopClips() { core.stopClips() }
 

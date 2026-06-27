@@ -135,15 +135,18 @@ final class Transport: ObservableObject {
     /// offset) so it lines up with the beat, then drop it on the armed track.
     private func finishAudioRecord() {
         guard let track = project.audioArmedTrack, engine.isMicRecording,
-              let (raw, lat) = engine.stopMicRecordingRaw() else { return }
+              let (raw, rawR, lat) = engine.stopMicRecordingRaw() else { return }
         let preRoll = max(0, audioRecBar0 - audioRecStartNow)
         let offset = Double(project.audioRecOffsetMs) / 1000.0
         let trim = Int((preRoll + lat + offset) * engine.sampleRate)   // captured at the engine rate, not always 48 k (Phase 5/7)
-        var data = raw
-        if trim > 0 { data = trim < data.count ? Array(data.dropFirst(trim)) : [] }
-        else if trim < 0 { data = Array(repeating: 0, count: -trim) + data }   // push later
+        func trimmed(_ a: [Float]) -> [Float] {                        // same latency trim applied to both channels
+            if trim > 0 { return trim < a.count ? Array(a.dropFirst(trim)) : [] }
+            if trim < 0 { return Array(repeating: 0, count: -trim) + a }   // push later
+            return a
+        }
+        let data = trimmed(raw)
         guard !data.isEmpty else { return }
-        project.addAudioClip(track: track, startBar: audioRecStartBar, data: data, name: "Take")
+        project.addAudioClip(track: track, startBar: audioRecStartBar, data: data, dataR: rawR.map(trimmed), name: "Take")
     }
 
     private func flash(_ padID: String, at time: Double) {
@@ -197,7 +200,12 @@ final class Transport: ObservableObject {
                 let tk = clip.track
                 if p.trackMute[tk] == true { continue }
                 if trackSolo && !(p.trackSolo[tk] ?? false) { continue }
-                engine.playClip(clip.data, when: time, gain: clip.gain, channel: AudioEngine.melodyChannel)
+                if let r = clip.dataR {   // stereo take → two hard-panned (±1) voices reconstruct L/R
+                    engine.playClip(clip.data, when: time, gain: clip.gain, channel: AudioEngine.melodyChannel, pan: -1)
+                    engine.playClip(r,         when: time, gain: clip.gain, channel: AudioEngine.melodyChannel, pan: 1)
+                } else {
+                    engine.playClip(clip.data, when: time, gain: clip.gain, channel: AudioEngine.melodyChannel)
+                }
             }
         }
 

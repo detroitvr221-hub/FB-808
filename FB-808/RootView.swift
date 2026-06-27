@@ -91,6 +91,7 @@ private struct AudioSettingsSync: ViewModifier {
             .onChange(of: settings.hqInterp) { _, _ in apply() }
             .onChange(of: settings.equalPowerPan) { _, _ in apply() }
             .onChange(of: settings.bandlimitedOsc) { _, _ in apply() }
+            .onChange(of: settings.stereoInput) { _, _ in apply() }
     }
 }
 
@@ -453,6 +454,7 @@ struct RootView: View {
         engine.setHQInterpolation(settings.hqInterp)        // opt-in audio-quality modes (default off)
         engine.setEqualPowerPan(settings.equalPowerPan)
         engine.setBandlimitedOsc(settings.bandlimitedOsc)
+        engine.stereoCapture = settings.stereoInput         // opt-in stereo recording (applied on the next record)
     }
 
     /// Route CoreMIDI input onto the existing trigger APIs, then start the manager (Phase 6). Idempotent:

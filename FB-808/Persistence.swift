@@ -79,8 +79,20 @@ nonisolated func writeClipWAV(_ data: [Float], id: UUID, sr: Double = AudioDefau
 nonisolated func readClipWAV(id: UUID, targetSR: Double? = nil) -> [Float]? {
     readWAVData(at: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"), targetSR: targetSR)
 }
+// Stereo clips store the RIGHT channel as a paired `<id>.R.wav` (left stays in `<id>.wav`), so all the
+// existing mono WAV I/O is reused and old mono clips (no .R file) keep loading unchanged.
+@discardableResult
+nonisolated func writeClipWAVRight(_ data: [Float], id: UUID, sr: Double = AudioDefaults.sampleRate) -> Bool {
+    writeWAVData(data, to: fd808AudioDir().appendingPathComponent("\(id.uuidString).R.wav"), sr: sr)
+}
+nonisolated func readClipWAVRight(id: UUID, targetSR: Double? = nil) -> [Float]? {
+    let url = fd808AudioDir().appendingPathComponent("\(id.uuidString).R.wav")
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    return readWAVData(at: url, targetSR: targetSR)
+}
 nonisolated func deleteClipWAV(id: UUID) {
     try? FileManager.default.removeItem(at: fd808AudioDir().appendingPathComponent("\(id.uuidString).wav"))
+    try? FileManager.default.removeItem(at: fd808AudioDir().appendingPathComponent("\(id.uuidString).R.wav"))
 }
 
 // MARK: - Pad-sample file store (imported drum one-shots, FD808Samples/<file>)
@@ -305,7 +317,10 @@ final class ProjectStore: ObservableObject {
                 var c = clip
                 if let oldUUID = UUID(uuidString: clip.id), let data = readClipWAV(id: oldUUID) {
                     let newUUID = UUID()
-                    if writeClipWAV(data, id: newUUID) { c.id = newUUID.uuidString }
+                    if writeClipWAV(data, id: newUUID) {
+                        c.id = newUUID.uuidString
+                        if let r = readClipWAVRight(id: oldUUID) { writeClipWAVRight(r, id: newUUID) }   // carry the stereo right channel
+                    }
                 }
                 return c
             }
@@ -354,7 +369,7 @@ final class ProjectStore: ObservableObject {
         for u in urls where u.pathExtension == ext {
             guard let data = try? Data(contentsOf: u),
                   let snap = try? JSONDecoder().decode(ProjectSnapshot.self, from: data) else { continue }
-            for c in snap.audioClips ?? [] { audioFiles.insert("\(c.id).wav") }
+            for c in snap.audioClips ?? [] { audioFiles.insert("\(c.id).wav"); audioFiles.insert("\(c.id).R.wav") }   // keep the paired stereo right channel
             for (_, pp) in snap.padParams { if let f = pp.sampleFile { sampleFiles.insert(f) } }
             if let f = snap.sample?.audioFile { sampleFiles.insert(f) }
         }
