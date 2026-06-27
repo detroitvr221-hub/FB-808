@@ -183,23 +183,7 @@ struct TeacherModeView: View {
         }
     }
     private func tabBtn(_ label: String, _ id: String, badge: Int = 0) -> some View {
-        Button { tab = id } label: {
-            HStack(spacing: 7) {
-                Text(label).font(FDFont.ui(14, .semibold))
-                if badge > 0 {
-                    Text("\(badge)").font(FDFont.mono(10, .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Capsule().fill(settings.theme.miss))
-                }
-            }
-            .foregroundStyle(tab == id ? settings.ink : settings.inkDim)
-            .padding(.horizontal, 18).frame(height: 38)
-            .background(RoundedRectangle(cornerRadius: 10).fill(tab == id ? settings.accent.opacity(0.18) : settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(tab == id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(badge > 0 ? "\(label), \(badge) pending" : label)
-        .accessibilityAddTraits(tab == id ? [.isButton, .isSelected] : .isButton)
+        SegTab(label: label, selected: tab == id, badge: badge) { tab = id }
     }
 
     // MARK: roster

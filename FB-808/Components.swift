@@ -58,6 +58,41 @@ extension ModeHead where Trailing == EmptyView {
     }
 }
 
+/// Shared "tab pill" for the section/mode switchers in Theory, Learn and Teacher (previously three
+/// near-identical hand-rolled copies that drifted in size and a11y). Bakes in the consistent selected
+/// chrome AND the `.isSelected` accessibility trait so every tab row is screen-reader-correct. Font/
+/// height/padding default to the common size and can be overridden to match a specific row exactly.
+struct SegTab: View {
+    @EnvironmentObject var settings: AppSettings
+    let label: String
+    let selected: Bool
+    var badge: Int = 0
+    var font: Font = FDFont.ui(14, .semibold)
+    var height: CGFloat = 38
+    var hPad: CGFloat = 18
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Text(label).font(font)
+                if badge > 0 {
+                    Text("\(badge)").font(FDFont.mono(10, .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Capsule().fill(settings.theme.miss))
+                }
+            }
+            .foregroundStyle(selected ? settings.ink : settings.inkDim)
+            .padding(.horizontal, hPad).frame(height: height)
+            .background(RoundedRectangle(cornerRadius: 10).fill(selected ? settings.accent.opacity(0.18) : settings.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(badge > 0 ? "\(label), \(badge) pending" : label)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
 // MARK: - Panel card
 
 /// The app's standard card chrome — a filled rounded rect with the hairline border — as one modifier

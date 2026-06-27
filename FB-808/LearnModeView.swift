@@ -275,16 +275,10 @@ struct LearnModeView: View {
         }
     }
     private func tab(_ label: String, id: String) -> some View {
-        Button {
+        SegTab(label: label, selected: sub == id) {
             if id == "practice" && sub != "practice" { model.reset() }
             sub = id
-        } label: {
-            Text(label).font(FDFont.ui(14, .semibold))
-                .foregroundStyle(sub == id ? settings.ink : settings.inkDim)
-                .padding(.horizontal, 18).frame(height: 38)
-                .background(RoundedRectangle(cornerRadius: 10).fill(sub == id ? settings.accent.opacity(0.18) : settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(sub == id ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
+        }
     }
 
     private func launch(_ l: Kit.Lesson) {

@@ -43,17 +43,7 @@ struct TheoryModeView: View {
     }
 
     private func seg(_ label: String, _ id: String) -> some View {
-        let selected = mode == id
-        return Button { mode = id } label: {
-            Text(label).font(FDFont.ui(13.5, .semibold))
-                .foregroundStyle(selected ? settings.ink : settings.inkDim)
-                .padding(.horizontal, 14).frame(height: 34)
-                .background(RoundedRectangle(cornerRadius: 10).fill(selected ? settings.accent.opacity(0.18) : settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityValue(selected ? "Selected" : "Not selected")
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        SegTab(label: label, selected: mode == id, font: FDFont.ui(13.5, .semibold), height: 34, hPad: 14) { mode = id }
     }
 }
 
