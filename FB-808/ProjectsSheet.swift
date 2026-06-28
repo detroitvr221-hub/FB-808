@@ -34,11 +34,14 @@ struct ProjectsSheet: View {
         .padding(24)
         .background(settings.theme.bg.ignoresSafeArea())
         .onAppear { nameField = project.name }
-        .alert("Start a new project?", isPresented: $confirmNew) {
-            Button("Cancel", role: .cancel) {}
-            Button("New Project", role: .destructive) {
-                project.resetToDefault(); nameField = project.name
+        .confirmationDialog("New project from a template", isPresented: $confirmNew, titleVisibility: .visible) {
+            Button("Blank") { project.startFromTemplate("blank"); nameField = project.name }
+            ForEach(["boombap", "trap", "house", "lofi", "afrobeat"], id: \.self) { id in
+                Button(Project.beatStyles.first { $0.id == id }?.name ?? id) {
+                    project.startFromTemplate(id); nameField = project.name
+                }
             }
+            Button("Cancel", role: .cancel) {}
         } message: { Text("This clears the current beat. Save it first if you want to keep it.") }
         .alert("Overwrite “\(trimmedName)”?", isPresented: $confirmOverwrite) {
             Button("Cancel", role: .cancel) {}

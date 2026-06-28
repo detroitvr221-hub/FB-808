@@ -1401,6 +1401,15 @@ final class Project: ObservableObject {
         restore(Project(engine: engine).snapshot())
         name = "Untitled Beat"
     }
+
+    /// Start a fresh project from a template (F5). "blank" = the default empty project; any BeatGenerator
+    /// style id seeds a genre starter beat (lanes + tempo + swing) so the user isn't staring at a blank grid.
+    func startFromTemplate(_ id: String) {
+        resetToDefault()
+        guard id != "blank", let style = Project.beatStyles.first(where: { $0.id == id }) else { return }
+        generateBeat(style: id, density: 0.5)   // fills lanes + sets the genre's bpm/swing (one undo step)
+        name = style.name
+    }
 }
 
 // MARK: - Codable snapshot
