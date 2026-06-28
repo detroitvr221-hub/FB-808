@@ -103,6 +103,12 @@ struct SettingsSheet: View {
                                 Text("Capture both channels of a stereo interface. Off = mono (uses the left/first input).").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
                             }
                         }.tint(settings.accent)
+                        Toggle(isOn: $settings.haptics) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Feel the beat (haptics)").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
+                                Text("A haptic pulse on each beat while playing — feel the rhythm as well as hear it.").font(FDFont.ui(11.5)).foregroundStyle(th.inkFaint)
+                            }
+                        }.tint(settings.accent)
                     }
 
                     section("Audio Quality")

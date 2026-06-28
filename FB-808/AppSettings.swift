@@ -22,6 +22,7 @@ final class AppSettings: ObservableObject {
     @Published var sampleRate: Double    { didSet { store.set(sampleRate, forKey: "fd.sampleRate") } }   // engine rate; applies on next launch
     // Audio-quality modes (opt-in; default off = current behavior). Applied to the engine live; export reads the dither flag.
     @Published var stereoInput: Bool     { didSet { store.set(stereoInput, forKey: "fd.stereoInput") } }   // record 2 channels (e.g. a stereo interface)
+    @Published var haptics: Bool         { didSet { store.set(haptics, forKey: "fd.haptics") } }            // "feel the beat" — haptic pulse per beat while playing
     @Published var hqInterp: Bool        { didSet { store.set(hqInterp, forKey: "fd.hqInterp") } }
     @Published var equalPowerPan: Bool   { didSet { store.set(equalPowerPan, forKey: "fd.equalPowerPan") } }
     @Published var bandlimitedOsc: Bool  { didSet { store.set(bandlimitedOsc, forKey: "fd.bandlimitedOsc") } }
@@ -50,6 +51,7 @@ final class AppSettings: ObservableObject {
         // band-limited oscillators, 16-bit dither). Equal-power pan stays OFF by default (it shifts the centre
         // level of existing mixes). All remain user-toggleable.
         stereoInput = store.object(forKey: "fd.stereoInput") as? Bool ?? false   // default mono (safe; opt-in stereo)
+        haptics = store.object(forKey: "fd.haptics") as? Bool ?? false           // opt-in "feel the beat"
         hqInterp = store.object(forKey: "fd.hqInterp") as? Bool ?? true
         equalPowerPan = store.object(forKey: "fd.equalPowerPan") as? Bool ?? false
         bandlimitedOsc = store.object(forKey: "fd.bandlimitedOsc") as? Bool ?? true

@@ -160,6 +160,10 @@ final class Transport: ObservableObject {
         if (p.metronome || countSteps > 0) && s % 4 == 0 {
             engine.trigger("click", vel: s % 16 == 0 ? 0.95 : 0.7, when: time)
         }
+        if Haptics.shared.enabled && countSteps == 0 && s % 4 == 0 {   // "feel the beat" — pulse at the step's real time
+            let dt = time - engine.now()
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, dt)) { Haptics.shared.beat(strong: s % 16 == 0) }
+        }
         if countSteps > 0 { return }
         onStep?(barCount, s, time)   // SequencerEngine step-fire seam (sample-accurate; nil = no-op)
 
