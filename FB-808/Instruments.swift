@@ -11,6 +11,17 @@ extension SynthPatch {
 
 enum Music {
     static let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    // Properly-glyphed enharmonic spellings for theory UI. A key is spelled with EITHER sharps OR flats,
+    // never mixed — flat keys (F, B♭, E♭, A♭, D♭, G♭ and their relative minors) spell with flats.
+    static let sharpNames = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]
+    static let flatNames  = ["C", "D♭", "D", "E♭", "E", "F", "G♭", "G", "A♭", "A", "B♭", "B"]
+    /// Key-aware note spelling for a pitch class 0…11. Use flats for flat keys, sharps otherwise.
+    static func spelled(_ pc: Int, preferFlats: Bool) -> String { (preferFlats ? flatNames : sharpNames)[pitchClass(pc)] }
+    /// Whether a key should be spelled with flats. `tonicPC` 0…11; `minor` selects the relative-minor convention.
+    static func preferFlats(tonicPC: Int, minor: Bool) -> Bool {
+        let majorPC = pitchClass(minor ? tonicPC + 3 : tonicPC)
+        return [5, 10, 3, 8, 1, 6].contains(majorPC)   // F, B♭, E♭, A♭, D♭, G♭
+    }
 
     /// Pitch class 0…11 for any (possibly negative) MIDI/interval value.
     static func pitchClass(_ midi: Int) -> Int { ((midi % 12) + 12) % 12 }

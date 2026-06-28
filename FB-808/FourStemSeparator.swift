@@ -56,6 +56,10 @@ final class FourStemSeparator {
 
     /// Separate `mono` (engine-rate) into named stems via the bundled model. Returns nil if no model is
     /// bundled or inference fails — callers should fall back to HPSS or prompt the user.
+    /// Hard cap on the audio fed to the model. Each segment is multi-second of Neural-Engine inference, so an
+    /// unbounded import means a multi-minute, memory-heavy, uncancellable wall — cap to keep it bounded.
+    static let maxSeconds: Double = 30
+
     static func separate(_ mono: [Float], engineSR: Double) -> [Stem]? {
         guard let url = modelURL else { return nil }
         let cfg = MLModelConfiguration(); cfg.computeUnits = .all
@@ -74,8 +78,11 @@ final class FourStemSeparator {
         let fixedLen = inShape.last ?? -1                        // <=0 means flexible length
         let msr = StemModelContract.sampleRate
 
+        // Cap input length before resampling so a long import can't OOM or hang the model for minutes.
+        let capped = mono.count > Int(maxSeconds * engineSR) ? Array(mono.prefix(Int(maxSeconds * engineSR))) : mono
+        if capped.count < mono.count { log.info("stems: input capped to \(maxSeconds, privacy: .public)s") }
         // Resample engine→model rate.
-        let x = resample(mono, from: engineSR, to: msr)
+        let x = resample(capped, from: engineSR, to: msr)
         let n = x.count
         guard n > 0 else { return nil }
 
@@ -103,7 +110,7 @@ final class FourStemSeparator {
                 guard sources > 0 else { return nil }
                 acc = Array(repeating: [Float](repeating: 0, count: n), count: sources)
             }
-            accumulate(stems, into: &acc, norm: &norm, at: pos, count: len, sources: sources, segLen: seg)
+            accumulate(stems, into: &acc, norm: &norm, at: pos, count: len, sources: sources, overlap: overlap)
             pos += stride
         }
         guard sources > 0 else { return nil }
@@ -111,7 +118,10 @@ final class FourStemSeparator {
         // Normalize the overlap-add, resample each source back to engine rate, name + return.
         return (0..<sources).map { s in
             var m = [Float](repeating: 0, count: n)
-            for i in 0..<n { m[i] = acc[s][i] / (norm[i] > 1e-6 ? norm[i] : 1) }
+            for i in 0..<n {
+                let v = acc[s][i] / (norm[i] > 1e-6 ? norm[i] : 1)
+                m[i] = v.isFinite ? v : 0   // reduced-precision compute can emit NaN; never feed it into a pad sample
+            }
             let back = resample(m, from: msr, to: engineSR)
             let name = s < StemModelContract.stemOrder.count ? StemModelContract.stemOrder[s] : "Stem \(s + 1)"
             return Stem(name: name, audio: back)
@@ -141,9 +151,9 @@ final class FourStemSeparator {
         return 0
     }
 
-    /// Overlap-add one chunk's stems into the accumulators, averaging stereo→mono, with a Hann cross-fade window.
+    /// Overlap-add one chunk's stems into the accumulators, averaging stereo→mono, with a cross-fade window.
     private static func accumulate(_ out: MLMultiArray, into acc: inout [[Float]], norm: inout [Float],
-                                   at pos: Int, count: Int, sources: Int, segLen: Int) {
+                                   at pos: Int, count: Int, sources: Int, overlap: Int) {
         let p = out.dataPointer.bindMemory(to: Float.self, capacity: out.count)
         let st = out.strides.map { $0.intValue }
         let shape = out.shape.map { $0.intValue }
@@ -156,7 +166,7 @@ final class FourStemSeparator {
         let lStride = st.last ?? 1
         for s in 0..<sources {
             for i in 0..<count {
-                let w = hann(i, count)                          // cross-fade so overlapping chunks blend
+                let w = xfadeWeight(i, count: count, overlap: overlap)   // cross-fade so overlapping chunks blend
                 var v: Float = 0
                 for c in 0..<channels { v += p[s * sStride + c * cStride + i * lStride] }
                 acc[s][pos + i] += (v / Float(channels)) * w
@@ -165,9 +175,15 @@ final class FourStemSeparator {
         }
     }
 
-    private static func hann(_ i: Int, _ n: Int) -> Float {
-        guard n > 1 else { return 1 }
-        return 0.5 - 0.5 * cos(2 * .pi * Float(i) / Float(n - 1))
+    /// Overlap-add weight: flat 1.0 in the chunk interior, short linear ramps at each edge so adjacent
+    /// chunks cross-fade. Always strictly positive — a 0 weight (the old Hann at i=0/i=count-1) zeroed the
+    /// global first/last sample because no neighbouring chunk overlaps there. Normalisation by `norm`
+    /// divides the weight back out, so the only requirement is w > 0 everywhere.
+    private static func xfadeWeight(_ i: Int, count: Int, overlap: Int) -> Float {
+        guard overlap > 0, count > 1 else { return 1 }
+        let up = Float(i + 1) / Float(overlap + 1)
+        let down = Float(count - i) / Float(overlap + 1)
+        return Swift.max(0.05, Swift.min(1, Swift.min(up, down)))
     }
 
     /// Linear-interpolation resampler (adequate for stem audio; the model dominates quality).

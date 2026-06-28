@@ -192,7 +192,8 @@ struct SynthModeView: View {
                     }.scrollIndicators(.hidden)
                 }
             }
-            .frame(width: 620, height: 500)
+            .frame(maxWidth: 620, maxHeight: 500)   // cap, not fix — shrinks to fit Split View / portrait (no off-screen clip)
+            .padding(16)
             .fdCard(22, fill: settings.panel)
             .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
         }

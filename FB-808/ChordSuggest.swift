@@ -66,7 +66,8 @@ enum ChordSuggest {
     static func chordName(_ deg: Int, rootPC: Int, scaleID: String, minor: Bool) -> String {
         let iv = Music.intervals(scaleID)
         let suffix = minor ? ["m", "°", "", "m", "m", "", ""] : ["", "m", "m", "", "", "m", "°"]
-        return Music.noteNames[(rootPC + iv[deg % iv.count]) % 12] + suffix[deg % suffix.count]
+        let flats = Music.preferFlats(tonicPC: rootPC, minor: minor)
+        return Music.spelled((rootPC + iv[deg % iv.count]) % 12, preferFlats: flats) + suffix[deg % suffix.count]
     }
 }
 
@@ -85,7 +86,7 @@ struct ChordSuggestView: View {
     private var minor: Bool { project.melodyScale == "minor" }
     private var rootPC: Int { project.melodyKey }
     private var scaleID: String { project.melodyScale }
-    private var keyName: String { Music.noteNames[rootPC % 12] + (minor ? " Minor" : " Major") }
+    private var keyName: String { Music.spelled(rootPC % 12, preferFlats: Music.preferFlats(tonicPC: rootPC, minor: minor)) + (minor ? " Minor" : " Major") }
 
     private var voice: SynthPatch {
         var p = SynthPatch()

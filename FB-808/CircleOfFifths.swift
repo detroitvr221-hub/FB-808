@@ -191,7 +191,7 @@ struct CircleOfFifthsView: View {
 
             HStack(spacing: 8) {
                 actionButton("▶ Scale", filled: true) { playScale() }
-                actionButton("▶ I–V–vi–IV", filled: false) { playProgression() }
+                actionButton(minorMode ? "▶ i–VI–III–VII" : "▶ I–V–vi–IV", filled: false) { playProgression() }
             }
             Button { useAsSongKey() } label: {
                 HStack(spacing: 7) {
@@ -276,7 +276,7 @@ struct CircleOfFifthsView: View {
         func tone(_ idx: Int) -> Int { iv[idx % n] + 12 * (idx / n) }
         return (0..<n).map { d in
             let offs = [tone(d), tone(d + 2), tone(d + 4)]
-            let name = Music.noteNames[(rootPC + iv[d]) % 12] + suffix[d]
+            let name = Music.spelled((rootPC + iv[d]) % 12, preferFlats: k.sharps < 0) + suffix[d]
             return DiatonicChord(id: d, roman: romans[d], name: name, fn: fns[d], midis: offs.map { rootMidi + $0 })
         }
     }

@@ -511,6 +511,7 @@ final class Project: ObservableObject {
         let cell = ((Int((when0to1 * Double(cells)).rounded()) % cells) + cells) % cells
         let i = min(n - 1, cell * (n / cells))
         var lane = lanes[padID] ?? Kit.emptyLane()
+        guard lane.indices.contains(i) else { return }   // guard against a short custom lane vs barSteps
         lane[i] = vel ?? (fullLevel ? 1 : 0.85)
         lanes[padID] = lane
     }

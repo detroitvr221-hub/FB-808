@@ -342,10 +342,20 @@ final class AudioEngine: ObservableObject {
                 if opts.contains(.shouldResume) { self.restartAudio() }   // resume after the call/alarm ends
             }
         })
-        audioObservers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] _ in
+        audioObservers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
-                self?.logEvent("route change", AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "—")
-                self?.restartAudio()                                     // headphones unplugged / BT switched
+                // Only restart on route changes that actually affect playback. Route-change fires for many
+                // benign reasons (category change from our own activate calls, wake-from-sleep), and
+                // restarting on those causes needless stop/start churn — and can re-enter mid-recovery.
+                let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+                let reason = AVAudioSession.RouteChangeReason(rawValue: raw) ?? .unknown
+                switch reason {
+                case .oldDeviceUnavailable, .newDeviceAvailable, .override, .routeConfigurationChange:
+                    self?.logEvent("route change", AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "—")
+                    self?.restartAudio()                                 // headphones unplugged / BT switched
+                default:
+                    break
+                }
             }
         })
         audioObservers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in

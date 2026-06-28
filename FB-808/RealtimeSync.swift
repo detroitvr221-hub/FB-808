@@ -64,6 +64,10 @@ final class SessionStore: ObservableObject, SyncBus {
     // Token backend (edge function `room`): teacher's host token + the live roster; student's token + presence.
     @Published private(set) var remoteRoster: [RosterEntry] = []
     @Published private(set) var roomTitle = ""
+    // Student submit lifecycle — drives the Submit banner so a child sees their work reach the teacher
+    // (was a fully silent network action that degraded to metadata-only without telling them).
+    enum SubmitState: Equatable { case idle, submitting, sentWithAudio, sentMetadataOnly, failed }
+    @Published private(set) var submitState: SubmitState = .idle
     private(set) var hostToken: String?
     // Ephemeral (in-memory, per-session) — survives reconnects within a session but a stolen value
     // can't be replayed across launches/rooms; the server re-issues on join if blank.
@@ -202,9 +206,11 @@ final class SessionStore: ObservableObject, SyncBus {
     }
 
     /// Student: submit the current beat for teacher review (optional audio URL from Storage).
-    func submitBeat(beatName: String, audioUrl: String?, accuracy: Double?) async {
-        _ = await callRoom(["action": "submit", "code": roomCode, "studentToken": studentToken,
-                            "displayName": displayName, "beatName": beatName, "audioUrl": audioUrl, "accuracy": accuracy])
+    @discardableResult
+    func submitBeat(beatName: String, audioUrl: String?, accuracy: Double?) async -> Bool {
+        let res = await callRoom(["action": "submit", "code": roomCode, "studentToken": studentToken,
+                                  "displayName": displayName, "beatName": beatName, "audioUrl": audioUrl, "accuracy": accuracy])
+        return res != nil
     }
     /// Teacher: list submissions / send feedback.
     /// Returns nil on a transport failure (so callers don't mistake a network blip for "no submissions"
@@ -239,16 +245,29 @@ final class SessionStore: ObservableObject, SyncBus {
     }
     /// Student: bounce the current beat and submit it (audio uploaded server-side via the edge fn).
     func submitCurrentBeat() async {
+        guard submitState != .submitting else { return }   // ignore double-taps mid-submit
+        submitState = .submitting
         let name = project?.name ?? "Beat"
-        guard let plan = project?.buildExportPlan() else { await submitBeat(beatName: name, audioUrl: nil, accuracy: nil); return }
+        guard let plan = project?.buildExportPlan() else {
+            let ok = await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)
+            await finishSubmit(ok ? .sentMetadataOnly : .failed); return
+        }
         let wav = await Task.detached(priority: .userInitiated) { SessionStore.renderMonoWAV(plan) }.value
         if let wav, wav.count < 8_000_000 {
-            _ = await callFunc("submitAudio", ["code": roomCode, "studentToken": studentToken,
-                                               "displayName": displayName, "beatName": name,
-                                               "wavBase64": wav.base64EncodedString()])
+            let res = await callFunc("submitAudio", ["code": roomCode, "studentToken": studentToken,
+                                                     "displayName": displayName, "beatName": name,
+                                                     "wavBase64": wav.base64EncodedString()])
+            await finishSubmit(res != nil ? .sentWithAudio : .failed)
         } else {
-            await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)   // metadata only if no/oversized audio
+            let ok = await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)   // metadata only if no/oversized audio
+            await finishSubmit(ok ? .sentMetadataOnly : .failed)
         }
+    }
+    /// Publish the terminal submit state, then clear it back to idle after a few seconds so the banner resets.
+    private func finishSubmit(_ state: SubmitState) async {
+        submitState = state
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        if submitState == state { submitState = .idle }
     }
 
     /// Open (or re-open) the WebSocket for the current role/room. Reused by reconnect.

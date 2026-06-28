@@ -2,6 +2,7 @@
 //  and the settings sheet. iPad landscape, opens directly into the pads.
 
 import SwiftUI
+import Combine
 
 // First-run guided tour / onboarding (B12). Re-openable from the rail "?" button.
 struct TourOverlay: View {
@@ -138,6 +139,9 @@ struct RootView: View {
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
     @State private var exporting = false             // rail Share action — export is reachable at EVERY level (not just Tracks)
     @State private var exportFile: ExportFile?
+    // Periodic autosave to the recovery slot: scenePhase isn't reliably delivered before an OOM kill, so a
+    // long editing session that crashed used to lose everything since the last manual save (#audit-data).
+    private let autosaveTick = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     private var allowed: [String] { FD_LEVEL_NAV[settings.level] ?? FD_LEVEL_NAV[.creator, default: FD_NAV.map(\.id)] }
     private var nav: [NavItem] { FD_NAV.filter { allowed.contains($0.id) } }
@@ -218,6 +222,12 @@ struct RootView: View {
                 store.autosave(project.snapshot())
             }
             if phase == .background { engine.allNotesOff() }   // release any held live notes (no stuck notes on return)
+        }
+        .onReceive(autosaveTick) { _ in
+            // Keep the crash-recovery slot fresh during active editing (does not touch the named save).
+            guard project.hasUnsavedChanges else { return }
+            project.persistSampleAudio()
+            store.autosave(project.snapshot())
         }
         .modifier(AudioSettingsSync(settings: settings, apply: applyAudio))
         .alert("Recover unsaved changes?", isPresented: Binding(get: { recoverSnap != nil }, set: { if !$0 { recoverSnap = nil } })) {
@@ -439,11 +449,35 @@ struct RootView: View {
             } else {
                 bannerBtn("Try it") { session.tryIt() }
             }
-            bannerBtn("Submit") { Task { await session.submitCurrentBeat() } }   // bounce + upload + submit for review
+            submitControl()   // bounce + upload + submit for review, with sending/sent/failed feedback
             bannerBtn("Leave") { session.leave() }
         }
         .padding(.horizontal, 16).frame(height: 40)
         .background((session.forked ? settings.theme.perfect : settings.accent).opacity(0.92))
+    }
+    @ViewBuilder private func submitControl() -> some View {
+        switch session.submitState {
+        case .submitting:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini).tint(settings.accent)
+                Text("Sending…").font(FDFont.ui(12, .bold)).foregroundStyle(settings.accent)
+            }
+            .padding(.horizontal, 12).frame(height: 26).background(Capsule().fill(.white))
+            .accessibilityLabel("Submitting your beat")
+        case .sentWithAudio, .sentMetadataOnly:
+            let withAudio = session.submitState == .sentWithAudio
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 12))
+                Text(withAudio ? "Sent" : "Sent (no audio)").font(FDFont.ui(12, .bold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12).frame(height: 26).background(Capsule().fill(settings.theme.good))
+            .accessibilityLabel(withAudio ? "Beat sent to your teacher" : "Beat sent without audio — it was too large")
+        case .failed:
+            bannerBtn("Failed — Retry") { Task { await session.submitCurrentBeat() } }
+        case .idle:
+            bannerBtn("Submit") { Task { await session.submitCurrentBeat() } }
+        }
     }
     private func bannerBtn(_ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -489,7 +523,7 @@ struct RootView: View {
     @ViewBuilder private func content(_ th: Theme) -> some View {
         Group {
             switch tab {
-            case "pads": PadModeView()
+            case "pads": PadModeView(openTab: { tab = $0 })
             case "sequence": SequenceModeView()
             case "synth": SynthModeView()
             case "sample": SampleModeView()
@@ -498,7 +532,7 @@ struct RootView: View {
             case "theory": TheoryModeView(openTab: { tab = $0 })
             case "learn": LearnModeView(engine: engine, fx: fx, onXP: { progress.addXP($0) }, openTab: { tab = $0 })
             case "teacher": TeacherModeView(openTab: { tab = $0 })
-            default: PadModeView()
+            default: PadModeView(openTab: { tab = $0 })
             }
         }
         .padding(.vertical, 22)

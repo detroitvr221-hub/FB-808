@@ -15,6 +15,7 @@ struct PadModeView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var transport: Transport
     @EnvironmentObject var progress: ProgressStore
+    var openTab: (String) -> Void = { _ in }
 
     @State private var repeatTimers: [String: Timer] = [:]
     @State private var longTimer: Timer?
@@ -97,6 +98,15 @@ struct PadModeView: View {
             return np
         }
     }
+    /// True when the current bank is a user-content bank (C slices / D synth) with nothing assigned yet.
+    private var bankIsEmpty: Bool {
+        let ids = (Kit.banks[project.bank]?.pads ?? []).map(\.id)
+        switch project.bank {
+        case "C": return (project.sliceBank?.isEmpty ?? true) && ids.allSatisfy { project.padSampleData[$0] == nil }
+        case "D": return project.synthBank?.isEmpty ?? true
+        default:  return false
+        }
+    }
     private var badges: [String: String]? {
         guard project.sixteenLevels else { return nil }
         var b: [String: String] = [:]
@@ -128,6 +138,26 @@ struct PadModeView: View {
                     HStack(spacing: 8) {
                         ForEach(Kit.bankOrder, id: \.self) { b in
                             bankButton(b)
+                        }
+                    }
+                }
+                if bankIsEmpty {   // C/D with nothing assigned yet — guide the user instead of a silent dead-end
+                    PanelCard(title: project.bank == "C" ? "Empty Slice Bank" : "Empty Synth Bank") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(project.bank == "C"
+                                 ? "Bank C plays your own chopped samples. Record or import audio in the Sample tab, then chop it into slices — they'll land on these pads."
+                                 : "Bank D plays synth voices. Build or pick a sound in the Synth tab and map it across these pads.")
+                                .font(FDFont.ui(12.5)).foregroundStyle(settings.inkDim)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button { openTab(project.bank == "C" ? "sample" : "synth") } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: project.bank == "C" ? "waveform" : "dial.medium.fill").font(.system(size: 13))
+                                    Text(project.bank == "C" ? "Open Sample tab" : "Open Synth tab").font(FDFont.ui(12.5, .semibold))
+                                }
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).frame(height: 38)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent))
+                            }.buttonStyle(.plain)
                         }
                     }
                 }

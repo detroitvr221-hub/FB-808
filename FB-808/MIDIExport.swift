@@ -32,7 +32,7 @@ extension Project {
         func pushTicks(_ step: Int) -> Int {
             grooveID == "straight" ? (step % 2 == 1 ? swingTk : 0) : Int((Double(tick16) * groove.push[step % 16]).rounded())
         }
-        func onTick(_ bar: Int, _ step: Int) -> Int { bar * n * tick16 + step * tick16 + pushTicks(step) }
+        func onTick(_ bar: Int, _ step: Int) -> Int { max(0, bar * n * tick16 + step * tick16 + pushTicks(step)) }
 
         var events: [(tick: Int, data: [UInt8])] = []
         let mpq = 60_000_000 / max(1, bpm)   // microseconds per quarter note
@@ -57,13 +57,31 @@ extension Project {
             events.append((on + max(1, dur) * tick16, [0x80, note, 0]))
         }
 
+        // Structural per-step gates (A9): probability + conditions decide whether a note EXISTS, so MIDI must
+        // honor them or it exports notes the audio bounce suppresses. Mirrors Export.swift's deterministic seed
+        // exactly so the .mid and the .wav agree. Mix gates (mute/solo) are left out on purpose — MIDI keeps raw
+        // notes for re-mixing in a DAW.
+        func stepSounds(_ padID: String, _ step: Int, bar: Int, meta: [String: [Int: StepMeta]]) -> Bool {
+            guard let sm = meta[padID]?[step] else { return true }
+            if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { return false }
+            if sm.prob < 0.999 {
+                var seed = UInt64(bar &* 16 &+ step) &+ 1
+                for ch in padID.unicodeScalars { seed = seed &* 31 &+ UInt64(ch.value) }
+                if Double(seed % 997) / 997.0 > sm.prob { return false }
+            }
+            return true
+        }
+
         for bar in 0..<totalBars {
             let curLanes = songMode ? lanesForBar(bar) : lanes
             let curMelody = songMode ? melodyForBar(bar) : melody
             let curParts = songMode ? partsForBar(bar) : parts
+            let curMeta = songMode ? stepMetaForBar(bar) : stepMeta
             for (padID, lane) in curLanes {
                 guard let note = GM_DRUM[padID] else { continue }
-                for s in 0..<min(n, lane.count) where lane[s] > 0 { drum(note, lane[s], bar: bar, step: s) }
+                for s in 0..<min(n, lane.count) where lane[s] > 0 && stepSounds(padID, s, bar: bar, meta: curMeta) {
+                    drum(note, lane[s], bar: bar, step: s)
+                }
             }
             for nt in curMelody { melodic(nt.pitch, nt.vel, dur: nt.dur, bar: bar, step: nt.step) }
             for part in curParts where !part.muted {   // extra instrument parts on channel 1 too (were dropped)

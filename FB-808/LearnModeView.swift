@@ -283,12 +283,16 @@ struct LearnModeView: View {
 
     private func launch(_ l: Kit.Lesson) {
         let p = l.patternID.flatMap { Kit.pattern($0) }
-        guard p != nil else {
-            // Pattern failed to resolve — stay on the lessons screen and explain, rather than
-            // silently dumping the user into the practice picker.
+        guard let p else {
+            // Exploratory lessons (Meet the Pads / Build a Song / Build Your Own) have no recreate-pattern;
+            // send the learner to the matching builder so the node does something real instead of dead-ending.
+            lessonNote = nil
             lessonInProgress = nil
-            lessonNote = "“\(l.title)” is coming soon — its beat isn’t available yet."
-            sub = "lessons"
+            progressStore.completeLesson(l.id)   // an explore-it-yourself node completes on entry
+            switch l.id {
+            case "l9", "l10": openTab("sequence")
+            default:          openTab("pads")
+            }
             return
         }
         lessonNote = nil

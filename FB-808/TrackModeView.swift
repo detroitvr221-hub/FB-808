@@ -353,6 +353,11 @@ struct TrackModeView: View {
                     Button { project.setTrackColor(t.id, hex) } label: { Label(hex, systemImage: "circle.fill") }
                 }
             } label: { Label("Color", systemImage: "paintpalette") }
+            Divider()
+            Button { project.moveTrack(t.id, up: true) } label: { Label("Move Up", systemImage: "arrow.up") }
+                .disabled(!project.canMoveTrack(t.id, up: true))
+            Button { project.moveTrack(t.id, up: false) } label: { Label("Move Down", systemImage: "arrow.down") }
+                .disabled(!project.canMoveTrack(t.id, up: false))
             if t.playsAdditively {   // linked or frozen — both are real arrangeable tracks
                 Button { project.tracks.contains { $0.id == t.id } ? sendClipFull(t) : () } label: { Label("Add Clip (full song)", systemImage: "rectangle.badge.plus") }
                 if !project.busTracks.isEmpty {   // route this track's audio into a group bus (G3.4)

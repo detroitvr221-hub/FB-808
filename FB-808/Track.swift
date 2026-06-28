@@ -205,6 +205,20 @@ extension Project {
         if audioArmedTrack == id { audioArmedTrack = nil }
     }
 
+    /// Reorder a track one slot up or down (drives Move Up / Move Down in the track menu).
+    func moveTrack(_ id: String, up: Bool) {
+        guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
+        let j = up ? i - 1 : i + 1
+        guard tracks.indices.contains(j) else { return }
+        checkpoint("movetrack", coalesce: false)
+        tracks.swapAt(i, j)
+    }
+    /// True when a track can move in the given direction (for enabling/disabling the menu items).
+    func canMoveTrack(_ id: String, up: Bool) -> Bool {
+        guard let i = tracks.firstIndex(where: { $0.id == id }) else { return false }
+        return tracks.indices.contains(up ? i - 1 : i + 1)
+    }
+
     func renameTrack(_ id: String, _ name: String) {
         guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
         let trimmed = name.trimmingCharacters(in: .whitespaces)
@@ -221,10 +235,12 @@ extension Project {
 
     func setTrackVol(_ id: String, _ v: Double) {
         guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
+        checkpoint("trackvol:\(id)", coalesce: true)   // undoable + marks dirty so a fader move autosaves
         tracks[i].vol = max(0, min(1.4, v))
     }
     func setTrackPan(_ id: String, _ p: Double) {
         guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
+        checkpoint("trackpan:\(id)", coalesce: true)
         tracks[i].pan = max(-1, min(1, p))
     }
     func toggleTrackMute(_ id: String) {
