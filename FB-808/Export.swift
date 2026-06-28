@@ -503,10 +503,7 @@ nonisolated func renderOffline(_ plan: ExportPlan,
         var sendL: Float = 0, sendR: Float = 0
         for c in 0..<nch {
             let pf = cfx[c]
-            var l: Float, r: Float
-            if pf.enabled { (l, r) = strips[c].process(accL[c], accR[c], pf) }
-            else { l = accL[c]; r = accR[c] }
-            if pf.scAmount > 0 && scEnv > 0 { let gg = 1 - Float(pf.scAmount) * scEnv; l *= gg; r *= gg }
+            let (l, r) = processChannelStrip(strips[c], accL[c], accR[c], pf, scEnv: scEnv)   // shared with live render
             mixL += l; mixR += r
             if pf.send > 0 { sendL += l * Float(pf.send); sendR += r * Float(pf.send) }
         }

@@ -228,6 +228,9 @@ struct RootView: View {
         } message: {
             Text("This project references audio that couldn't be found:\n\n• \(missingAudio.prefix(8).joined(separator: "\n• "))\n\nThe rest of the project loaded fine.")
         }
+        .alert("Microphone access needed", isPresented: Binding(get: { project.micRecordFailed }, set: { if !$0 { project.micRecordFailed = false } })) {
+            Button("OK") { project.micRecordFailed = false }
+        } message: { Text("Recording couldn't start. Enable microphone access for FD·808 in Settings → Privacy → Microphone, then try again.") }
         .alert("Project cleaned up on load", isPresented: Binding(get: { !store.lastRepairs.isEmpty }, set: { if !$0 { store.clearRepairs() } })) {
             Button("OK") { store.clearRepairs() }
         } message: {

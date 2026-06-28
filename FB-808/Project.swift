@@ -235,6 +235,7 @@ final class Project: ObservableObject {
     @Published var barSteps = 16        // steps per bar: 16=4/4, 12=3/4, 8=2/4 (A13)
     @Published var playing = false
     @Published var recording = false
+    @Published var micRecordFailed = false   // mic permission denied / tap failed → surface "enable mic access" (transient)
     @Published var metronome = true
     @Published var countIn = 0          // bars: 0,1,2,4
     @Published var step = -1            // live playhead step (0..15); -1 stopped

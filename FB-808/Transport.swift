@@ -116,14 +116,13 @@ final class Transport: ObservableObject {
             // engine doesn't restart mid-playback
             engine.startMicRecording { [weak self] ok in
                 guard let self else { return }
+                guard ok else { self.project.micRecordFailed = true; return }   // denied/failed → don't fake a recording
                 self.project.recording = true
                 let punch = self.project.punchInBar      // bars before it are count-in
                 self.audioRecStartBar = punch
                 if !self.playing { self.start() }
-                if ok {
-                    self.audioRecStartNow = self.engine.micStartTime
-                    self.audioRecBar0 = self.nextStepTime + Double(punch) * self.secPerStep() * Double(max(1, self.project.barSteps))
-                }
+                self.audioRecStartNow = self.engine.micStartTime
+                self.audioRecBar0 = self.nextStepTime + Double(punch) * self.secPerStep() * Double(max(1, self.project.barSteps))
             }
         } else {
             project.recording = true
