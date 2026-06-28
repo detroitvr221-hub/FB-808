@@ -29,6 +29,10 @@ struct PadGridView: View {
                 }
             }
             .frame(width: side, height: side)
+            // True multi-touch input layer (F6) — one UIKit surface over the grid so simultaneous hits /
+            // rolls all sound; the visual pads below render hit feedback via PadFX.
+            .overlay(MultiTouchGrid(cols: 4, rows: 4, cell: cell, gap: gap,
+                                    padIDs: pads.map(\.id), onDown: onHit, onUp: onUp))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -43,8 +47,6 @@ struct PadView: View {
     var muted: Bool = false
     var onHit: (String) -> Void
     var onUp: ((String) -> Void)? = nil
-
-    @State private var pressed = false
 
     var body: some View {
         let th = settings.theme
@@ -94,17 +96,14 @@ struct PadView: View {
         }
         .compositingGroup()
         .opacity(muted ? 0.6 : 1)
-        .scaleEffect(pressed ? 0.984 : 1)
-        .offset(y: pressed ? 2 : 0)
         .shadow(color: isLit ? pad.color.opacity(0.5) : .black.opacity(0.4),
                 radius: isLit ? 22 * glow : 8, x: 0, y: isLit ? 0 : 6)
         .contentShape(RoundedRectangle(cornerRadius: 19))
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { _ in if !pressed { pressed = true; onHit(pad.id) } }
-            .onEnded { _ in pressed = false; onUp?(pad.id) })
-        .animation(.easeOut(duration: 0.07), value: pressed)
-        .sensoryFeedback(trigger: pressed) { _, isPressed in isPressed ? .impact(flexibility: .solid, intensity: 0.6) : nil }
-        // VoiceOver: the DragGesture never fires under VoiceOver, so expose the pad as a button with an action.
+        // Touch input is handled by the grid-wide MultiTouchGrid surface (F6 multi-touch); this view only
+        // renders (hit feedback comes from PadFX). Press animation follows the lit/feedback state.
+        .scaleEffect(isLit ? 0.984 : 1)
+        .animation(.easeOut(duration: 0.07), value: isLit)
+        // VoiceOver: the touch surface isn't an a11y element, so expose each pad as a button with an action.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(badge != nil ? "\(pad.label) level \(badge!)" : pad.label))
         .accessibilityValue(Text(muted ? "Muted" : ""))
