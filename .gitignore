@@ -5,3 +5,6 @@ DerivedData/
 .build/
 .swiftpm/
 Secrets.xcconfig
+
+# Bundled Core ML stem model (large; convert locally via tools/coreml-stems)
+FB-808/StemSeparator.mlpackage/
