@@ -26,8 +26,13 @@ extension Project {
         let totalBars = songMode ? songBars : 4
         // Swing: playback delays every off-beat 16th by swing·0.66 of a step (Transport.scheduler), applied
         // to the whole step — so MIDI offsets any note on an odd step by the same amount to match the groove.
+        // Per-step micro-timing in ticks: the named groove feel (E4), else the Swing slider — matches playback.
+        let groove = Groove.byID(grooveID)
         let swingTk = Int((Double(tick16) * swing * 0.66).rounded())
-        func onTick(_ bar: Int, _ step: Int) -> Int { bar * n * tick16 + step * tick16 + (step % 2 == 1 ? swingTk : 0) }
+        func pushTicks(_ step: Int) -> Int {
+            grooveID == "straight" ? (step % 2 == 1 ? swingTk : 0) : Int((Double(tick16) * groove.push[step % 16]).rounded())
+        }
+        func onTick(_ bar: Int, _ step: Int) -> Int { bar * n * tick16 + step * tick16 + pushTicks(step) }
 
         var events: [(tick: Int, data: [UInt8])] = []
         let mpq = 60_000_000 / max(1, bpm)   // microseconds per quarter note

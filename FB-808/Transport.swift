@@ -394,7 +394,11 @@ final class Transport: ObservableObject {
         linkSync()
         while nextStepTime < engine.now() + ahead {
             var t = nextStepTime
-            if p.swing > 0 && step16 % 2 == 1 { t += secPerStep() * p.swing * 0.66 }
+            if p.grooveID == "straight" {            // manual Swing slider
+                if p.swing > 0 && step16 % 2 == 1 { t += secPerStep() * p.swing * 0.66 }
+            } else {                                  // named groove feel (E4) — per-16th micro-timing
+                t += secPerStep() * Groove.byID(p.grooveID).push[step16 % 16]
+            }
             scheduleStep(step16, t)
             let showStep = step16
             let showBar = barCount            // the bar of THIS step — published at its real time, in lock-step with the step

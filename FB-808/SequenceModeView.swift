@@ -78,6 +78,11 @@ struct SequenceModeView: View {
                 let hs: [Double] = [0, 0.25, 0.5, 0.75, 1.0]
                 let i = hs.firstIndex(of: project.humanize) ?? 0; project.humanize = hs[(i + 1) % hs.count]
             }
+            chip(styledText([("Groove ", settings.ink, nil), (Groove.byID(project.grooveID).name, settings.accent, nil)]), arrow: true) {
+                project.checkpoint("groove", coalesce: false)
+                let i = Groove.all.firstIndex { $0.id == project.grooveID } ?? 0
+                project.grooveID = Groove.all[(i + 1) % Groove.all.count].id
+            }
             chip(styledText([("Quantize ", settings.ink, nil), (project.quantize, settings.accent, nil)]), arrow: true) {
                 project.checkpoint("quant", coalesce: false)
                 let i = QUANTS.firstIndex(of: project.quantize) ?? 0; project.quantize = QUANTS[(i + 1) % QUANTS.count]

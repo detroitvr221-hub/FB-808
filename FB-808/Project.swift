@@ -231,6 +231,7 @@ final class Project: ObservableObject {
     @Published var bpm = 90
     @Published var swing = 0.0          // 0 .. 0.6
     @Published var humanize = 0.0       // 0 .. 1 — Time Correct: random timing + velocity drift for a human feel
+    @Published var grooveID = "straight"  // named timing feel (E4); "straight" defers to the Swing slider
     @Published var quantize = "1/16"
     @Published var barSteps = 16        // steps per bar: 16=4/4, 12=3/4, 8=2/4 (A13)
     @Published var playing = false
@@ -1215,7 +1216,7 @@ final class Project: ObservableObject {
                 AudioClipMeta(id: $0.id.uuidString, track: $0.track, startBar: $0.startBar,
                               name: $0.name, gain: $0.gain, muted: $0.muted, durSec: $0.durSec)
             }, activeKit: activeKit, sample: sample, sliceBank: sliceBank, parts: parts, activePart: activePart,
-            chordMode: chordMode, arpMode: arpMode, arpRate: arpRate, arpOct: arpOct, humanize: humanize,
+            chordMode: chordMode, arpMode: arpMode, arpRate: arpRate, arpOct: arpOct, humanize: humanize, grooveID: grooveID,
             tracks: tracks, melodyMuted: melodyMuted, countIn: countIn, metronome: metronome)
         snap.sampleBufferToken = pendingBufferToken
         snap.id = projectID
@@ -1306,6 +1307,7 @@ final class Project: ObservableObject {
         activePart = s.activePart ?? "lead"
         chordMode = s.chordMode ?? "off"; arpMode = s.arpMode ?? "off"; arpRate = s.arpRate ?? "1/16"; arpOct = s.arpOct ?? 1
         humanize = s.humanize ?? 0
+        grooveID = s.grooveID ?? "straight"
         activeKit = s.activeKit ?? "classic"
         fxSettings = s.fxSettings ?? MasterFX()
         channelFX = s.channelFX ?? [:]
@@ -1454,6 +1456,7 @@ struct ProjectSnapshot: Codable, Sendable {   // Sendable → encode/decode can 
     var arpRate: String?
     var arpOct: Int?
     var humanize: Double?                       // optional → Time Correct humanize
+    var grooveID: String?                       // optional → named groove feel (E4)
     var tracks: [Track]?                        // optional → v1 saves decode to nil, then get seeded (99-track foundation)
     var melodyMuted: Bool?                      // optional → was dropped on save before (data-loss fix #22)
     var countIn: Int?                           // optional → transport prefs now persist

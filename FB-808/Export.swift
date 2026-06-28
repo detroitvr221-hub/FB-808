@@ -90,7 +90,11 @@ extension Project {
             }
             for step in 0..<n {
                 var t = Double(bar * n + step) * stepDur
-                if swing > 0 && step % 2 == 1 { t += stepDur * swing * 0.66 }
+                if grooveID == "straight" {                 // match live: Swing slider, else the named groove feel (E4)
+                    if swing > 0 && step % 2 == 1 { t += stepDur * swing * 0.66 }
+                } else {
+                    t += stepDur * Groove.byID(grooveID).push[step % 16]
+                }
                 let atSample = t * sr
 
                 // FX-automation schedule (mirror Transport.scheduleStep so a filter/reverb/delay sweep
@@ -250,7 +254,11 @@ extension Project {
             if songMode && !trackPlaysInSong(track.id, atBar: bar) { continue }
             for step in 0..<n {
                 var t = Double(bar * n + step) * stepDur
-                if swing > 0 && step % 2 == 1 { t += stepDur * swing * 0.66 }
+                if grooveID == "straight" {                 // match live: Swing slider, else the named groove feel (E4)
+                    if swing > 0 && step % 2 == 1 { t += stepDur * swing * 0.66 }
+                } else {
+                    t += stepDur * Groove.byID(grooveID).push[step % 16]
+                }
                 let atSample = t * sr
                 switch track.type {
                 case .drumPattern:
