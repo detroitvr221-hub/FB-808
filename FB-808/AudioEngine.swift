@@ -554,6 +554,10 @@ final class AudioEngine: ObservableObject {
     func detectTempo() -> Double { ensure(); return SynthCore.detectTempo(core.currentSampleOriginal(), sr: core.sr) }
     /// Estimate the loaded sample's musical key (root pitch-class 0–11, isMinor). (D4)
     func detectKey() -> (root: Int, minor: Bool)? { ensure(); return SynthCore.detectKey(core.currentSampleOriginal(), sr: core.sr) }
+    /// Split the loaded sample into harmonic (melody) + percussive (drums) stems — on-device, no model. (D1)
+    func splitStems() -> (harmonic: [Float], percussive: [Float]) {
+        ensure(); return StemSplit.harmonicPercussive(core.currentSampleOriginal(), sr: core.sr)
+    }
     func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
     func sampleToSynth() { core.sampleToSynth() }
     func resampleOutput() -> (dur: Double, wave: [Double]) { ensure(); return core.resampleOutput() }

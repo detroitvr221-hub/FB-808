@@ -323,6 +323,12 @@ struct SampleModeView: View {
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                 }
 
+                PanelCard(title: "Stem Split") {
+                    actionButton("⎘ Split → Drums / Melody", wide: true) { splitStems() }
+                    Text("On-device separation (no model): drums land on the \(Kit.padByID[Kit.pads[0].id]?.label ?? "first") pad, melody on the next. Full 4-stem (vocals/bass) needs a bundled Core ML model.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+
                 PanelCard(title: "Granular") {
                     sliderRow("Position", value: $grainPos, range: 0...1, readout: "\(Int(grainPos * 100))%")
                     sliderRow("Grain", value: $grainMs, range: 10...400, readout: "\(Int(grainMs)) ms")
@@ -468,6 +474,17 @@ struct SampleModeView: View {
             parts.append("\(Music.noteName(k.root)) \(k.minor ? "minor" : "major")")
         }
         flash(parts.isEmpty ? "Couldn't detect tempo or key" : "Detected " + parts.joined(separator: " · "))
+    }
+    /// Split the loaded sample into drums + melody stems and drop them onto the first two pads (D1).
+    private func splitStems() {
+        guard sample != nil else { return }
+        flash("Separating stems…")
+        let (h, p) = engine.splitStems()
+        guard !p.isEmpty, !h.isEmpty else { flash("Couldn't split this sample"); return }
+        let drumID = Kit.pads[0].id, melID = Kit.pads[1].id
+        project.setPadSample(drumID, data: p, name: "Drums")
+        project.setPadSample(melID, data: h, name: "Melody")
+        flash("Split → Drums on \(Kit.padByID[drumID]?.label ?? "pad 1") · Melody on \(Kit.padByID[melID]?.label ?? "pad 2")")
     }
     private func flash(_ msg: String) {
         withAnimation { confirm = msg }
