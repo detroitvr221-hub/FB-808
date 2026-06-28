@@ -550,6 +550,10 @@ final class AudioEngine: ObservableObject {
     func setEqualPowerPan(_ on: Bool) { core.setEqualPowerPan(on) }
     func setBandlimitedOsc(_ on: Bool) { core.setBandlimitedOsc(on) }
     func detectPitch() -> Double { ensure(); return core.detectPitch() }
+    /// Estimate the loaded sample's tempo (BPM) — 0 if unclear. (D4)
+    func detectTempo() -> Double { ensure(); return SynthCore.detectTempo(core.currentSampleOriginal(), sr: core.sr) }
+    /// Estimate the loaded sample's musical key (root pitch-class 0–11, isMinor). (D4)
+    func detectKey() -> (root: Int, minor: Bool)? { ensure(); return SynthCore.detectKey(core.currentSampleOriginal(), sr: core.sr) }
     func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
     func sampleToSynth() { core.sampleToSynth() }
     func resampleOutput() -> (dur: Double, wave: [Double]) { ensure(); return core.resampleOutput() }

@@ -318,8 +318,9 @@ struct SampleModeView: View {
                         actionButton("Apply") { applyStretch(stretchRatio) }
                         actionButton("Fit Tempo") { fitTempo() }
                     }
-                    Text("Pitch-preserving (WSOLA). Fit Tempo snaps the loop to whole beats at \(project.bpm) BPM.")
-                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                    actionButton("⌖ Detect Tempo & Key", wide: true) { detectTempoKey() }
+                    Text("Pitch-preserving (WSOLA). Fit Tempo snaps the loop to whole beats at \(project.bpm) BPM. Detect analyzes the sample and sets the song tempo + key.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                 }
 
                 PanelCard(title: "Granular") {
@@ -452,6 +453,21 @@ struct SampleModeView: View {
             .background(Capsule().fill(settings.ink.opacity(0.92)))
             .shadow(color: .black.opacity(0.4), radius: 12, y: 5).padding(.bottom, 16)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+    /// Analyze the loaded sample → set the song tempo + key (D4). A suggestion; both are editable/undoable.
+    private func detectTempoKey() {
+        guard sample != nil else { return }
+        let bpm = engine.detectTempo()
+        let key = engine.detectKey()
+        var parts: [String] = []
+        if bpm > 0 { project.setBpm(Int(bpm)); parts.append("\(Int(bpm)) BPM") }
+        if let k = key {
+            project.checkpoint("detectKey", coalesce: false)
+            project.melodyKey = k.root
+            project.melodyScale = k.minor ? "minor" : "major"
+            parts.append("\(Music.noteName(k.root)) \(k.minor ? "minor" : "major")")
+        }
+        flash(parts.isEmpty ? "Couldn't detect tempo or key" : "Detected " + parts.joined(separator: " · "))
     }
     private func flash(_ msg: String) {
         withAnimation { confirm = msg }
