@@ -558,6 +558,8 @@ final class AudioEngine: ObservableObject {
     func splitStems() -> (harmonic: [Float], percussive: [Float]) {
         ensure(); return StemSplit.harmonicPercussive(core.currentSampleOriginal(), sr: core.sr)
     }
+    /// The loaded sample's raw buffer + engine sample rate (for off-main 4-stem separation). (D1)
+    func currentSampleForStems() -> (data: [Float], sr: Double) { ensure(); return (core.currentSampleOriginal(), core.sr) }
     func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
     func sampleToSynth() { core.sampleToSynth() }
     func resampleOutput() -> (dur: Double, wave: [Double]) { ensure(); return core.resampleOutput() }

@@ -325,7 +325,8 @@ struct SampleModeView: View {
 
                 PanelCard(title: "Stem Split") {
                     actionButton("⎘ Split → Drums / Melody", wide: true) { splitStems() }
-                    Text("On-device separation (no model): drums land on the \(Kit.padByID[Kit.pads[0].id]?.label ?? "first") pad, melody on the next. Full 4-stem (vocals/bass) needs a bundled Core ML model.")
+                    actionButton(FourStemSeparator.modelAvailable ? "⎙ Split → 4 Stems" : "⎙ 4 Stems (needs model)", wide: true) { splitFourStems() }
+                    Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a bundled Core ML model — drop `StemSeparator.mlpackage` into the app target to enable it (see FourStemSeparator.swift); until then it falls back to the 2-way split.")
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -485,6 +486,26 @@ struct SampleModeView: View {
         project.setPadSample(drumID, data: p, name: "Drums")
         project.setPadSample(melID, data: h, name: "Melody")
         flash("Split → Drums on \(Kit.padByID[drumID]?.label ?? "pad 1") · Melody on \(Kit.padByID[melID]?.label ?? "pad 2")")
+    }
+    /// Split into 4 stems via the bundled Core ML model (D1 full path); falls back to the 2-way split if
+    /// no model is bundled. Runs off the main thread (inference can take seconds) and applies on main.
+    private func splitFourStems() {
+        guard sample != nil else { return }
+        guard FourStemSeparator.modelAvailable else {
+            flash("No 4-stem model bundled — using Drums/Melody"); splitStems(); return
+        }
+        flash("Separating 4 stems…")
+        let src = engine.currentSampleForStems()
+        Task.detached(priority: .userInitiated) {
+            let stems = FourStemSeparator.separate(src.data, engineSR: src.sr)
+            await MainActor.run {
+                guard let stems, !stems.isEmpty else { flash("4-stem separation failed"); return }
+                for (i, st) in stems.prefix(Kit.pads.count).enumerated() {
+                    project.setPadSample(Kit.pads[i].id, data: st.audio, name: st.name)
+                }
+                flash("Split into \(stems.count) stems → first \(min(stems.count, Kit.pads.count)) pads")
+            }
+        }
     }
     private func flash(_ msg: String) {
         withAnimation { confirm = msg }
