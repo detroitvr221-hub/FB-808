@@ -1000,6 +1000,39 @@ final class Project: ObservableObject {
         setPadSample(padID, data: mono, name: name)
     }
 
+    /// One-knob auto-master (D2, heuristic — no ML): bounce the current beat, measure its loudness +
+    /// spectral tilt, then set the master gain toward a target, add a gentle multiband "glue" + a small
+    /// corrective high-shelf, and arm the limiter so the louder result can't clip. Returns a summary for
+    /// the UI, or nil if there's nothing to analyze. Undoable (master fader + master-bus checkpoints).
+    @discardableResult
+    func autoMaster() -> String? {
+        let (l, r) = renderOffline(buildExportPlan())
+        let n = min(l.count, r.count)
+        guard n > 1000 else { return nil }
+        let coef = exp(-2.0 * .pi * 2000.0 / engine.sampleRate)   // ~2 kHz split for a coarse low/high balance
+        var sumSq = 0.0, lowSq = 0.0, highSq = 0.0, lp = 0.0
+        for i in 0..<n {
+            let s = Double((l[i] + r[i]) * 0.5)
+            sumSq += s * s
+            lp = coef * lp + (1 - coef) * s
+            let hi = s - lp
+            lowSq += lp * lp; highSq += hi * hi
+        }
+        let rms = (sumSq / Double(n)).squareRoot()
+        let rmsDb = 20 * log10(max(1e-6, rms))
+        let gainDb = max(-9.0, min(9.0, -12.0 - rmsDb))                 // aim ≈ −12 dBFS RMS, clamped
+        let bright = highSq / max(1e-9, lowSq)
+        let highShelf = max(-3.0, min(3.0, (0.45 - bright) * 8))        // dark → boost highs, bright → tame
+        setMix("master") { $0.vol = max(0.1, min(1.5, $0.vol * pow(10, gainDb / 20))) }   // setMix checkpoints (undoable)
+        setMasterBus("auto") { mb in
+            mb.limiterOn = true; mb.ceiling = -1.0
+            mb.mbOn = true                                             // gentle multiband glue
+            mb.eqOn = true; mb.high = highShelf
+        }
+        return String(format: "Auto-mastered · %+.1f dB · limiter on%@", gainDb,
+                      abs(highShelf) > 0.3 ? String(format: " · high %+.1f dB", highShelf) : "")
+    }
+
     /// Remove an imported sample from a pad (reverts to its synth / override sound).
     func clearPadSampleFor(_ padID: String) {
         if let old = padParams[padID]?.sampleFile { deletePadSampleWAV(file: old) }

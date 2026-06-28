@@ -573,10 +573,29 @@ struct MasterFXBar: View {
 
     private func pct(_ v: Double) -> String { "\(Int(v * 100))%" }
     private func ms(_ v: Double) -> String { "\(Int(v)) ms" }
+    @State private var autoMsg: String?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 16) {
+                group("AUTO-MASTER", color: settings.accent) {
+                    Button {
+                        let msg = project.autoMaster() ?? "Nothing to master yet"
+                        withAnimation { autoMsg = msg }
+                        Task { @MainActor in try? await Task.sleep(nanoseconds: 2_600_000_000); withAnimation { autoMsg = nil } }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "wand.and.stars").font(.system(size: 18)).foregroundStyle(settings.accent)
+                            Text("One-knob master").font(FDFont.ui(11, .semibold)).foregroundStyle(settings.ink)
+                        }
+                        .frame(width: 104, height: 56).frame(maxHeight: .infinity)
+                        .fdCard(10, fill: settings.panel2)
+                    }.buttonStyle(.plain)
+                    .accessibilityLabel(Text("Auto-master")).accessibilityHint(Text("Analyze the mix and set the master chain"))
+                    Text(autoMsg ?? "Sets gain + limiter + glue to a loudness target")
+                        .font(FDFont.mono(9)).foregroundStyle(autoMsg == nil ? settings.inkFaint : settings.accent)
+                        .frame(width: 104).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.center)
+                }
                 group("REVERB", color: Color(hex: "#33E0D4")) {
                     knob("Mix", project.fxSettings.reverbMix, 0, 1, 0.01, pct, info: Glossary.reverbMix) { v in project.setMasterFX("reverbMix") { $0.reverbMix = v } }
                     knob("Size", project.fxSettings.reverbSize, 0, 1, 0.01, pct, info: Glossary.reverbSize) { v in project.setMasterFX("reverbSize") { $0.reverbSize = v } }
