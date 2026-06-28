@@ -81,7 +81,7 @@ struct SettingsSheet: View {
                     // Audio input device — native iOS 26 picker (built-in mic / wired / USB-C interface / Bluetooth).
                     VStack(alignment: .leading, spacing: 9) {
                         Text("Recording input").font(FDFont.ui(15, .medium)).foregroundStyle(th.ink)
-                        AudioInputPicker {
+                        AudioInputPicker(prepare: { engine.prepareInputSelection() }) {
                             HStack(spacing: 10) {
                                 Image(systemName: "mic.and.signal.meter.fill").font(.system(size: 15)).foregroundStyle(settings.accent)
                                 VStack(alignment: .leading, spacing: 1) {

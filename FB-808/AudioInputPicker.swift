@@ -15,11 +15,12 @@ import AVKit
 /// sheet anchors to the button. The chosen input persists per-app and is applied to the engine's
 /// record session automatically by the OS.
 struct AudioInputPicker<Label: View>: View {
+    var prepare: () -> Void = {}        // configure a record-capable session before presenting (WWDC25)
     @ViewBuilder var label: Label
     @State private var host = InputPickerHost()
 
     var body: some View {
-        Button { host.present() } label: { label }
+        Button { prepare(); host.present() } label: { label }
             .buttonStyle(.plain)
             // The interaction must live on a view sized/positioned like the button so the picker
             // anchors to it; it doesn't take touches (the SwiftUI Button drives `present()`).

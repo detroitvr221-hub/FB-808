@@ -389,6 +389,18 @@ final class AudioEngine: ObservableObject {
     /// The active capture-input device name (e.g. "Scarlett 2i2 USB"), or "—" — for the input picker UI.
     var inputName: String { sessionMgr.inputName }
 
+    /// Configure the session for input selection BEFORE presenting the system input picker (WWDC25:
+    /// "configure AVAudioSession before presenting" so the correct device list — USB/Bluetooth — shows).
+    /// Requests mic access + switches to a record-capable session. No-op while already recording. The
+    /// session stays record-capable (A2DP output + defaultToSpeaker preserved); the next start()/record
+    /// re-activates as needed.
+    func prepareInputSelection() {
+        guard !isMicRecording else { return }
+        requestMicPermission { _ in }                   // ensure input access so the picker can enumerate devices
+        sessionMgr.preferredSampleRate = core.sr
+        sessionMgr.activateRecording()                  // record-capable session → picker lists all inputs
+    }
+
     /// Set the buffer policy (sec; pass 0 for the per-route Auto target) and restart the IO if running.
     func setPreferredBuffer(_ sec: Double) {
         guard sessionMgr.setManualBuffer(sec) else { return }   // unchanged → don't restart the IO

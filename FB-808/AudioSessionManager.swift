@@ -63,8 +63,10 @@ final class AudioSessionManager: ObservableObject {
     @discardableResult
     func activateRecording() -> Double {
         let s = AVAudioSession.sharedInstance()
-        try? s.setCategory(.playAndRecord, mode: .default,
-                           options: [.defaultToSpeaker, .allowBluetoothA2DP, .allowBluetooth, .mixWithOthers])
+        // .bluetoothHighQualityRecording (iOS 26): record AirPods at LAV-mic quality instead of HFP (WWDC25).
+        var opts: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .allowBluetooth, .mixWithOthers]
+        if #available(iOS 26.0, *) { opts.insert(.bluetoothHighQualityRecording) }
+        try? s.setCategory(.playAndRecord, mode: .default, options: opts)
         if preferredSampleRate > 0 { try? s.setPreferredSampleRate(preferredSampleRate) }
         classifyRoute(s)
         let sr = max(8000, s.sampleRate)

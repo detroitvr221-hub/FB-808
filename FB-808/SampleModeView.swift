@@ -231,7 +231,7 @@ struct SampleModeView: View {
                 }.buttonStyle(.plain)
                 // Input device picker right where you record (native iOS 26 picker) — built-in / USB-C
                 // interface (Focusrite) / Bluetooth. Shows the active input; the system remembers it.
-                AudioInputPicker {
+                AudioInputPicker(prepare: { engine.prepareInputSelection() }) {
                     HStack(spacing: 8) {
                         Image(systemName: "mic.and.signal.meter.fill").font(.system(size: 16)).foregroundStyle(settings.accent)
                         VStack(alignment: .leading, spacing: 0) {
