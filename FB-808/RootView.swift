@@ -39,7 +39,10 @@ struct TourOverlay: View {
                     Button { show = false } label: {   // Skip dismisses but stays un-toured so it re-prompts next launch (#tour)
                         Text("Skip").font(FDFont.ui(15, .semibold)).foregroundStyle(settings.inkDim)
                             .padding(.horizontal, 22).frame(height: 46)
-                            .fdCard(13, fill: settings.panel2)
+                            // NB: inline chrome (not .fdCard) — this overlay doesn't inherit @EnvironmentObject,
+                            // so .fdCard's env lookup would crash on first run; use the explicit `settings`.
+                            .background(RoundedRectangle(cornerRadius: 13).fill(settings.panel2))
+                            .overlay(RoundedRectangle(cornerRadius: 13).stroke(settings.line, lineWidth: 1))
                     }.buttonStyle(.plain)
                     Button { if step < steps.count - 1 { step += 1 } else { finish() } } label: {
                         Text(step < steps.count - 1 ? "Next" : "Start making beats").font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
@@ -50,7 +53,9 @@ struct TourOverlay: View {
             }
             .padding(EdgeInsets(top: 34, leading: 40, bottom: 30, trailing: 40))
             .frame(maxWidth: 520)
-            .fdCard(26, fill: settings.panel)
+            // inline chrome (not .fdCard): overlay doesn't inherit @EnvironmentObject — see note above.
+            .background(RoundedRectangle(cornerRadius: 26).fill(settings.panel))
+            .overlay(RoundedRectangle(cornerRadius: 26).stroke(settings.line, lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
         }
         .animation(.easeOut(duration: 0.2), value: step)
