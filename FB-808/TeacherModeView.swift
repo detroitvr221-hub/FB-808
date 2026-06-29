@@ -204,7 +204,7 @@ struct TeacherModeView: View {
                 Button { assign() } label: {
                     Text("Assign to Class").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 16).frame(height: 36)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                        .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
                 }.buttonStyle(.plain)
             }
             .padding(12)
@@ -463,7 +463,7 @@ struct TeacherModeView: View {
                     }
                     .font(FDFont.ui(14, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 18).frame(height: 44)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                    .background(RoundedRectangle(cornerRadius: 12).fill(settings.accent.ctaGradient()))
                 }.buttonStyle(.plain).disabled(sub.audioPath == nil).opacity(sub.audioPath == nil ? 0.5 : 1)
                 Text(sub.audioPath == nil ? "Student submitted without a recording" : "Plays the student's recorded bounce")
                     .font(FDFont.ui(12)).foregroundStyle(settings.inkFaint)
@@ -481,7 +481,7 @@ struct TeacherModeView: View {
                 Button { sendRemoteFeedback(sub) } label: {
                     Text("Send Feedback").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 18).frame(height: 40)
-                        .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                        .background(RoundedRectangle(cornerRadius: 11).fill(settings.accent.ctaGradient()))
                 }.buttonStyle(.plain).disabled(empty).opacity(empty ? 0.5 : 1)
             }
         }
@@ -557,7 +557,7 @@ struct TeacherModeView: View {
                     HStack(spacing: 8) { Triangle().fill(.white).frame(width: 11, height: 13); Text("Play Beat") }
                         .font(FDFont.ui(14, .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 18).frame(height: 44)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                        .background(RoundedRectangle(cornerRadius: 12).fill(settings.accent.ctaGradient()))
                 }.buttonStyle(.plain)
                 Text("2-bar preview of the submission").font(FDFont.ui(12)).foregroundStyle(settings.inkFaint)
                 Spacer()
@@ -589,7 +589,7 @@ struct TeacherModeView: View {
             Button { sendFeedback(st.id, txt) } label: {
                 Text("Send Feedback").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 18).frame(height: 40)
-                    .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                    .background(RoundedRectangle(cornerRadius: 11).fill(settings.accent.ctaGradient()))
             }.buttonStyle(.plain).disabled(txt.trimmingCharacters(in: .whitespaces).isEmpty).opacity(txt.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
         }
     }

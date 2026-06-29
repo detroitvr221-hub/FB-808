@@ -323,7 +323,7 @@ struct SequenceModeView: View {
     private func rowFlag(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(s).font(FDFont.mono(9, .bold))
-                .foregroundStyle(on ? (s == "S" ? Color(hex: "#08240f") : .white) : settings.inkFaint)
+                .foregroundStyle(on ? (s == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
                 .frame(width: 19, height: 19)
                 .background(RoundedRectangle(cornerRadius: 5).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? .clear : settings.line, lineWidth: 1))
@@ -332,7 +332,7 @@ struct SequenceModeView: View {
                     if on {
                         Image(systemName: s == "S" ? "checkmark" : "speaker.slash.fill")
                             .font(.system(size: 6, weight: .black))
-                            .foregroundStyle(s == "S" ? Color(hex: "#08240f") : .white)
+                            .foregroundStyle(s == "S" ? FDPalette.soloInk : .white)
                             .offset(x: 1, y: -1)
                     }
                 }

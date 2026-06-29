@@ -385,7 +385,7 @@ struct PracticeView: View {
                                 HStack(spacing: 9) { Triangle().fill(.white).frame(width: 11, height: 13); Text("I'm ready") }
                                     .font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
                                     .padding(.vertical, 13).padding(.horizontal, 20)
-                                    .background(RoundedRectangle(cornerRadius: 14).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                                    .background(RoundedRectangle(cornerRadius: 14).fill(settings.accent.ctaGradient()))
                             }.buttonStyle(.plain)
                         }.padding(.top, 4)
                     }
@@ -530,7 +530,7 @@ struct PracticeView: View {
                         Button { fx.reset(); onBuild(p) } label: {
                             Text("✦ Build on this beat  →").font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
                                 .frame(maxWidth: .infinity).padding(.vertical, 13)
-                                .background(RoundedRectangle(cornerRadius: 14).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                                .background(RoundedRectangle(cornerRadius: 14).fill(settings.accent.ctaGradient()))
                         }.buttonStyle(.plain)
                     }
                     HStack(spacing: 12) {
@@ -675,7 +675,7 @@ struct PatternCard: View {
                 HStack(spacing: 9) { Triangle().fill(.white).frame(width: 11, height: 13); Text("Start") }
                     .font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).frame(height: 46)
-                    .background(RoundedRectangle(cornerRadius: 14).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                    .background(RoundedRectangle(cornerRadius: 14).fill(settings.accent.ctaGradient()))
             }.buttonStyle(.plain).padding(.top, 6)
         }
         .padding(22)
@@ -874,7 +874,7 @@ struct ChallengeView: View {
             HStack(spacing: 7) { Image(systemName: icon).font(.system(size: 12)); Text(label).font(FDFont.ui(14, .semibold)) }
                 .foregroundStyle(filled ? .white : settings.ink)
                 .padding(.horizontal, 18).frame(height: 44)
-                .background(RoundedRectangle(cornerRadius: 12).fill(filled ? AnyShapeStyle(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(settings.panel2)))
+                .background(RoundedRectangle(cornerRadius: 12).fill(filled ? AnyShapeStyle(settings.accent.ctaGradient()) : AnyShapeStyle(settings.panel2)))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(filled ? Color.clear : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
     }

@@ -713,7 +713,7 @@ struct TrackModeView: View {
     private func laneFlag(_ s: String, on: Bool, color: Color, a11yLabel: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(s).font(FDFont.mono(9, .bold))
-                .foregroundStyle(on ? (s == "S" ? Color(hex: "#08240f") : .white) : settings.inkFaint)
+                .foregroundStyle(on ? (s == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
                 .frame(width: 18, height: 18)
                 .background(RoundedRectangle(cornerRadius: 5).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? .clear : settings.line, lineWidth: 1))

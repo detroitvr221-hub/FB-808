@@ -214,7 +214,7 @@ struct ChordSuggestView: View {
         Button(action: action) {
             Text(s).font(FDFont.ui(13.5, .semibold)).foregroundStyle(filled ? .white : settings.ink)
                 .frame(maxWidth: .infinity).frame(height: 42)
-                .background(RoundedRectangle(cornerRadius: 11).fill(filled ? AnyShapeStyle(LinearGradient(colors: [settings.accent, settings.accent.darker(0.24)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(settings.panel2)))
+                .background(RoundedRectangle(cornerRadius: 11).fill(filled ? AnyShapeStyle(settings.accent.ctaGradient()) : AnyShapeStyle(settings.panel2)))
                 .overlay(RoundedRectangle(cornerRadius: 11).stroke(filled ? Color.clear : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
     }

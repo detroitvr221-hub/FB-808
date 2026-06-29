@@ -199,7 +199,7 @@ struct SampleModeView: View {
                         Text("Resample Mix").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                     }
                     .padding(.horizontal, 14).frame(height: 52)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.24)], startPoint: .top, endPoint: .bottom)))
+                    .background(RoundedRectangle(cornerRadius: 12).fill(settings.accent.ctaGradient()))
                 }.buttonStyle(.plain)
                 Button { importing = true } label: {
                     HStack(spacing: 8) {
@@ -305,7 +305,7 @@ struct SampleModeView: View {
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).frame(height: 40).frame(maxWidth: .infinity)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                        .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
                     }.buttonStyle(.plain).disabled(!has).opacity(has ? 1 : 0.4)
                     toolButton("Harmonize · 3rd + 5th", on: sample?.harmonize ?? false) { toggleHarmonize() }
                     Text("Detects the sample's pitch and nudges it onto the song scale. Harmonize stacks diatonic voices when you audition or play slices.")
@@ -372,7 +372,7 @@ struct SampleModeView: View {
                     Button { toSynthKeys() } label: {
                         Text("→ Play Chromatically (Synth)").font(FDFont.ui(12, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 40)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                            .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
                     }.buttonStyle(.plain).opacity(has ? 1 : 0.4).disabled(!has)
                     Button { toWavetable() } label: {
                         Text("∿ Use as Wavetable Oscillator").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.ink)

@@ -180,7 +180,7 @@ struct CircularRhythmView: View {
                 }
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity).frame(height: 42)
-                .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.24)], startPoint: .top, endPoint: .bottom)))
+                .background(RoundedRectangle(cornerRadius: 11).fill(settings.accent.ctaGradient()))
             }.buttonStyle(.plain)
             Spacer(minLength: 0)
         }
@@ -224,7 +224,7 @@ struct EarTrainingView: View {
                         Button { started = true; newRound() } label: {
                             Text("Start").font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
                                 .padding(.horizontal, 28).frame(height: 46)
-                                .background(RoundedRectangle(cornerRadius: 13).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                                .background(RoundedRectangle(cornerRadius: 13).fill(settings.accent.ctaGradient()))
                         }.buttonStyle(.plain)
                     }
                     .frame(maxWidth: 440, alignment: .leading)
@@ -246,7 +246,7 @@ struct EarTrainingView: View {
                         Button { newRound() } label: {
                             Text("Next  →").font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
                                 .frame(maxWidth: .infinity).frame(height: 46)
-                                .background(RoundedRectangle(cornerRadius: 13).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                                .background(RoundedRectangle(cornerRadius: 13).fill(settings.accent.ctaGradient()))
                         }.buttonStyle(.plain)
                     }
                 }

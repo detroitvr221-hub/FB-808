@@ -543,7 +543,7 @@ struct MixStrip: View {
     private func msButton(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(s).font(FDFont.mono(11, .bold))
-                .foregroundStyle(on ? (s == "S" ? Color(hex: "#08240f") : .white) : settings.inkFaint)
+                .foregroundStyle(on ? (s == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
                 .frame(maxWidth: .infinity).frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
@@ -552,7 +552,7 @@ struct MixStrip: View {
                     if on {
                         Image(systemName: s == "M" ? "speaker.slash.fill" : "checkmark")
                             .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(s == "S" ? Color(hex: "#08240f") : .white)
+                            .foregroundStyle(s == "S" ? FDPalette.soloInk : .white)
                             .padding(2)
                             .accessibilityHidden(true)
                     }
@@ -881,7 +881,7 @@ struct TrackStrip: View {
     private func msBtn(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(s).font(FDFont.mono(11, .bold))
-                .foregroundStyle(on ? (s == "S" ? Color(hex: "#08240f") : .white) : settings.inkFaint)
+                .foregroundStyle(on ? (s == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
                 .frame(maxWidth: .infinity).frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
@@ -890,7 +890,7 @@ struct TrackStrip: View {
                     if on {
                         Image(systemName: s == "M" ? "speaker.slash.fill" : "checkmark")
                             .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(s == "S" ? Color(hex: "#08240f") : .white)
+                            .foregroundStyle(s == "S" ? FDPalette.soloInk : .white)
                             .padding(2)
                             .accessibilityHidden(true)
                     }

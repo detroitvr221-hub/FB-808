@@ -46,6 +46,12 @@ extension Color {
     func darker(_ amount: Double) -> Color { blend(.black, amount) }
     func lighter(_ amount: Double) -> Color { blend(.white, amount) }
 
+    /// The standard top→bottom CTA fill (e.g. filled buttons): the color over a slightly darker shade.
+    /// One source of truth so the ~two-dozen call sites stop drifting (they used 0.22/0.24/0.28).
+    func ctaGradient() -> LinearGradient {
+        LinearGradient(colors: [self, darker(0.22)], startPoint: .top, endPoint: .bottom)
+    }
+
     /// "#RRGGBB" for persistence.
     func toHex() -> String {
         let c = RGBA(self)
@@ -200,4 +206,11 @@ enum FDRadius {
 enum FDPalette {
     static let melodyName = "Synth"
     static let melody = Color(hex: "#B794F6")
+    /// Dark ink used for text/glyphs on the bright "solo" (yellow) fill — one source of truth.
+    static let soloInk = Color(hex: "#08240f")
+}
+
+extension Comparable {
+    /// Clamp into a closed range — replaces the scattered `max(lo, min(hi, x))` idiom.
+    func clamped(to range: ClosedRange<Self>) -> Self { min(max(self, range.lowerBound), range.upperBound) }
 }

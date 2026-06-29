@@ -383,7 +383,7 @@ struct SynthModeView: View {
                     Button { project.mapSynthToPads(); flashToast("Mapped across Bank D (replaced its previous sounds) — finger-drum it on the Pads") } label: {
                         Text("→ Map to Pads (Bank D)").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 42)
-                            .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.24)], startPoint: .top, endPoint: .bottom)))
+                            .background(RoundedRectangle(cornerRadius: 11).fill(settings.accent.ctaGradient()))
                     }.buttonStyle(.plain)
                     Button {
                         let id = project.promotePartToTrack(project.activePart)
@@ -611,7 +611,7 @@ struct SynthModeView: View {
             Button { engine.start(); project.checkpoint("genMelody", coalesce: false); project.generateMelody() } label: {
                 Text("✦ Generate").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 14).frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                    .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent.ctaGradient()))
             }.buttonStyle(.plain)
             Button { project.clearMelody() } label: {
                 Text("Clear").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)

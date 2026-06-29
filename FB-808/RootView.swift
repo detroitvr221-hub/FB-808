@@ -44,7 +44,7 @@ struct TourOverlay: View {
                     Button { if step < steps.count - 1 { step += 1 } else { finish() } } label: {
                         Text(step < steps.count - 1 ? "Next" : "Start making beats").font(FDFont.ui(15, .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 26).frame(height: 46)
-                            .background(RoundedRectangle(cornerRadius: 13).fill(LinearGradient(colors: [settings.accent, settings.accent.darker(0.22)], startPoint: .top, endPoint: .bottom)))
+                            .background(RoundedRectangle(cornerRadius: 13).fill(settings.accent.ctaGradient()))
                     }.buttonStyle(.plain)
                 }.padding(.top, 4)
             }

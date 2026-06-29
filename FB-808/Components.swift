@@ -203,7 +203,7 @@ struct TransportBar: View {
                         }
                     }
                     .frame(width: 52, height: 40)
-                    .background(LinearGradient(colors: [settings.accent, settings.accent.darker(0.24)], startPoint: .top, endPoint: .bottom))
+                    .background(settings.accent.ctaGradient())
                     .clipShape(RoundedRectangle(cornerRadius: 11))
                 }.buttonStyle(.plain)
                 .accessibilityLabel(Text(project.playing ? "Stop" : "Play"))
