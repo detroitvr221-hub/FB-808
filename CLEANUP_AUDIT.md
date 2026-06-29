@@ -47,36 +47,44 @@ Result: clean build, **0 warnings**.
 - ✅ `Array.next(after:)` — the "firstIndex ?? 0; [(i+1)%count]" cycle idiom in 7 places (SequenceModeView
   swing/humanize/groove/quantize/sig + cycleAuto, Components.cycleCount).
 
-### View-layer consolidation — ⏳ deferred (mechanical but visual; verify on device before applying)
-- `Theme.accentGradient(_:)` — the CTA accent vertical gradient repeated ~23× with drifting darkness
-  (15× `.darker(0.22)`, 6× `0.24`, 1× `0.28`). One helper fixes the duplication AND the visual drift.
-- `MuteSoloButton` view + `FDPalette.soloInk` token — 4 byte-identical mute/solo builders
-  (`MixerModeView.msButton`/`msBtn`, `SequenceModeView.rowFlag`, `TrackModeView.laneFlag`) and the
-  `#08240f` solo-ink hex hard-coded 7×.
-- `MeterBar` + `FaderTrack` views — duplicated meter/fader chrome between MixStrip and TrackStrip.
-- `.selectableChip(on:radius:)` modifier + `.selectedTrait(_:)` a11y helper — the selected-chip fill/stroke
-  pair (~24×) and the `[.isButton,.isSelected]` cluster (~28×) that `SegTab` doesn't cover.
-- `FilledButton`/CTA button (CircleOfFifths.actionButton ≡ ChordSuggest.actionBtn) and a generic
-  `PillButton`/`ToggleChip` to absorb ~35 one-off per-file chip/toggle builders (largest line count).
-- Minor: shared `fmtPct`/`fmtHz`/`fmtMs` formatters; `AudioDefaults.gainToDb(_:)` (20·log10 reimplemented
-  in MixerModeView/Project/SpectrumView); `presentedBinding(_:)` for `Binding(get:{x != nil}…)` (4×);
-  a `clamped(to:)` extension (~15 `max(lo,min(hi,x))` sites).
+### View-layer consolidation
+- ✅ `Color.ctaGradient()` — replaced the CTA accent gradient at 21 top→bottom sites and normalized the
+  drifted darkness (0.22/0.24 → 0.22). The one diagonal gradient (RootView header) left as-is.
+- ✅ `MuteSoloButton` view + `FDPalette.soloInk` token — consolidated the 2 byte-identical Mixer builders
+  (`msButton`/`msBtn`) and the `#08240f` hex (7×). `rowFlag`/`laneFlag` are genuinely different sizes/glyphs
+  (19×19 vs 18×18+hit-area, glyph present/absent) — ⏸️ left distinct on purpose.
+- ✅ `Comparable.clamped(to:)` helper added (apply at call sites incrementally).
+- ⏳ `MeterBar` + `FaderTrack` views — duplicated meter/fader chrome between MixStrip and TrackStrip.
+- ⏳ `.selectableChip`/`.selectedTrait` (~24/28×) and a generic `PillButton`/`ToggleChip` over ~35 per-file
+  chip builders. NOTE: these builders genuinely differ in size/radius/glyph — force-merging all 35 would
+  trade duplication for a pile of parameters and risk visual regressions, so this needs case-by-case
+  judgment, not a blanket sweep.
+- ⏳ Minor: shared `fmtPct`/`fmtHz`/`fmtMs`; `presentedBinding(_:)` (4×). `AudioDefaults.gainToDb` was
+  NOT done — the three call sites use different floors, so it isn't a clean behavior-preserving merge.
 
-## §4 Complexity / decomposition — ⏳ deferred (readability + type-checker safety)
+## §4 Complexity / decomposition
 
-Larger structural refactors, lower mechanical-confidence — left as follow-ups:
-- `LearnModeView.cell` → a `CellGrade` enum computed once (worst-nested body; type-checker risk).
-- `SampleModeView.waveBox` → split `sampleWaveContent`/`emptyWaveContent`.
-- `SynthModeView.detailPanel`, `Transport.scheduleStep` (~180 lines / 6 passes),
-  `Components.TransportBar.body` → decompose into named sub-views/passes.
-- `MixerModeView` meter decay/bump loops → `compactMapValues`/`.max()`.
-- `Export.buildExportPlan`/`buildSoloTrackPlan` shared groove-timing + prob-seed helpers (must stay in
-  sync with Transport).
-- Engine DSP hot paths (`SynthCore.render`, `renderOffline`, per-sample `*.next()`/`*.process()`) are
-  **out of scope** — any arithmetic/allocation change risks timing/output.
+- ✅ `LearnModeView.cell` → a `CellGrade` enum computed once + shared toggle closure (was the worst-nested
+  body / type-checker risk). Behavior-identical.
+- ⏳ `SampleModeView.waveBox` split; `SynthModeView.detailPanel`, `Transport.scheduleStep`,
+  `Components.TransportBar.body` decomposition — pure readability on already-working complex views; left
+  to avoid churn/regression surface without a concrete need.
+- ⏸️ `Export.buildExportPlan`/`buildSoloTrackPlan` groove-timing + prob-seed dedup — deliberately NOT done:
+  the two prob-seed copies are already identical and correct, and this is the audio-output hot path that
+  can't be output-verified here, so a marginal dedup isn't worth the risk.
+- ⏸️ Engine DSP hot paths — out of scope (any arithmetic/allocation change risks timing/output).
+
+## Verification
+
+Booted iPad Pro 13" simulator, installed, launched. The app renders correctly with all changes (CTA
+gradient, pad grid, kit list intact). **Found + fixed a pre-existing first-run crash**: the onboarding
+`TourOverlay` used `.fdCard`, whose `@EnvironmentObject settings` isn't inherited by the overlay → SIGTRAP
+on fresh launch. Inlined the card chrome using the explicitly-passed `settings` (commit 5e3abbf). Re-ran
+on a fresh install: the tour now shows correctly.
 
 ---
 
-Net so far: §1+§2+§3-logic removed ~200+ lines of dead/duplicated code and cleared all compiler warnings,
-behavior-preserving, each batch build-verified. §3-view and §4 are queued for when the app can be run in
-the simulator to confirm no visual/layout regression.
+Net: dead code + Swift 6 + logic/token/view dedup + CellGrade removed ~200+ lines and cleared all compiler
+warnings; one real first-run crash fixed; each batch build-verified and the app smoke-tested in the
+simulator. Remaining ⏳ items are larger stylistic refactors with regression surface; remaining ⏸️ items
+are deliberate (force-merging distinct controls or touching the audio hot path would lower quality).
