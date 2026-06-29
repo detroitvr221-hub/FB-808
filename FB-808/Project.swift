@@ -862,15 +862,7 @@ final class Project: ObservableObject {
     private func synthPadMidis() -> [Int] {
         let count = Kit.pads.count
         guard scaleLock else { return (0..<count).map { 48 + $0 } }
-        let intervals = Music.intervals(melodyScale)
-        let root = 48 + melodyKey
-        var ladder: [Int] = []
-        var oct = 0
-        while ladder.count < count {
-            for iv in intervals where ladder.count < count { ladder.append(root + 12 * oct + iv) }
-            oct += 1
-        }
-        return ladder
+        return Music.scaleLadder(root: 48 + melodyKey, scaleID: melodyScale, count: count)
     }
     func loadSampleSource(_ kind: String) {
         checkpoint("synthSrc", coalesce: false)
@@ -1141,11 +1133,8 @@ final class Project: ObservableObject {
 
     func generateMelody(checkpoint doCheckpoint: Bool = true) {
         if doCheckpoint { checkpoint("genMelody", coalesce: false) }   // undoable except the first-view auto-fill
-        let intervals = Music.intervals(melodyScale)
         let base = 60 + melodyKey + 12 * melodyOctave
-        var ladder: [Int] = []
-        for o in 0..<2 { for iv in intervals { ladder.append(base + 12 * o + iv) } }
-        ladder.append(base + 24)
+        let ladder = Music.scaleLadder(root: base, scaleID: melodyScale)
 
         let density = melodyDensity == "sparse" ? 0.42 : (melodyDensity == "busy" ? 0.85 : 0.62)
         var onsets = [Bool](repeating: false, count: 16)

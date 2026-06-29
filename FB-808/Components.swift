@@ -318,10 +318,7 @@ struct TransportBar: View {
         .disabled(!enabled)
     }
 
-    private func cycleCount() {
-        let i = countIns.firstIndex(of: project.countIn) ?? 0
-        project.countIn = countIns[(i + 1) % countIns.count]
-    }
+    private func cycleCount() { project.countIn = countIns.next(after: project.countIn) }
     private func tapTempo() {
         let now = Date()
         taps = taps.filter { now.timeIntervalSince($0) < 2 }

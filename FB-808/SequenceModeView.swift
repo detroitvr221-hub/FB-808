@@ -71,25 +71,23 @@ struct SequenceModeView: View {
             Rectangle().fill(settings.line).frame(width: 1, height: 22)
             chip(styledText([("Swing ", settings.ink, nil), ("\(Int(project.swing * 100))%", settings.accent, nil)]), arrow: true) {
                 project.checkpoint("swing", coalesce: false)
-                let i = SWINGS.firstIndex(of: project.swing) ?? 0; project.swing = SWINGS[(i + 1) % SWINGS.count]
+                project.swing = SWINGS.next(after: project.swing)
             }
             chip(styledText([("Humanize ", settings.ink, nil), ("\(Int(project.humanize * 100))%", settings.accent, nil)]), arrow: true) {
                 project.checkpoint("humanize", coalesce: false)
-                let hs: [Double] = [0, 0.25, 0.5, 0.75, 1.0]
-                let i = hs.firstIndex(of: project.humanize) ?? 0; project.humanize = hs[(i + 1) % hs.count]
+                project.humanize = [0, 0.25, 0.5, 0.75, 1.0].next(after: project.humanize)
             }
             chip(styledText([("Groove ", settings.ink, nil), (Groove.byID(project.grooveID).name, settings.accent, nil)]), arrow: true) {
                 project.checkpoint("groove", coalesce: false)
-                let i = Groove.all.firstIndex { $0.id == project.grooveID } ?? 0
-                project.grooveID = Groove.all[(i + 1) % Groove.all.count].id
+                project.grooveID = Groove.all.map(\.id).next(after: project.grooveID)
             }
             chip(styledText([("Quantize ", settings.ink, nil), (project.quantize, settings.accent, nil)]), arrow: true) {
                 project.checkpoint("quant", coalesce: false)
-                let i = QUANTS.firstIndex(of: project.quantize) ?? 0; project.quantize = QUANTS[(i + 1) % QUANTS.count]
+                project.quantize = QUANTS.next(after: project.quantize)
             }
             chip(styledText([("Sig ", settings.ink, nil), (sigLabel, settings.accent, nil)]), arrow: true) {
                 project.checkpoint("sig", coalesce: false)
-                let i = SIGS.firstIndex(of: project.barSteps) ?? 0; project.barSteps = SIGS[(i + 1) % SIGS.count]
+                project.barSteps = SIGS.next(after: project.barSteps)
             }
             chip(Text("✨ Generate").foregroundStyle(settings.accent)) { showGenerate = true }
                 .popover(isPresented: $showGenerate) { generatePanel }
@@ -515,9 +513,7 @@ struct SequenceModeView: View {
         switch project.autoTarget { case "filter": return "Filter"; case "reverb": return "Reverb"; case "delay": return "Delay"; default: return "Off" }
     }
     private func cycleAuto() {
-        let order = ["", "filter", "reverb", "delay"]
-        let i = order.firstIndex(of: project.autoTarget) ?? 0
-        project.setAutoTarget(order[(i + 1) % order.count])
+        project.setAutoTarget(["", "filter", "reverb", "delay"].next(after: project.autoTarget))
     }
 
     private var automationLane: some View {

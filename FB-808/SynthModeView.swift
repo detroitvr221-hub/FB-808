@@ -33,12 +33,7 @@ struct SynthModeView: View {
 
     // In-scale keys for the song key/scale (used when Scale Lock is on).
     private var scaleKeys: [Int] {
-        let intervals = Music.intervals(project.melodyScale)
-        let root = kbOct * 12 + 12 + project.melodyKey
-        var n: [Int] = []
-        for o in 0..<2 { for iv in intervals { n.append(root + 12 * o + iv) } }
-        n.append(root + 24)
-        return n
+        Music.scaleLadder(root: kbOct * 12 + 12 + project.melodyKey, scaleID: project.melodyScale)
     }
     private func keyDown(_ midi: Int) {
         engine.start()
@@ -919,12 +914,7 @@ struct SynthRoll: View {
     @State private var drawDrag: (pitch: Int, start: Int)?   // active draw; start = -1 means erasing
 
     private var ladder: [Int] {
-        let intervals = Music.intervals(project.melodyScale)
-        let base = 60 + project.melodyKey + 12 * project.melodyOctave
-        var l: [Int] = []
-        for o in 0..<2 { for iv in intervals { l.append(base + 12 * o + iv) } }
-        l.append(base + 24)
-        return l.reversed()
+        Music.scaleLadder(root: 60 + project.melodyKey + 12 * project.melodyOctave, scaleID: project.melodyScale).reversed().map { $0 }
     }
     // Polyphonic: a note covers cell key = pitch*16 + step. `startVel` carries each note's velocity.
     private func rollData() -> (covered: Set<Int>, startVel: [Int: Double]) {

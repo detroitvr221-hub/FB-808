@@ -88,13 +88,7 @@ struct ChordSuggestView: View {
     private var scaleID: String { project.melodyScale }
     private var keyName: String { Music.spelled(rootPC % 12, preferFlats: Music.preferFlats(tonicPC: rootPC, minor: minor)) + (minor ? " Minor" : " Major") }
 
-    private var voice: SynthPatch {
-        var p = SynthPatch()
-        p.name = "Theory"; p.source = "synth"; p.wave = .triangle
-        p.unison = false; p.sub = false; p.cutoff = 5200; p.reso = 1; p.filterEnv = 0.22; p.drive = 0.05
-        p.attack = 0.004; p.decay = 0.55; p.sustain = 0.26; p.release = 0.5; p.level = 0.5
-        return p
-    }
+    private var voice: SynthPatch { Music.theoryChordVoice }
 
     var body: some View {
         HStack(alignment: .top, spacing: 22) {
@@ -225,9 +219,7 @@ struct ChordSuggestView: View {
         }.buttonStyle(.plain)
     }
 
-    private func fnColor(_ f: String) -> Color {
-        switch f { case "T": return Color(hex: "#4D8AF0"); case "S": return Color(hex: "#21D0B2"); default: return Color(hex: "#FF6A2B") }
-    }
+    private func fnColor(_ f: String) -> Color { Music.functionColor(f) }
 
     // MARK: actions
 

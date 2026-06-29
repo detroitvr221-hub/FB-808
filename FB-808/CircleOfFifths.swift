@@ -51,14 +51,7 @@ struct CircleOfFifthsView: View {
 
     // A clean, neutral voice so the theory sounds the same regardless of the
     // user's current synth patch.
-    private var voice: SynthPatch {
-        var p = SynthPatch()
-        p.name = "Theory"; p.source = "synth"; p.wave = .triangle
-        p.unison = false; p.sub = false; p.octave = 0; p.glide = 0
-        p.cutoff = 5200; p.reso = 1; p.filterEnv = 0.22; p.drive = 0.05
-        p.attack = 0.004; p.decay = 0.55; p.sustain = 0.26; p.release = 0.5; p.level = 0.5
-        return p
-    }
+    private var voice: SynthPatch { Music.theoryChordVoice }
 
     private var k: CofKey { COF[sel] }
     private var scaleID: String { minorMode ? "minor" : "major" }
@@ -280,9 +273,7 @@ struct CircleOfFifthsView: View {
             return DiatonicChord(id: d, roman: romans[d], name: name, fn: fns[d], midis: offs.map { rootMidi + $0 })
         }
     }
-    private func fnColor(_ f: String) -> Color {
-        switch f { case "T": return Color(hex: "#4D8AF0"); case "S": return Color(hex: "#21D0B2"); default: return Color(hex: "#FF6A2B") }
-    }
+    private func fnColor(_ f: String) -> Color { Music.functionColor(f) }
 
     private var signatureShort: String {
         if k.sharps == 0 { return "♮" }
