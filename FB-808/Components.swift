@@ -376,3 +376,36 @@ struct Triangle: Shape {
         return p
     }
 }
+
+/// Shared mute/solo flag button used by the Mixer's channel + track strips (28pt, full-width). The "S"
+/// solo state uses the bright fill + dark `soloInk`; both states carry a non-color glyph + a11y traits.
+struct MuteSoloButton: View {
+    @EnvironmentObject var settings: AppSettings
+    let flag: String          // "M" or "S"
+    let on: Bool
+    let color: Color
+    let a11yName: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(flag).font(FDFont.mono(11, .bold))
+                .foregroundStyle(on ? (flag == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
+                .frame(maxWidth: .infinity).frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
+                // non-color cue so the active state reads without relying on the fill color
+                .overlay(alignment: .topTrailing) {
+                    if on {
+                        Image(systemName: flag == "M" ? "speaker.slash.fill" : "checkmark")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(flag == "S" ? FDPalette.soloInk : .white)
+                            .padding(2)
+                            .accessibilityHidden(true)
+                    }
+                }
+        }.buttonStyle(.plain)
+        .accessibilityLabel(Text("\(a11yName) \(flag == "M" ? "mute" : "solo")"))
+        .accessibilityValue(Text(on ? "On" : "Off"))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
+}

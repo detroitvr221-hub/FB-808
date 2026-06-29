@@ -818,29 +818,40 @@ struct ChallengeView: View {
         .fdCard(16, fill: settings.panel)
     }
 
+    // One graded state per challenge cell — replaces the parallel (placed,inTarget,graded) ternaries that
+    // drove fill / glyph / word / a11y separately.
+    private enum CellGrade { case correct, extra, missed, placed, empty
+        var glyph: String? { switch self { case .correct: "checkmark"; case .extra: "plus"; case .missed: "circle.dashed"; default: nil } }
+        var word: String { switch self { case .correct: "Correct"; case .extra: "Extra"; case .missed: "Missed"; case .placed: "Placed"; case .empty: "Empty" } }
+    }
+
     private func cell(_ padID: String, _ i: Int) -> some View {
         let placed = guess[padID]?.contains(i) ?? false
         let inTarget = target[padID]?.contains(i) ?? false
         let beat = i % 4 == 0
-        let graded = result != nil
         let base = beat ? settings.panel2.darker(0.04) : settings.panel2.darker(0.14)
         let color = Kit.padByID[padID]?.color ?? settings.accent
-        let fill: Color = graded ? (placed && inTarget ? settings.theme.good : (placed ? Color(hex: "#FF9F1C") : base))
-                                  : (placed ? color : base)
-        let missed = graded && !placed && inTarget
-        // Grading is conveyed by fill color (green/orange/red) only — add a per-state SF Symbol
-        // so correct / extra / missed read without relying on color.
-        let gradeGlyph: String? = graded ? (placed && inTarget ? "checkmark"
-                                                              : (placed ? "plus" : (inTarget ? "circle.dashed" : nil)))
-                                         : nil
-        let gradeWord = graded ? (placed && inTarget ? "Correct"
-                                                     : (placed ? "Extra" : (inTarget ? "Missed" : "Empty")))
-                               : (placed ? "Placed" : "Empty")
+        let grade: CellGrade = result != nil ? (placed && inTarget ? .correct : (placed ? .extra : (inTarget ? .missed : .empty)))
+                                             : (placed ? .placed : .empty)
+        let fill: Color
+        switch grade {
+        case .correct: fill = settings.theme.good
+        case .extra:   fill = Color(hex: "#FF9F1C")
+        case .placed:  fill = color
+        case .missed, .empty: fill = base
+        }
+        let missed = grade == .missed
         let label = Kit.padByID[padID]?.label ?? padID
+        let toggle = {
+            engine.start()
+            if guess[padID]?.contains(i) == true { guess[padID]?.remove(i) }
+            else { guess[padID, default: []].insert(i); engine.trigger(Kit.padByID[padID]?.sound ?? padID, vel: 0.9) }
+            result = nil
+        }
         return RoundedRectangle(cornerRadius: 6).fill(fill)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(missed ? settings.theme.miss : settings.line2, lineWidth: missed ? 2 : 1))
             .overlay {
-                if let g = gradeGlyph {
+                if let g = grade.glyph {   // non-color cue so correct/extra/missed read without relying on color
                     Image(systemName: g)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
@@ -851,22 +862,12 @@ struct ChallengeView: View {
             }
             .frame(maxWidth: .infinity).frame(height: 34)
             .contentShape(Rectangle())
-            .onTapGesture {
-                engine.start()
-                if guess[padID]?.contains(i) == true { guess[padID]?.remove(i) }
-                else { guess[padID, default: []].insert(i); engine.trigger(Kit.padByID[padID]?.sound ?? padID, vel: 0.9) }
-                result = nil
-            }
+            .onTapGesture { toggle() }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("\(label) step \(i + 1)"))
-            .accessibilityValue(Text(gradeWord))
+            .accessibilityValue(Text(grade.word))
             .accessibilityAddTraits(placed ? [.isButton, .isSelected] : .isButton)
-            .accessibilityAction {
-                engine.start()
-                if guess[padID]?.contains(i) == true { guess[padID]?.remove(i) }
-                else { guess[padID, default: []].insert(i); engine.trigger(Kit.padByID[padID]?.sound ?? padID, vel: 0.9) }
-                result = nil
-            }
+            .accessibilityAction { toggle() }
     }
 
     private func ctrl(_ label: String, _ icon: String, filled: Bool, _ action: @escaping () -> Void) -> some View {

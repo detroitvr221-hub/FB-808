@@ -332,8 +332,8 @@ struct MixStrip: View {
             }
             // m/s
             HStack(spacing: 6) {
-                msButton("M", on: m.mute, color: th.miss) { project.setMix(ch) { $0.mute.toggle() } }
-                if !master { msButton("S", on: m.solo, color: th.good) { project.setMix(ch) { $0.solo.toggle() } } }
+                MuteSoloButton(flag: "M", on: m.mute, color: th.miss, a11yName: name) { project.setMix(ch) { $0.mute.toggle() } }
+                if !master { MuteSoloButton(flag: "S", on: m.solo, color: th.good, a11yName: name) { project.setMix(ch) { $0.solo.toggle() } } }
             }
         }
         .padding(EdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 10))
@@ -540,28 +540,6 @@ struct MixStrip: View {
         }
     }
 
-    private func msButton(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(s).font(FDFont.mono(11, .bold))
-                .foregroundStyle(on ? (s == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
-                .frame(maxWidth: .infinity).frame(height: 28)
-                .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
-                // non-color cue so the active state reads without relying on the fill color
-                .overlay(alignment: .topTrailing) {
-                    if on {
-                        Image(systemName: s == "M" ? "speaker.slash.fill" : "checkmark")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(s == "S" ? FDPalette.soloInk : .white)
-                            .padding(2)
-                            .accessibilityHidden(true)
-                    }
-                }
-        }.buttonStyle(.plain)
-        .accessibilityLabel(Text("\(name) \(s == "M" ? "mute" : "solo")"))
-        .accessibilityValue(Text(on ? "On" : "Off"))
-        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-    }
 }
 
 // MARK: - Master FX (reverb + delay)
@@ -784,8 +762,8 @@ struct TrackStrip: View {
                 Text("\(dbStr(track.vol)) dB").font(FDFont.mono(10, .bold)).foregroundStyle(th.inkDim)
             }
             HStack(spacing: 6) {
-                msBtn("M", on: muted, color: th.miss) { project.toggleTrackMute(track.id) }
-                msBtn("S", on: soloed, color: th.good) { project.toggleTrackSolo(track.id) }
+                MuteSoloButton(flag: "M", on: muted, color: th.miss, a11yName: track.name) { project.toggleTrackMute(track.id) }
+                MuteSoloButton(flag: "S", on: soloed, color: th.good, a11yName: track.name) { project.toggleTrackSolo(track.id) }
             }
             // per-track insert FX (G3) on added/frozen tracks; group `.bus` tracks always own a strip (G3.4).
             // The 6 seeded tracks use their kit/melody bus FX in the Buses tab.
@@ -878,28 +856,6 @@ struct TrackStrip: View {
         }
     }
 
-    private func msBtn(_ s: String, on: Bool, color: Color, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(s).font(FDFont.mono(11, .bold))
-                .foregroundStyle(on ? (s == "S" ? FDPalette.soloInk : .white) : settings.inkFaint)
-                .frame(maxWidth: .infinity).frame(height: 28)
-                .background(RoundedRectangle(cornerRadius: 8).fill(on ? color : settings.panel2))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
-                // non-color cue so the active state reads without relying on the fill color
-                .overlay(alignment: .topTrailing) {
-                    if on {
-                        Image(systemName: s == "M" ? "speaker.slash.fill" : "checkmark")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(s == "S" ? FDPalette.soloInk : .white)
-                            .padding(2)
-                            .accessibilityHidden(true)
-                    }
-                }
-        }.buttonStyle(.plain)
-        .accessibilityLabel(Text("\(track.name) \(s == "M" ? "mute" : "solo")"))
-        .accessibilityValue(Text(on ? "On" : "Off"))
-        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-    }
 
     // MARK: per-track insert FX (G3) — bound to channelFX[track.id]
     @ViewBuilder private func trackFXEditor() -> some View {
