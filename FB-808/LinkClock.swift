@@ -9,7 +9,6 @@
 
 import Foundation
 import Combine
-import AVFoundation
 
 // mach_absolute_time is the clock domain LinkKit expects for "host time at output".
 enum HostClock {
@@ -41,15 +40,8 @@ final class LinkClock: ObservableObject {
     }
     deinit { if let link { ABLLinkDelete(link) } }
 
-    // MARK: enable / state
+    // MARK: state
 
-    func setActive(_ on: Bool) {
-        guard let link else { return }
-        ABLLinkSetActive(link, on)
-        enabled = ABLLinkIsEnabled(link)
-        connected = ABLLinkIsConnected(link)
-    }
-    func toggle() { setActive(!enabled) }
     var isOn: Bool { guard let link else { return false }; return ABLLinkIsEnabled(link) }
 
     // Link invokes these on the main thread, so assumeIsolated is valid + synchronous.

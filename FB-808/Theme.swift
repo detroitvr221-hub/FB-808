@@ -190,13 +190,9 @@ enum FDFont {
 
 /// Canonical corner radii — values mirror the magic numbers already used across the app.
 enum FDRadius {
-    static let xs: CGFloat = 5
     static let sm: CGFloat = 7
     static let md: CGFloat = 9
-    static let lg: CGFloat = 11
     static let xl: CGFloat = 14
-    static let panel: CGFloat = 16
-    static let cta: CGFloat = 13
 }
 
 /// One source of truth for the synth/melody bus label + swatch so Mixer, Tracks

@@ -39,7 +39,7 @@ struct AutoPoint: Sendable { var atSample: Double; var target: String; var value
 
 struct ExportFile: Identifiable { let id = UUID(); let urls: [URL] }
 
-enum ExportFormat: Sendable {
+nonisolated enum ExportFormat: Sendable {
     case wav, m4a
     nonisolated var ext: String { switch self { case .wav: "wav"; case .m4a: "m4a" } }
     nonisolated var icon: String { switch self { case .wav: "waveform.path"; case .m4a: "waveform" } }

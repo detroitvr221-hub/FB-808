@@ -872,7 +872,6 @@ final class Project: ObservableObject {
         }
         return ladder
     }
-    func saveSynth() { checkpoint("saveSynth", coalesce: false); savedSynths.append(editPatch) }
     func loadSampleSource(_ kind: String) {
         checkpoint("synthSrc", coalesce: false)
         engine.makeSynthSample(kind)
@@ -1448,7 +1447,7 @@ final class Project: ObservableObject {
 
 // MARK: - Codable snapshot
 
-struct ProjectSnapshot: Codable, Sendable {   // Sendable → encode/decode can run off the main actor (no save/load hitch)
+nonisolated struct ProjectSnapshot: Codable, Sendable {   // Sendable + nonisolated → encode/decode can run off the main actor (no save/load hitch)
     var version = 3   // v3: tracks may carry source.link (live-linked); v1/v2 decode as frozen (tolerant)
     var name: String
     var bpm: Int

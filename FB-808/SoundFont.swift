@@ -20,11 +20,6 @@ struct SFRegion {
 struct SFInstrument {
     var name: String
     var regions: [SFRegion]
-    /// The region whose key range covers `key` (nearest by root if none match).
-    func region(for key: Int) -> SFRegion? {
-        regions.first { key >= $0.loKey && key <= $0.hiKey }
-            ?? regions.min { abs($0.rootKey - key) < abs($1.rootKey - key) }
-    }
 }
 
 enum SoundFont {

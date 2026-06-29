@@ -77,11 +77,3 @@ struct InfoTip: View {
     }
 }
 
-extension View {
-    /// Anchor a tap-to-learn "?" tip in the top-trailing corner of a control.
-    func infoTip(_ term: String, _ detail: String) -> some View {
-        overlay(alignment: .topTrailing) {
-            InfoTip(term: term, detail: detail).offset(x: 5, y: -3)
-        }
-    }
-}

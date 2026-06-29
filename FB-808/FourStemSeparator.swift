@@ -21,7 +21,7 @@ import Foundation
 import CoreML
 import os
 
-enum StemModelContract {
+nonisolated enum StemModelContract {
     static let modelName = "StemSeparator"     // <modelName>.mlpackage / .mlmodelc in the app bundle
     static let sampleRate = 44_100.0           // Demucs operates at 44.1 kHz; we resample to/from engine SR
     static let stemOrder = ["Drums", "Bass", "Other", "Vocals"]   // Demucs default source order
@@ -29,7 +29,7 @@ enum StemModelContract {
     static let overlapSeconds = 0.25           // cross-fade overlap between chunks
 }
 
-final class FourStemSeparator {
+nonisolated final class FourStemSeparator {
     struct Stem { let name: String; let audio: [Float] }   // mono (L/R averaged) at the engine sample rate
 
     private static let log = Logger(subsystem: "com.FB-808", category: "stems")

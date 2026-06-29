@@ -639,14 +639,6 @@ struct SynthModeView: View {
                 .fdCard(9, fill: settings.panel2)
         }.buttonStyle(.plain)
     }
-    private func stepperBtn(_ s: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(s).font(.system(size: 17, weight: .bold)).foregroundStyle(settings.inkDim)
-                .frame(width: 34, height: 32)
-                .fdCard(9, fill: settings.panel2)
-        }.buttonStyle(.plain)
-    }
-
     private var keyboardArea: some View {
         HStack(spacing: 14) {
             keysSide

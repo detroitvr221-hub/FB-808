@@ -14,12 +14,12 @@ import FD808Engine
 
 /// App-wide logger — replaces scattered `print` for engine/file/export errors (shows in Console.app,
 /// off the hot path). Errors are logged `.public` so they're readable in release builds.
-let fdLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FD808", category: "fd808")
+nonisolated let fdLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FD808", category: "fd808")
 
 /// Shared audio defaults — one source of truth for the engine sample rate so the validator, the settings
 /// UI, the persisted fallback, and the WAV writers can't drift apart. Nonisolated so the `nonisolated`
 /// file-writers in Persistence can use them.
-enum AudioDefaults {
+nonisolated enum AudioDefaults {
     static let sampleRate: Double = 48_000
     /// Selectable engine sample rates (Hz). Adding one here surfaces it in Settings AND the validator.
     static let supportedSampleRates: [Double] = [44_100, 48_000, 88_200, 96_000]
@@ -632,6 +632,4 @@ final class AudioEngine: ObservableObject {
 
     /// Panic / all-notes-off — declick every voice and release held live notes (stuck-note recovery).
     func allNotesOff() { core.releaseAll() }
-    /// Per-channel post-strip peak levels for mixer meters (indexed by bus slot).
-    func channelPeaks() -> [Float] { core.channelPeaks() }
 }

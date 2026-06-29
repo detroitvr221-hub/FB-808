@@ -130,7 +130,7 @@ final class ProjectStore: ObservableObject {
     private let autosaveStem = "__autosave__"   // crash/quit recovery slot, hidden from the saved list
 
     // Lightweight name/id header — decodes the JSON object without allocating the 58 heavy snapshot fields.
-    private struct ProjectHeader: Decodable, Sendable { var id: String?; var name: String? }
+    nonisolated private struct ProjectHeader: Decodable, Sendable { var id: String?; var name: String? }
     private struct HeaderCacheEntry: Sendable { var mtime: Date; var size: Int; var id: String?; var name: String }
     private var headerCache: [String: HeaderCacheEntry] = [:]   // keyed by file path; reset per launch
     private var autosaveURL: URL { dir.appendingPathComponent("\(autosaveStem).\(ext)") }

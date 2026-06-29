@@ -3,7 +3,6 @@
 //  Ported from mode-teacher.jsx.
 
 import SwiftUI
-import AVFoundation
 import UIKit
 
 private let TE_CLASS = "Beat Lab · 4th Period"
