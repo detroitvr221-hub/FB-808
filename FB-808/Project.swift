@@ -1429,7 +1429,11 @@ final class Project: ObservableObject {
     func startFromTemplate(_ id: String) {
         resetToDefault()
         guard id != "blank", let style = Project.beatStyles.first(where: { $0.id == id }) else { return }
-        generateBeat(style: id, density: 0.5)   // fills lanes + sets the genre's bpm/swing (one undo step)
+        generateBeat(style: id, density: 0.5)   // fills lanes + sets the genre's bpm/swing
+        // Also load a genre-matching drum kit so the starter beat SOUNDS like its vibe, not the default kit.
+        let kitForGenre = ["boombap": "classic", "trap": "trap", "house": "house",
+                           "lofi": "lofi", "drill": "trap", "afrobeat": "acoustic"]
+        if let kitID = kitForGenre[id] { applyDrumKit(kitID) }
         name = style.name
     }
 }
