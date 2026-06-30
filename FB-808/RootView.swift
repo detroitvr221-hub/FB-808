@@ -177,6 +177,7 @@ private struct FirstRunFlow: ViewModifier {
     @Binding var showGenre: Bool
     @Binding var coachTip: String?
     @Binding var confirmNewBeat: Bool
+    @Binding var exportErr: String?
     var onTourDone: () -> Void
     var onPick: (String) -> Void
     func body(content: Content) -> some View {
@@ -187,6 +188,9 @@ private struct FirstRunFlow: ViewModifier {
                 Button("Discard & start new", role: .destructive) { showGenre = true }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This clears your current beat. Save it first if you want to keep it.") }
+            .alert("Export didn't work", isPresented: Binding(get: { exportErr != nil }, set: { if !$0 { exportErr = nil } })) {
+                Button("OK", role: .cancel) { exportErr = nil }
+            } message: { Text(exportErr ?? "") }
             .overlay(alignment: .top) {
                 if let tip = coachTip {
                     Text(tip).font(FDFont.ui(13.5, .semibold)).foregroundStyle(.white)
@@ -241,6 +245,7 @@ struct RootView: View {
     @State private var showGenre = false        // genre-first quick-start overlay
     @State private var coachTip: String?        // transient first-beat coaching nudge
     @State private var confirmNewBeat = false   // guard the genre quick-start against clobbering unsaved work
+    @State private var exportErr: String?       // surface a failed header export (the only export path at Beginner level)
     @Environment(\.scenePhase) private var scenePhase
     @State private var recoverSnap: ProjectSnapshot?
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
@@ -280,7 +285,7 @@ struct RootView: View {
         .environmentObject(session)
         .environmentObject(midi)
         .modifier(FirstRunFlow(settings: settings, showTour: $showTour, showGenre: $showGenre, coachTip: $coachTip,
-                               confirmNewBeat: $confirmNewBeat,
+                               confirmNewBeat: $confirmNewBeat, exportErr: $exportErr,
                                onTourDone: { toured = true; showGenre = true }, onPick: pickGenre))
         .onAppear {
             engine.start()
@@ -410,6 +415,7 @@ struct RootView: View {
             }.value
             exporting = false
             if let url { exportFile = ExportFile(urls: [url]); progress.awardCreative("export", 10) }
+            else { exportErr = "Couldn't export your beat. Add some sounds first, then try again." }
         }
     }
 

@@ -28,6 +28,7 @@ struct TrackModeView: View {
     @State private var importingAudio = false
     @State private var exportFile: ExportFile?
     @State private var exporting = false
+    @State private var exportError: String?   // surface a failed render instead of silently stopping the spinner
     @State private var renameID: String?
     @State private var renameText = ""
     @State private var importTrackID = "audio"
@@ -82,6 +83,9 @@ struct TrackModeView: View {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { project.arrangeDeleteSpace(at: rangeStart, len: rangeLen) }
         } message: { Text("Removes these bars across every track and section and closes the gap. You can undo it afterwards.") }
+        .alert("Export didn't work", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: { Text(exportError ?? "") }
     }
 
     private func handleAudioImport(_ result: Result<[URL], Error>) {
@@ -136,6 +140,7 @@ struct TrackModeView: View {
             }.value
             exporting = false
             if let url { exportFile = ExportFile(urls: [url]); progress.awardCreative("export", 10) }
+            else { exportError = "Couldn't export your beat. Add some sounds first, or try the WAV format." }
         }
     }
 
@@ -154,6 +159,7 @@ struct TrackModeView: View {
             }.value
             exporting = false
             if !urls.isEmpty { exportFile = ExportFile(urls: urls); progress.awardCreative("export", 10) }
+            else { exportError = "Couldn't export stems. Make sure the project has sounds in it." }
         }
     }
 
