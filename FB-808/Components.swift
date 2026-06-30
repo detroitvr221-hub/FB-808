@@ -66,14 +66,22 @@ struct SegTab: View {
     @EnvironmentObject var settings: AppSettings
     let label: String
     let selected: Bool
+    var icon: String? = nil          // optional leading SF Symbol — icon+text tab rows route through here too
     var badge: Int = 0
     var font: Font = FDFont.ui(14, .semibold)
+    var iconSize: CGFloat = 14
     var height: CGFloat = 38
     var hPad: CGFloat = 18
+    var radius: CGFloat = 10
+    var fill: Bool = false           // true → equal-width segments (maxWidth: .infinity); false → hug content
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
+                if let icon {
+                    Image(systemName: icon).font(.system(size: iconSize))
+                        .foregroundStyle(selected ? settings.accent : settings.inkDim)
+                }
                 Text(label).font(font)
                 if badge > 0 {
                     Text("\(badge)").font(FDFont.mono(10, .bold)).foregroundStyle(.white)
@@ -82,9 +90,9 @@ struct SegTab: View {
                 }
             }
             .foregroundStyle(selected ? settings.ink : settings.inkDim)
-            .padding(.horizontal, hPad).frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 10).fill(selected ? settings.accent.opacity(0.18) : settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
+            .padding(.horizontal, fill ? 8 : hPad).frame(maxWidth: fill ? .infinity : nil).frame(height: height)
+            .background(RoundedRectangle(cornerRadius: radius).fill(selected ? settings.accent.opacity(0.18) : settings.panel2))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(selected ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
         }.buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(badge > 0 ? "\(label), \(badge) pending" : label)

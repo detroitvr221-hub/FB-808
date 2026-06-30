@@ -87,11 +87,11 @@ struct SynthModeView: View {
 
     private var sourceTabs: some View {
         HStack(spacing: 8) {
-            srcTab("Synth", "waveform.path", on: patch.source == "synth") { project.checkpoint("synth", coalesce: false); project.editPatch.source = "synth" }
-            srcTab("Piano", "pianokeys", on: patch.source == "piano") { project.checkpoint("synth", coalesce: false); project.editPatch = SynthPresets.all.first { $0.name == "Rhodes EP" } ?? patch }
-            srcTab("Sample", "waveform", on: patch.source == "sample" && patch.name != "Recorded Sound") { project.loadSampleSource("chop") }
-            srcTab("Record", "mic.fill", on: patch.name == "Recorded Sound") { project.loadSampleSource("vocal") }
-            srcTab("String", "guitars.fill", on: patch.source == "string") { project.checkpoint("synth", coalesce: false); project.editPatch = SynthPresets.all.first { $0.name == "Steel String" } ?? patch }
+            SegTab(label: "Synth", selected: patch.source == "synth", icon: "waveform.path", font: FDFont.ui(14, .semibold), iconSize: 16, height: 48, radius: 12, fill: true) { project.checkpoint("synth", coalesce: false); project.editPatch.source = "synth" }
+            SegTab(label: "Piano", selected: patch.source == "piano", icon: "pianokeys", font: FDFont.ui(14, .semibold), iconSize: 16, height: 48, radius: 12, fill: true) { project.checkpoint("synth", coalesce: false); project.editPatch = SynthPresets.all.first { $0.name == "Rhodes EP" } ?? patch }
+            SegTab(label: "Sample", selected: patch.source == "sample" && patch.name != "Recorded Sound", icon: "waveform", font: FDFont.ui(14, .semibold), iconSize: 16, height: 48, radius: 12, fill: true) { project.loadSampleSource("chop") }
+            SegTab(label: "Record", selected: patch.name == "Recorded Sound", icon: "mic.fill", font: FDFont.ui(14, .semibold), iconSize: 16, height: 48, radius: 12, fill: true) { project.loadSampleSource("vocal") }
+            SegTab(label: "String", selected: patch.source == "string", icon: "guitars.fill", font: FDFont.ui(14, .semibold), iconSize: 16, height: 48, radius: 12, fill: true) { project.checkpoint("synth", coalesce: false); project.editPatch = SynthPresets.all.first { $0.name == "Steel String" } ?? patch }
             Button { showHelp.toggle() } label: {
                 Image(systemName: showHelp ? "questionmark.circle.fill" : "questionmark.circle").font(.system(size: 19))
                     .foregroundStyle(showHelp ? settings.accent : settings.inkFaint)
@@ -100,17 +100,6 @@ struct SynthModeView: View {
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(showHelp ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
             }.buttonStyle(.plain)
         }
-    }
-    private func srcTab(_ label: String, _ icon: String, on: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: icon).font(.system(size: 16)).foregroundStyle(on ? settings.accent : settings.inkDim)
-                Text(label).font(FDFont.ui(14, .semibold)).foregroundStyle(on ? settings.ink : settings.inkDim)
-            }
-            .frame(maxWidth: .infinity).frame(height: 48)
-            .background(RoundedRectangle(cornerRadius: 12).fill(on ? settings.accent.opacity(0.18) : settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(on ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }.buttonStyle(.plain)
     }
 
     private var isSample: Bool { patch.source == "sample" }
@@ -508,9 +497,9 @@ struct SynthModeView: View {
     private var playArea: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
-                segTab("Keyboard", "pianokeys", on: playMode == "keys") { playMode = "keys" }
-                segTab("Piano Roll", "square.grid.3x2.fill", on: playMode == "roll") { playMode = "roll" }
-                segTab("Free", "scribble.variable", on: playMode == "free") { playMode = "free" }
+                SegTab(label: "Keyboard", selected: playMode == "keys", icon: "pianokeys", font: FDFont.ui(13.5, .semibold), iconSize: 13, height: 36) { playMode = "keys" }
+                SegTab(label: "Piano Roll", selected: playMode == "roll", icon: "square.grid.3x2.fill", font: FDFont.ui(13.5, .semibold), iconSize: 13, height: 36) { playMode = "roll" }
+                SegTab(label: "Free", selected: playMode == "free", icon: "scribble.variable", font: FDFont.ui(13.5, .semibold), iconSize: 13, height: 36) { playMode = "free" }
                 Spacer()
                 if playMode == "roll" { rollToolbar }
             }
@@ -523,23 +512,6 @@ struct SynthModeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func segTab(_ label: String, _ icon: String, on: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 13))
-                Text(label).font(FDFont.ui(13.5, .semibold))
-            }
-            .foregroundStyle(on ? settings.ink : settings.inkDim)
-            .padding(.horizontal, 16).frame(height: 36)
-            .background(RoundedRectangle(cornerRadius: 10).fill(on ? settings.accent.opacity(0.18) : settings.panel2))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        // VoiceOver: selected state is color-only — expose it as a trait/value.
-        .accessibilityLabel(Text(label))
-        .accessibilityValue(Text(on ? "Selected" : ""))
-        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-    }
 
     // the design's ".keys-side" panel: octave control + lock/key/scale + hint
     private var keysSide: some View {
