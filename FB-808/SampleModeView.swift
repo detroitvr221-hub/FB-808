@@ -25,6 +25,7 @@ struct SampleModeView: View {
     @EnvironmentObject var settings: AppSettings
 
     @State private var playPos: Double?
+    @State private var showAdvanced = false   // progressive disclosure: hide pro tools (stretch/stems/granular/etc) by default
     @State private var auditionTask: Task<Void, Never>?
     @State private var looping = false
     @State private var confirm: String?
@@ -296,54 +297,6 @@ struct SampleModeView: View {
                     }.buttonStyle(.plain).disabled(!has)
                 }
 
-                PanelCard(title: "Tune to Key") {
-                    Button { tuneToKey() } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "tuningfork").font(.system(size: 13))
-                            Text("Snap to \(Music.noteNames[project.melodyKey % 12]) \(project.melodyScale == "minor" ? "min" : "maj")").font(FDFont.ui(12.5, .semibold))
-                            Spacer()
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12).frame(height: 40).frame(maxWidth: .infinity)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
-                    }.buttonStyle(.plain).disabled(!has).opacity(has ? 1 : 0.4)
-                    toolButton("Harmonize · 3rd + 5th", on: sample?.harmonize ?? false) { toggleHarmonize() }
-                    Text("Detects the sample's pitch and nudges it onto the song scale. Harmonize stacks diatonic voices when you audition or play slices.")
-                        .font(FDFont.ui(11)).foregroundStyle(settings.inkDim).fixedSize(horizontal: false, vertical: true)
-                }
-
-                PanelCard(title: "Time Stretch") {
-                    sliderRow("Stretch", value: $stretchRatio, range: 0.5...2, readout: String(format: "%.2fx", stretchRatio))
-                    HStack(spacing: 7) {
-                        actionButton("Apply") { applyStretch(stretchRatio) }
-                        actionButton("Fit Tempo") { fitTempo() }
-                    }
-                    actionButton("⌖ Detect Tempo & Key", wide: true) { detectTempoKey() }
-                    Text("Pitch-preserving (WSOLA). Fit Tempo snaps the loop to whole beats at \(project.bpm) BPM. Detect analyzes the sample and sets the song tempo + key.")
-                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
-                }
-
-                PanelCard(title: "Stem Split") {
-                    actionButton("⎘ Split → Drums / Melody", wide: true) { splitStems() }
-                    actionButton(FourStemSeparator.modelAvailable ? "⎙ Split → 4 Stems" : "⎙ 4 Stems (needs model)", wide: true) { splitFourStems() }
-                    Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a bundled Core ML model — drop `StemSeparator.mlpackage` into the app target to enable it (see FourStemSeparator.swift); until then it falls back to the 2-way split.")
-                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
-                }
-
-                PanelCard(title: "Granular") {
-                    sliderRow("Position", value: $grainPos, range: 0...1, readout: "\(Int(grainPos * 100))%")
-                    sliderRow("Grain", value: $grainMs, range: 10...400, readout: "\(Int(grainMs)) ms")
-                    sliderRow("Density", value: $grainDensity, range: 1...60, readout: "\(Int(grainDensity))/s")
-                    sliderRow("Spread", value: $grainSpread, range: 0...1, readout: "\(Int(grainSpread * 100))%")
-                    sliderRow("Pitch", value: $grainPitch, range: -24...24, readout: "\(Int(grainPitch)) st")
-                    actionButton("☁︎ Play Cloud", wide: true) {
-                        engine.playGranular(pos: grainPos, grainMs: grainMs, density: grainDensity,
-                                            spread: grainSpread, pitch: grainPitch, dur: 2.5)
-                    }
-                    Text("Sprays overlapping windowed grains from the buffer — texture, time-smear and drones. Spread randomizes grain position.")
-                        .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
-                }
-
                 PanelCard(title: "Slice") {
                     actionButton("⟂ Threshold Chop", wide: true) { detectTransients() }
                     sliderRow("Threshold", value: $chopThreshold, range: 0...1, readout: "\(Int(chopThreshold * 100))%")
@@ -366,22 +319,6 @@ struct SampleModeView: View {
                             .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.opacity(0.2)))
                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.accent.opacity(0.5), lineWidth: 1))
                     }.buttonStyle(.plain).opacity((sample?.slices.isEmpty == false) ? 1 : 0.4).disabled(sample?.slices.isEmpty != false)
-                }
-
-                PanelCard(title: "Instrument") {
-                    Button { toSynthKeys() } label: {
-                        Text("→ Play Chromatically (Synth)").font(FDFont.ui(12, .semibold)).foregroundStyle(.white)
-                            .frame(maxWidth: .infinity).frame(height: 40)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
-                    }.buttonStyle(.plain).opacity(has ? 1 : 0.4).disabled(!has)
-                    Button { toWavetable() } label: {
-                        Text("∿ Use as Wavetable Oscillator").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.ink)
-                            .frame(maxWidth: .infinity).frame(height: 40)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.opacity(0.16)))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.accent.opacity(0.5), lineWidth: 1))
-                    }.buttonStyle(.plain).opacity(has ? 1 : 0.4).disabled(!has)
-                    Text("**Play Chromatically** repitches the whole sample (sampler). **Wavetable** grabs one cycle → a true live oscillator, clean across the whole keyboard. Great for torchsynth-generated tones.")
-                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let s = sample, !s.slices.isEmpty {
@@ -411,6 +348,91 @@ struct SampleModeView: View {
                             .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).padding(.top, 2)
                     }
                 }
+
+                // Progressive disclosure — pro tools (tune / stretch / stems / granular / instrument) hidden by default
+                // so a beginner sees the happy path (edit → shape → chop → assign) without a wall of DSP.
+                Button { withAnimation(.easeInOut(duration: 0.2)) { showAdvanced.toggle() } } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "slider.horizontal.3").font(.system(size: 12))
+                        Text("Advanced tools").font(FDFont.ui(13, .bold))
+                        Spacer()
+                        Image(systemName: showAdvanced ? "chevron.up" : "chevron.down").font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundStyle(settings.inkDim)
+                    .padding(.horizontal, 14).frame(height: 44)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+                }.buttonStyle(.plain)
+                    .accessibilityLabel(Text("Advanced tools"))
+                    .accessibilityValue(Text(showAdvanced ? "Expanded" : "Collapsed"))
+                    .accessibilityHint(Text("Tune to key, time stretch, stem split, granular and instrument tools"))
+
+                if showAdvanced {
+                    PanelCard(title: "Tune to Key") {
+                        Button { tuneToKey() } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "tuningfork").font(.system(size: 13))
+                                Text("Snap to \(Music.noteNames[project.melodyKey % 12]) \(project.melodyScale == "minor" ? "min" : "maj")").font(FDFont.ui(12.5, .semibold))
+                                Spacer()
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).frame(height: 40).frame(maxWidth: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
+                        }.buttonStyle(.plain).disabled(!has).opacity(has ? 1 : 0.4)
+                        toolButton("Harmonize · 3rd + 5th", on: sample?.harmonize ?? false) { toggleHarmonize() }
+                        Text("Detects the sample's pitch and nudges it onto the song scale. Harmonize stacks diatonic voices when you audition or play slices.")
+                            .font(FDFont.ui(11)).foregroundStyle(settings.inkDim).fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    PanelCard(title: "Time Stretch") {
+                        sliderRow("Stretch", value: $stretchRatio, range: 0.5...2, readout: String(format: "%.2fx", stretchRatio))
+                        HStack(spacing: 7) {
+                            actionButton("Apply") { applyStretch(stretchRatio) }
+                            actionButton("Fit Tempo") { fitTempo() }
+                        }
+                        actionButton("⌖ Detect Tempo & Key", wide: true) { detectTempoKey() }
+                        Text("Pitch-preserving (WSOLA). Fit Tempo snaps the loop to whole beats at \(project.bpm) BPM. Detect analyzes the sample and sets the song tempo + key.")
+                            .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    PanelCard(title: "Stem Split") {
+                        actionButton("⎘ Split → Drums / Melody", wide: true) { splitStems() }
+                        actionButton(FourStemSeparator.modelAvailable ? "⎙ Split → 4 Stems" : "⎙ 4 Stems (needs model)", wide: true) { splitFourStems() }
+                        Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a bundled Core ML model — drop `StemSeparator.mlpackage` into the app target to enable it (see FourStemSeparator.swift); until then it falls back to the 2-way split.")
+                            .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    PanelCard(title: "Granular") {
+                        sliderRow("Position", value: $grainPos, range: 0...1, readout: "\(Int(grainPos * 100))%")
+                        sliderRow("Grain", value: $grainMs, range: 10...400, readout: "\(Int(grainMs)) ms")
+                        sliderRow("Density", value: $grainDensity, range: 1...60, readout: "\(Int(grainDensity))/s")
+                        sliderRow("Spread", value: $grainSpread, range: 0...1, readout: "\(Int(grainSpread * 100))%")
+                        sliderRow("Pitch", value: $grainPitch, range: -24...24, readout: "\(Int(grainPitch)) st")
+                        actionButton("☁︎ Play Cloud", wide: true) {
+                            engine.playGranular(pos: grainPos, grainMs: grainMs, density: grainDensity,
+                                                spread: grainSpread, pitch: grainPitch, dur: 2.5)
+                        }
+                        Text("Sprays overlapping windowed grains from the buffer — texture, time-smear and drones. Spread randomizes grain position.")
+                            .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    PanelCard(title: "Instrument") {
+                        Button { toSynthKeys() } label: {
+                            Text("→ Play Chromatically (Synth)").font(FDFont.ui(12, .semibold)).foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).frame(height: 40)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.ctaGradient()))
+                        }.buttonStyle(.plain).opacity(has ? 1 : 0.4).disabled(!has)
+                        Button { toWavetable() } label: {
+                            Text("∿ Use as Wavetable Oscillator").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.ink)
+                                .frame(maxWidth: .infinity).frame(height: 40)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(settings.accent.opacity(0.16)))
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(settings.accent.opacity(0.5), lineWidth: 1))
+                        }.buttonStyle(.plain).opacity(has ? 1 : 0.4).disabled(!has)
+                        Text("**Play Chromatically** repitches the whole sample (sampler). **Wavetable** grabs one cycle → a true live oscillator, clean across the whole keyboard. Great for torchsynth-generated tones.")
+                            .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 CoachNote("**Transients** are the sharp attacks at the start of each sound. Slicing on transients keeps chops tight and on-beat.")
             }
         }

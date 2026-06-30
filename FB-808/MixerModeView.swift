@@ -552,6 +552,7 @@ struct MasterFXBar: View {
     private func pct(_ v: Double) -> String { "\(Int(v * 100))%" }
     private func ms(_ v: Double) -> String { "\(Int(v)) ms" }
     @State private var autoMsg: String?
+    @State private var showAdvanced = false   // progressive disclosure: hide manual EQ / multiband / analyzer by default
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -604,15 +605,37 @@ struct MasterFXBar: View {
                     }.padding(.top, 2)
                 }
                 Rectangle().fill(settings.line).frame(width: 1, height: 92)
-                masterGroup
-                Rectangle().fill(settings.line).frame(width: 1, height: 92)
-                multibandGroup
-                Rectangle().fill(settings.line).frame(width: 1, height: 92)
-                analyzerGroup
+                advancedToggle   // progressive disclosure for the pro mastering groups
+                if showAdvanced {
+                    Rectangle().fill(settings.line).frame(width: 1, height: 92)
+                    masterGroup
+                    Rectangle().fill(settings.line).frame(width: 1, height: 92)
+                    multibandGroup
+                    Rectangle().fill(settings.line).frame(width: 1, height: 92)
+                    analyzerGroup
+                }
             }
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
         }
         .fdCard(14, fill: settings.panel)
+    }
+
+    // Pro mastering (manual EQ / multiband / analyzer) hidden by default — keep Auto-Master + Reverb + Delay
+    // as the beginner happy path; tap to reveal the rest.
+    private var advancedToggle: some View {
+        Button { withAnimation(.easeInOut(duration: 0.2)) { showAdvanced.toggle() } } label: {
+            VStack(spacing: 6) {
+                Image(systemName: showAdvanced ? "chevron.left" : "chevron.right").font(.system(size: 13, weight: .bold))
+                Text("Pro").font(FDFont.mono(10, .bold)).tracking(0.5)
+                Text(showAdvanced ? "Hide" : "EQ · MB\nSpectrum").font(FDFont.mono(8)).multilineTextAlignment(.center).lineLimit(2)
+            }
+            .foregroundStyle(showAdvanced ? settings.accent : settings.inkDim)
+            .frame(width: 60, height: 92)
+            .fdCard(10, fill: settings.panel2)
+        }.buttonStyle(.plain)
+        .accessibilityLabel(Text("Pro mastering tools"))
+        .accessibilityValue(Text(showAdvanced ? "Expanded" : "Collapsed"))
+        .accessibilityHint(Text("Manual master EQ, multiband compressor and spectrum analyzer"))
     }
 
     private var masterGroup: some View {
