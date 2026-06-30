@@ -26,6 +26,7 @@ struct SequenceModeView: View {
 
     private let labelW: CGFloat = 132
     private let gap: CGFloat = 4
+    private let rowH: CGFloat = 40   // step cells: ≥44-ish touch target + fills the grid (was a cramped 30)
 
     private var sel: String { project.selectedRow }
     private var sigLabel: String {
@@ -299,7 +300,7 @@ struct SequenceModeView: View {
                     }
                     .onEnded { _ in painting = nil })
             }
-            .frame(height: 30)
+            .frame(height: rowH)
         }
     }
 
@@ -308,7 +309,8 @@ struct SequenceModeView: View {
         let beat = i % 4 == 0
         let ph = project.step == i && project.playing
         return RoundedRectangle(cornerRadius: 7)
-            .fill(on ? pad.color : (beat ? settings.panel2.darker(0.04) : settings.panel2.darker(0.12)))
+            // stronger beat-vs-offbeat contrast so the bar reads as four groups of four (downbeats lighter)
+            .fill(on ? pad.color : (beat ? settings.panel2.darker(0.02) : settings.panel2.darker(0.16)))
             .overlay(
                 Group {
                     if on {
@@ -320,7 +322,7 @@ struct SequenceModeView: View {
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(on ? .clear : settings.line2, lineWidth: 1))
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(ph ? settings.ink.opacity(0.65) : .clear, lineWidth: 2))
             .frame(maxWidth: .infinity)
-            .frame(height: 30)
+            .frame(height: rowH)
             .opacity(i < project.barSteps ? 1 : 0.28)   // dim steps outside the bar length (A13)
             // VoiceOver: each step is a togglable cell (the sighted paint gesture lives on the row)
             .accessibilityElement()
