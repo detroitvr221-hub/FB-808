@@ -660,7 +660,7 @@ struct RootView: View {
             case "pads": PadModeView(openTab: { tab = $0 })
             case "sequence": SequenceModeView()
             case "synth": SynthModeView()
-            case "sample": SampleModeView()
+            case "sample": SampleModeView(openTab: { tab = $0 })
             case "tracks": TrackModeView()
             case "mixer": MixerModeView()
             case "theory": TheoryModeView(openTab: { tab = $0 })

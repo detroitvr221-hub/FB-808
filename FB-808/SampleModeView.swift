@@ -23,6 +23,7 @@ struct SampleModeView: View {
     @EnvironmentObject var project: Project
     @EnvironmentObject var engine: AudioEngine
     @EnvironmentObject var settings: AppSettings
+    var openTab: (String) -> Void = { _ in }   // "send to play" actions hand off to Pads/Synth so the user lands ready to play
 
     @State private var playPos: Double?
     @State private var showAdvanced = false   // progressive disclosure: hide pro tools (stretch/stems/granular/etc) by default
@@ -692,7 +693,8 @@ struct SampleModeView: View {
         project.synthPatch.bufferKind = s.kind
         project.synthPatch.baseMidi = 60
         project.synthPatch.name = s.name
-        flash("Sent to Synth Maker — open Synth to play it")
+        flash("Now playing in Synth — try the keyboard")
+        openTab("synth")
     }
     /// Grab a single cycle from the sample → a live wavetable oscillator on the Lead synth (D6/wavetable).
     private func toWavetable() {
@@ -701,7 +703,8 @@ struct SampleModeView: View {
         var p = project.synthPatch
         p.source = "synth"; p.wave = .wavetable; p.wavetable = WTData(table); p.name = String(s.name.prefix(18)) + " WT"
         project.synthPatch = p
-        flash("Wavetable ready — open Synth & play it live")
+        flash("Wavetable ready in Synth — play it live")
+        openTab("synth")
     }
 
     private func toggleLoop() {
@@ -846,6 +849,7 @@ struct SampleModeView: View {
         let n = project.assignSlicesToPads(buffer: engine.currentSampleOriginal(), slices: s.slices, reverse: s.reverseSlices)
         guard n > 0 else { flash("No audio to slice"); return }
         project.setBank("C")
-        flash("\(n) chops → pads · sequence them & they’ll export")
+        flash("\(n) chops on Bank C — tap to play, sequence them & they’ll export")
+        openTab("pads")
     }
 }
