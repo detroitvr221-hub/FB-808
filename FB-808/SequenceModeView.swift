@@ -31,13 +31,23 @@ struct SequenceModeView: View {
     private var sigLabel: String {
         switch project.barSteps { case 12: return "3/4"; case 8: return "2/4"; default: return "4/4" }
     }
+    /// MPC-style feel name for the swing amount (beginners think in feel, not %). Shows "Straight … Loose".
+    private func swingFeel(_ v: Double) -> String {
+        switch v {
+        case ..<0.06:  return "Straight"
+        case ..<0.19:  return "Light \(Int(v * 100))%"
+        case ..<0.33:  return "Swung \(Int(v * 100))%"
+        case ..<0.48:  return "Heavy \(Int(v * 100))%"
+        default:       return "Loose \(Int(v * 100))%"
+        }
+    }
 
     var body: some View {
         VStack(spacing: 12) {
             TransportBar()
             VStack(alignment: .leading, spacing: 12) {
                 ModeHead(title: "Sequence", eyebrow: "1 Bar · \(project.barSteps) Steps · \(sigLabel)",
-                         hint: "Tap to place · drag to paint · hold a velocity bar for probability / conditions / locks")
+                         hint: "Draw the beat here, or play it in on the Pads — it's the same pattern. Drag to paint · hold a bar to edit a step")
                 tools
                 gridWrap
             }
@@ -53,7 +63,7 @@ struct SequenceModeView: View {
     private var tools: some View {
         HStack(spacing: 8) {
             HStack(spacing: 4) {
-                Text("SEQ").font(FDFont.mono(10, .bold)).foregroundStyle(settings.inkFaint)
+                Text("PATTERN").font(FDFont.mono(10, .bold)).foregroundStyle(settings.inkFaint)   // FL mental model: A/B/C/D = patterns
                 ForEach(Array(project.sequences.enumerated()), id: \.offset) { (i, slot) in
                     Button { project.switchSequence(i) } label: {
                         Text(slot.name).font(FDFont.mono(12, .bold))
@@ -69,7 +79,7 @@ struct SequenceModeView: View {
                 }
             }
             Rectangle().fill(settings.line).frame(width: 1, height: 22)
-            chip(styledText([("Swing ", settings.ink, nil), ("\(Int(project.swing * 100))%", settings.accent, nil)]), arrow: true) {
+            chip(styledText([("Swing ", settings.ink, nil), (swingFeel(project.swing), settings.accent, nil)]), arrow: true) {
                 project.checkpoint("swing", coalesce: false)
                 project.swing = SWINGS.next(after: project.swing)
             }

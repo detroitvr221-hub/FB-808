@@ -118,7 +118,7 @@ struct PadModeView: View {
         VStack(alignment: .leading, spacing: 0) {
             ModeHead(title: "Pads",
                      eyebrow: "Bank \(project.bank) · \(Kit.banks[project.bank]?.name ?? "")",
-                     hint: editMode ? "✎ Tap a pad to open its editor" : (project.recording ? "● Recording into pattern" : "Tap to play · long-press to edit"))
+                     hint: editMode ? "✎ Tap a pad to open its editor" : (project.recording ? "● Recording into pattern" : "Tap to play · hit ● to record — it shows up on the Sequence grid too · long-press a pad to edit"))
                 .padding(.bottom, 12)
             PadGridView(pads: bankPads,
                         showLabels: settings.padLabels && !project.sixteenLevels,

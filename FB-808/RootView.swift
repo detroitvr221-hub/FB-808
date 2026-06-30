@@ -64,6 +64,73 @@ struct TourOverlay: View {
     private func finish() { onDone(); show = false }
 }
 
+// Genre-first quick start (UX flow): the documented antidote to beginner overwhelm — pick a vibe and get a
+// playable starter beat immediately instead of a blank grid. Wraps Project.startFromTemplate (kit + tempo +
+// swing + a pattern). Shown on first run after the tour, and re-openable as "New beat".
+struct GenrePicker: View {
+    @ObservedObject var settings: AppSettings   // overlays don't reliably inherit @EnvironmentObject — pass it
+    let onPick: (String) -> Void                // a BeatGenerator style id, or "blank"
+    var onClose: (() -> Void)? = nil
+
+    private struct Genre { let id: String; let name: String; let vibe: String; let bpm: Int }
+    private let genres: [Genre] = [
+        .init(id: "boombap",  name: "Boom Bap",  vibe: "Classic head-nod hip-hop", bpm: 88),
+        .init(id: "trap",     name: "Trap",      vibe: "Hard 808s & rolling hats",  bpm: 140),
+        .init(id: "lofi",     name: "Lo-Fi",     vibe: "Dusty, mellow, chill",      bpm: 78),
+        .init(id: "house",    name: "House",     vibe: "Four-on-the-floor dance",   bpm: 124),
+        .init(id: "drill",    name: "Drill",     vibe: "Sliding 808s, dark & moody", bpm: 142),
+        .init(id: "afrobeat", name: "Afrobeat",  vibe: "Syncopated global groove",  bpm: 108),
+    ]
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.72).ignoresSafeArea()
+            VStack(spacing: 18) {
+                VStack(spacing: 6) {
+                    Text("What do you want to make?").font(FDFont.display(26, .bold)).foregroundStyle(settings.ink)
+                    Text("Pick a vibe — we'll start a beat that's already playing, then you tweak it.")
+                        .font(FDFont.ui(14)).foregroundStyle(settings.inkDim).multilineTextAlignment(.center)
+                }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
+                    ForEach(genres, id: \.id) { g in
+                        Button { onPick(g.id) } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(g.name).font(FDFont.display(20, .bold)).foregroundStyle(settings.ink)
+                                Text(g.vibe).font(FDFont.ui(12)).foregroundStyle(settings.inkDim)
+                                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 4)
+                                Text("\(g.bpm) BPM").font(FDFont.mono(10, .bold)).foregroundStyle(settings.accent)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+                            .padding(14)
+                            .background(RoundedRectangle(cornerRadius: 14).fill(settings.panel2))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(settings.line, lineWidth: 1))
+                        }.buttonStyle(.plain)
+                        .accessibilityLabel(Text("\(g.name), \(g.vibe), \(g.bpm) BPM"))
+                    }
+                }
+                .frame(maxWidth: 560)
+                Button { onPick("blank") } label: {
+                    Text("Start from scratch").font(FDFont.ui(14, .semibold)).foregroundStyle(settings.inkDim)
+                        .padding(.horizontal, 20).frame(height: 42)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(settings.panel2))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(settings.line, lineWidth: 1))
+                }.buttonStyle(.plain)
+            }
+            .padding(34).frame(maxWidth: 640)
+            .background(RoundedRectangle(cornerRadius: 26).fill(settings.panel))
+            .overlay(RoundedRectangle(cornerRadius: 26).stroke(settings.line, lineWidth: 1))
+            .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
+            .overlay(alignment: .topTrailing) {
+                if let onClose {
+                    Button { onClose() } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 22)).foregroundStyle(settings.inkFaint)
+                    }.buttonStyle(.plain).padding(12).accessibilityLabel(Text("Close"))
+                }
+            }
+        }
+    }
+}
+
 struct AchievementToast: View {
     @ObservedObject var settings: AppSettings
     let label: String
@@ -99,6 +166,33 @@ private struct AudioSettingsSync: ViewModifier {
             .onChange(of: settings.bandlimitedOsc) { _, _ in apply() }
             .onChange(of: settings.stereoInput) { _, _ in apply() }
             .onChange(of: settings.haptics) { _, _ in apply() }
+    }
+}
+
+/// First-run / quick-start flow (tour → genre picker → coaching nudge) as one modifier so the (already
+/// large) RootView body stays type-checkable.
+private struct FirstRunFlow: ViewModifier {
+    @ObservedObject var settings: AppSettings
+    @Binding var showTour: Bool
+    @Binding var showGenre: Bool
+    @Binding var coachTip: String?
+    var onTourDone: () -> Void
+    var onPick: (String) -> Void
+    func body(content: Content) -> some View {
+        content
+            .overlay { if showTour { TourOverlay(settings: settings, show: $showTour, onDone: onTourDone) } }
+            .overlay { if showGenre { GenrePicker(settings: settings, onPick: onPick, onClose: { showGenre = false }) } }
+            .overlay(alignment: .top) {
+                if let tip = coachTip {
+                    Text(tip).font(FDFont.ui(13.5, .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 11)
+                        .background(Capsule().fill(settings.accent))
+                        .shadow(color: .black.opacity(0.35), radius: 12, y: 5).padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { withAnimation { if coachTip == tip { coachTip = nil } } } }
+                }
+            }
+            .animation(.spring(response: 0.4), value: coachTip)
     }
 }
 
@@ -139,6 +233,8 @@ struct RootView: View {
     @State private var didAutoLoad = false
     @AppStorage("fd.toured") private var toured = false
     @State private var showTour = false
+    @State private var showGenre = false        // genre-first quick-start overlay
+    @State private var coachTip: String?        // transient first-beat coaching nudge
     @Environment(\.scenePhase) private var scenePhase
     @State private var recoverSnap: ProjectSnapshot?
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
@@ -177,7 +273,8 @@ struct RootView: View {
         .environmentObject(classroom)
         .environmentObject(session)
         .environmentObject(midi)
-        .overlay { if showTour { TourOverlay(settings: settings, show: $showTour) { toured = true } } }
+        .modifier(FirstRunFlow(settings: settings, showTour: $showTour, showGenre: $showGenre, coachTip: $coachTip,
+                               onTourDone: { toured = true; showGenre = true }, onPick: pickGenre))
         .onAppear {
             engine.start()
             project.pushMasterVolume()  // live master gain from the master fader (0.9 base × master.vol)
@@ -273,6 +370,20 @@ struct RootView: View {
 
     /// Bounce the song to M4A and present the share sheet — a level-independent entry point so Export is
     /// reachable even at Beginner level (where the Tracks tab, the only other export path, is hidden).
+    /// Genre quick-start pick: seed the starter beat, auto-play it ("already grooving"), land on Pads, and
+    /// nudge the first-time user toward the next step (jam / tweak / share).
+    private func pickGenre(_ id: String) {
+        showGenre = false
+        project.startFromTemplate(id)
+        tab = "pads"
+        if id == "blank" {
+            coachTip = "Tap the pads to play. Hit ● to record your beat, or draw it on the Sequence grid."
+        } else {
+            transport.start()
+            coachTip = "Your beat's playing! Tap the pads to jam, open Sequence to tweak it, or Share when you're proud."
+        }
+    }
+
     private func quickExport() {
         guard !exporting, project.hasExportableContent else { return }
         exporting = true
