@@ -8,6 +8,7 @@ struct ProjectsSheet: View {
     @EnvironmentObject var store: ProjectStore
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
+    var onNewBeat: (() -> Void)? = nil   // route "New Beat" to the genre quick-start (RootView guards unsaved work)
 
     @State private var nameField = ""
     @State private var saved = false
@@ -119,8 +120,8 @@ struct ProjectsSheet: View {
                 saveButton
             }
             HStack(spacing: 10) {
-                Button { confirmNew = true } label: {
-                    Label("New", systemImage: "doc.badge.plus").font(FDFont.ui(13, .semibold))
+                Button { if let onNewBeat { dismiss(); onNewBeat() } else { confirmNew = true } } label: {
+                    Label("New Beat", systemImage: "sparkles").font(FDFont.ui(13, .semibold))
                         .foregroundStyle(settings.inkDim)
                         .padding(.horizontal, 14).frame(height: 36)
                         .fdCard(9, fill: settings.panel2)

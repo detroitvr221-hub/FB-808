@@ -176,12 +176,17 @@ private struct FirstRunFlow: ViewModifier {
     @Binding var showTour: Bool
     @Binding var showGenre: Bool
     @Binding var coachTip: String?
+    @Binding var confirmNewBeat: Bool
     var onTourDone: () -> Void
     var onPick: (String) -> Void
     func body(content: Content) -> some View {
         content
             .overlay { if showTour { TourOverlay(settings: settings, show: $showTour, onDone: onTourDone) } }
             .overlay { if showGenre { GenrePicker(settings: settings, onPick: onPick, onClose: { showGenre = false }) } }
+            .alert("Start a new beat?", isPresented: $confirmNewBeat) {
+                Button("Discard & start new", role: .destructive) { showGenre = true }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("This clears your current beat. Save it first if you want to keep it.") }
             .overlay(alignment: .top) {
                 if let tip = coachTip {
                     Text(tip).font(FDFont.ui(13.5, .semibold)).foregroundStyle(.white)
@@ -235,6 +240,7 @@ struct RootView: View {
     @State private var showTour = false
     @State private var showGenre = false        // genre-first quick-start overlay
     @State private var coachTip: String?        // transient first-beat coaching nudge
+    @State private var confirmNewBeat = false   // guard the genre quick-start against clobbering unsaved work
     @Environment(\.scenePhase) private var scenePhase
     @State private var recoverSnap: ProjectSnapshot?
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
@@ -274,6 +280,7 @@ struct RootView: View {
         .environmentObject(session)
         .environmentObject(midi)
         .modifier(FirstRunFlow(settings: settings, showTour: $showTour, showGenre: $showGenre, coachTip: $coachTip,
+                               confirmNewBeat: $confirmNewBeat,
                                onTourDone: { toured = true; showGenre = true }, onPick: pickGenre))
         .onAppear {
             engine.start()
@@ -359,7 +366,7 @@ struct RootView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showProjects) {
-            ProjectsSheet()
+            ProjectsSheet(onNewBeat: requestNewBeat)
                 .environmentObject(settings)
                 .environmentObject(project)
                 .environmentObject(store)
@@ -370,6 +377,11 @@ struct RootView: View {
 
     /// Bounce the song to M4A and present the share sheet — a level-independent entry point so Export is
     /// reachable even at Beginner level (where the Tracks tab, the only other export path, is hidden).
+    /// "New Beat" entry → genre quick-start, guarding unsaved work (the picker's startFromTemplate clears it).
+    private func requestNewBeat() {
+        if project.hasUnsavedChanges { confirmNewBeat = true } else { showGenre = true }
+    }
+
     /// Genre quick-start pick: seed the starter beat, auto-play it ("already grooving"), land on Pads, and
     /// nudge the first-time user toward the next step (jam / tweak / share).
     private func pickGenre(_ id: String) {
