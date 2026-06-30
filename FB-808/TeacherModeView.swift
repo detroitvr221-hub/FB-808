@@ -70,6 +70,10 @@ struct TeacherModeView: View {
     private var newSubs: Int { subs.filter { !($0.sub?.reviewed ?? true) }.count }
     /// Unreviewed count for the Submissions tab badge — real remote subs when hosting, mock otherwise.
     private var pendingReview: Int { session.role == .host ? remoteSubs.filter { !$0.reviewed }.count : newSubs }
+    /// The lesson chosen in the "Assign to Class" picker, and the pattern the push buttons should send for it
+    /// (so Push Pattern / Send Practice follow the assigned lesson instead of a hardcoded Boom Bap).
+    private var assignedLesson: Kit.Lesson? { Kit.lessons.first { $0.id == classroom.assignLesson } }
+    private var assignedPatternID: String { assignedLesson?.patternID ?? "boombap" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -335,9 +339,9 @@ struct TeacherModeView: View {
             teCard("Push to Class", flex: true) {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                     pushBtn("🎛 Push Kit") { project.setBank("A"); pushToClass("Studio Kit") }
-                    pushBtn("♫ Push Pattern") { loadPattern("boombap"); pushToClass("Boom Bap pattern") }
+                    pushBtn("♫ Push Pattern") { loadPattern(assignedPatternID); pushToClass("\(Kit.pattern(assignedPatternID)?.name ?? "Pattern")") }
                     pushBtn("⏱ Push Tempo") { pushToClass("Tempo \(project.bpm) BPM") }
-                    pushBtn("✦ Send Practice") { previewPattern("boombap"); pushToClass("Practice drill"); openTab("learn") }
+                    pushBtn("✦ Send Practice") { previewPattern(assignedPatternID); pushToClass("Practice: \(assignedLesson?.title ?? "drill")"); openTab("learn") }
                 }
                 Text("LIVE MONITOR").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkFaint).padding(.top, 8)
                 if !classroom.live {
@@ -685,8 +689,14 @@ struct TeacherModeView: View {
     }
     private var liveCode: String { session.roomCode.isEmpty ? "—" : session.roomCode }
     private func assign() {
-        let l = Kit.lessons.first { $0.id == classroom.assignLesson }
-        flash("Assigned \u{201C}\(l?.title ?? "lesson")\u{201D} to the class")
+        let title = assignedLesson?.title ?? "lesson"
+        // Honest feedback: only claim it reached the class when actually hosting; otherwise it's just selected.
+        if classroom.live {
+            if let pid = assignedLesson?.patternID { previewPattern(pid) }
+            pushToClass("Assigned \u{201C}\(title)\u{201D}")
+        } else {
+            flash("Lesson set: \u{201C}\(title)\u{201D} — start a Live Class to send it")
+        }
     }
     private func sendFeedback(_ id: String, _ text: String) {
         classroom.sendFeedback(id, text)   // persists via the store's didSet (#159)

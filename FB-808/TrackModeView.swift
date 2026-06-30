@@ -452,6 +452,20 @@ struct TrackModeView: View {
                         project.checkpoint("clip", coalesce: false)
                         project.clips[t.id, default: []].append(Clip(s: bar, l: 2, color: t.color))
                     })
+            // empty-lane affordance: a dashed "tap to add" ghost in bar 1 so the tap target is visible
+            // (the Color.clear hit layer behind handles the actual tap).
+            if (project.clips[t.id] ?? []).isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+                    Text("tap to add").font(FDFont.mono(9, .bold))
+                }
+                .foregroundStyle(settings.inkFaint)
+                .frame(width: max(barPx, 2 * barPx - 2), height: 50)
+                .background(RoundedRectangle(cornerRadius: 7).stroke(settings.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5])))
+                .offset(x: 1, y: 7)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             // clips (on top, so their own drag / double-tap gestures win)
             ForEach(Array((project.clips[t.id] ?? []).enumerated()), id: \.element.id) { (i, c) in
                 clipView(t, i: i, c: c, barPx: barPx)
