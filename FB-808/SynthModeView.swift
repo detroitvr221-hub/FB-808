@@ -798,6 +798,17 @@ struct KnobView: View {
                     .rotationEffect(.degrees(-135 + n * 270))
             }
             .frame(width: size, height: size)
+            // Discoverability: knobs that open a detail panel get a small "tap for more" chevron badge,
+            // so the tap-vs-drag dual gesture isn't invisible (drag changes the value, tap opens controls).
+            .overlay(alignment: .bottom) {
+                if onTap != nil {
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .black))
+                        .foregroundStyle(settings.inkDim)
+                        .padding(3).background(Circle().fill(settings.panel).overlay(Circle().stroke(settings.line, lineWidth: 1)))
+                        .offset(y: 5)
+                        .accessibilityHidden(true)
+                }
+            }
             .contentShape(Circle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { v in
@@ -825,6 +836,8 @@ struct KnobView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(label))
         .accessibilityValue(Text(format(value)))
+        .accessibilityHint(Text(onTap != nil ? "Swipe up or down to adjust. Double-tap for more controls." : ""))
+        .accessibilityAction { onTap?() }   // VoiceOver: reach the detail panel that sighted users get by tapping
         .accessibilityAdjustableAction { dir in
             // Wide audio ranges (e.g. 80–12000 Hz at 20-step) need a coarser VoiceOver nudge than the
             // drag step or each swipe moves the value imperceptibly: ~1/20 of the range, but never below step.

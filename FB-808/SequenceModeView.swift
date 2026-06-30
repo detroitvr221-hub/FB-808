@@ -352,6 +352,12 @@ struct SequenceModeView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("VELOCITY").font(FDFont.mono(10, .bold)).tracking(1).foregroundStyle(settings.inkFaint)
                 Text(Kit.padByID[sel]?.label ?? "").font(FDFont.mono(12, .bold)).foregroundStyle(settings.inkDim)
+                // Discoverability cue for the hidden long-press → per-step inspector (probability/conditions/locks).
+                HStack(spacing: 3) {
+                    Image(systemName: "hand.tap.fill").font(.system(size: 8))
+                    Text("drag = level · hold = edit").font(FDFont.mono(8, .bold)).lineLimit(1).minimumScaleFactor(0.8)
+                }
+                .foregroundStyle(settings.inkFaint).padding(.top, 1)
             }
             .frame(width: labelW, alignment: .leading)
 
