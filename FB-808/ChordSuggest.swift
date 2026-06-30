@@ -164,7 +164,7 @@ struct ChordSuggestView: View {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
                         Capsule().fill(settings.panel2)
-                        Capsule().fill(col.opacity(0.8)).frame(width: max(4, g.size.width * p / 0.55))   // 0.55 ≈ max prob → full bar
+                        Capsule().fill(col.opacity(0.8)).frame(width: max(4, g.size.width * p))   // bar-fill = the % shown (honest)
                     }
                 }.frame(height: 12)
                 Text("\(Int(p * 100))%").font(FDFont.mono(11, .bold)).foregroundStyle(settings.inkDim).frame(width: 40, alignment: .trailing)

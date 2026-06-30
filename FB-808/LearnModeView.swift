@@ -690,60 +690,35 @@ struct LeagueView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var progress: ProgressStore
 
-    private struct Member: Identifiable { let id = UUID(); let name: String; let xp: Int; let me: Bool }
-    private static let peers: [(String, Int)] = [
-        ("Maya", 720), ("Leo", 540), ("Aisha", 480), ("Sam", 410), ("Diego", 360),
-        ("Priya", 300), ("Jordan", 250), ("Kim", 210), ("Tariq", 170), ("Noa", 120), ("Eli", 80), ("Zoe", 40),
-    ]
-    private var members: [Member] {
-        var m = LeagueView.peers.map { Member(name: $0.0, xp: $0.1, me: false) }
-        m.append(Member(name: "You", xp: progress.totalXP, me: true))
-        return m.sorted { $0.xp > $1.xp }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Eyebrow(text: "This Week · Beat Lab League")
-            HStack(spacing: 10) {
-                Text("League").font(FDFont.display(40, .bold)).foregroundStyle(settings.ink)
-                Text("SAMPLE").font(FDFont.mono(10, .bold)).tracking(1).foregroundStyle(settings.accent)
-                    .padding(.vertical, 3).padding(.horizontal, 8)
-                    .background(Capsule().fill(settings.accent.opacity(0.15)))
-            }
+            Eyebrow(text: "This Week · Class League")
+            Text("League").font(FDFont.display(40, .bold)).foregroundStyle(settings.ink)
             Text("Compete with your class, not the whole world — winnable by design. Top 3 promote, bottom 3 drop a tier.")
                 .font(FDFont.ui(15)).foregroundStyle(settings.inkDim)
-            Text("These classmates are sample data to preview how rankings work — real classroom leagues arrive with Teacher sync.")
-                .font(FDFont.ui(12.5)).foregroundStyle(settings.inkFaint)
-            ScrollView {
-                VStack(spacing: 7) {
-                    let mem = members
-                    ForEach(Array(mem.enumerated()), id: \.element.id) { (i, m) in row(rank: i + 1, m, total: mem.count) }
+            // Honest empty state — no fake classmates. The real leaderboard fills in once a class is joined.
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle().fill(settings.accent.opacity(0.14)).frame(width: 76, height: 76)
+                    Image(systemName: "person.3.fill").font(.system(size: 32)).foregroundStyle(settings.accent)
                 }
-                .padding(.top, 16)
+                Text("Join a class to start a league").font(FDFont.display(19, .bold)).foregroundStyle(settings.ink)
+                Text("Your teacher's class code turns this into a live weekly leaderboard. Until then, keep earning XP — it carries in.")
+                    .font(FDFont.ui(13.5)).foregroundStyle(settings.inkDim)
+                    .multilineTextAlignment(.center).frame(maxWidth: 380).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.fill").font(.system(size: 13)).foregroundStyle(settings.accent)
+                    Text("\(progress.totalXP) XP this week").font(FDFont.mono(14, .bold)).foregroundStyle(settings.ink)
+                }
+                .padding(.vertical, 9).padding(.horizontal, 16)
+                .background(Capsule().fill(settings.panel2))
             }
-            .scrollIndicators(.hidden)
+            .frame(maxWidth: .infinity).padding(.vertical, 40)
+            .background(RoundedRectangle(cornerRadius: 18).fill(settings.panel))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(settings.line, lineWidth: 1))
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: 560, alignment: .topLeading)
-    }
-
-    private func row(rank: Int, _ m: Member, total: Int) -> some View {
-        let promote = rank <= 3
-        let demote = rank > total - 3
-        let zone = promote ? settings.theme.good : (demote ? settings.theme.miss : settings.inkFaint)
-        return HStack(spacing: 14) {
-            Text("\(rank)").font(FDFont.mono(15, .bold)).foregroundStyle(zone).frame(width: 26)
-            Circle().fill(m.me ? settings.accent : settings.panel2)
-                .frame(width: 34, height: 34)
-                .overlay(Text(String(m.name.prefix(1))).font(FDFont.display(15, .bold)).foregroundStyle(m.me ? .white : settings.inkDim))
-            Text(m.name).font(FDFont.display(16, m.me ? .bold : .semibold)).foregroundStyle(m.me ? settings.accent : settings.ink)
-            if promote { Image(systemName: "arrow.up.circle.fill").font(.system(size: 13)).foregroundStyle(settings.theme.good) }
-            else if demote { Image(systemName: "arrow.down.circle.fill").font(.system(size: 13)).foregroundStyle(settings.theme.miss) }
-            Spacer()
-            Text("\(m.xp) XP").font(FDFont.mono(13, .bold)).foregroundStyle(settings.inkDim)
-        }
-        .padding(.vertical, 11).padding(.horizontal, 16)
-        .background(RoundedRectangle(cornerRadius: 12).fill(m.me ? settings.accent.opacity(0.12) : settings.panel))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(m.me ? settings.accent.opacity(0.5) : settings.line, lineWidth: 1))
     }
 }
 
