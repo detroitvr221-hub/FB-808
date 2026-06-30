@@ -235,13 +235,22 @@ struct TeacherModeView: View {
     }
 
     private func studentCard(_ st: Student) -> some View {
-        // The local "You" row has no submission to review — tapping it is a no-op.
-        Button { if st.id != ClassroomStore.localRowID { classroom.selectedID = st.id; tab = "review" } } label: {
+        // The local "You" row has no submission to review — tapping it is a no-op — and is shown distinctly
+        // (accent border + "YOU" badge) so it doesn't read as just another student.
+        let isMe = st.id == ClassroomStore.localRowID
+        return Button { if !isMe { classroom.selectedID = st.id; tab = "review" } } label: {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 9) {
                     avatar(st, size: 34)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(st.name).font(FDFont.display(14, .semibold)).foregroundStyle(settings.ink)
+                        HStack(spacing: 6) {
+                            Text(st.name).font(FDFont.display(14, .semibold)).foregroundStyle(settings.ink)
+                            if isMe {
+                                Text("YOU").font(FDFont.mono(8, .bold)).tracking(0.5).foregroundStyle(settings.accent)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Capsule().fill(settings.accent.opacity(0.18)))
+                            }
+                        }
                         statusPill(st.status)
                     }
                     Spacer()
@@ -259,6 +268,7 @@ struct TeacherModeView: View {
             }
             .padding(13)
             .fdCard(14, fill: settings.panel)
+            .overlay(isMe ? RoundedRectangle(cornerRadius: 14).stroke(settings.accent.opacity(0.55), lineWidth: 1.5) : nil)
         }.buttonStyle(.plain)
     }
 
