@@ -41,6 +41,7 @@ struct SampleModeView: View {
     @State private var grainSpread = 0.3
     @State private var grainPitch = 0.0
     @State private var selectedSlice: Int?      // for Split / Merge / Extract
+    @State private var stemBusy = false          // a stem split is running — disable buttons + show progress (no double-run, no UI freeze)
     @State private var gpuBuf: SampleBuffer?     // memoized GPU waveform buffer (rebuilt only when the audio changes, not on trim drags)
 
     private var sample: SampleState? { project.sample }
@@ -398,8 +399,16 @@ struct SampleModeView: View {
 
                     PanelCard(title: "Stem Split") {
                         actionButton("⎘ Split → Drums / Melody", wide: true) { splitStems() }
+                            .disabled(stemBusy).opacity(stemBusy ? 0.5 : 1)
                         actionButton(FourStemSeparator.modelAvailable ? "⎙ Split → 4 Stems" : "⎙ 4 Stems (needs model)", wide: true) { splitFourStems() }
-                        Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a bundled Core ML model — drop `StemSeparator.mlpackage` into the app target to enable it (see FourStemSeparator.swift); until then it falls back to the 2-way split.")
+                            .disabled(stemBusy).opacity(stemBusy ? 0.5 : 1)
+                        if stemBusy {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Separating stems…").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.accent)
+                            }.accessibilityElement().accessibilityLabel(Text("Separating stems, please wait"))
+                        }
+                        Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a bundled Core ML model — the first 30s are separated on the Neural Engine, which can take a few seconds.")
                             .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -501,28 +510,41 @@ struct SampleModeView: View {
     }
     /// Split the loaded sample into drums + melody stems and drop them onto the first two pads (D1).
     private func splitStems() {
-        guard sample != nil else { return }
-        flash("Separating stems…")
-        let (h, p) = engine.splitStems()
-        guard !p.isEmpty, !h.isEmpty else { flash("Couldn't split this sample"); return }
-        let drumID = Kit.pads[0].id, melID = Kit.pads[1].id
-        project.setPadSample(drumID, data: p, name: "Drums")
-        project.setPadSample(melID, data: h, name: "Melody")
-        flash("Split → Drums on \(Kit.padByID[drumID]?.label ?? "pad 1") · Melody on \(Kit.padByID[melID]?.label ?? "pad 2")")
+        guard sample != nil, !stemBusy else { return }
+        stemBusy = true; flash("Separating stems…")
+        let src = engine.currentSampleForStems()   // grab the buffer on-main, then do the heavy STFT off-main
+        Task.detached(priority: .userInitiated) {
+            let (h, p) = StemSplit.harmonicPercussive(src.data, sr: src.sr)   // was a synchronous main-actor call → UI freeze
+            await MainActor.run {
+                stemBusy = false
+                guard !p.isEmpty, !h.isEmpty else { flash("Couldn't split this sample"); return }
+                let drumID = Kit.pads[0].id, melID = Kit.pads[1].id
+                project.setPadSample(drumID, data: p, name: "Drums")
+                project.setPadSample(melID, data: h, name: "Melody")
+                flash("Split → Drums on \(Kit.padByID[drumID]?.label ?? "pad 1") · Melody on \(Kit.padByID[melID]?.label ?? "pad 2")")
+            }
+        }
     }
     /// Split into 4 stems via the bundled Core ML model (D1 full path); falls back to the 2-way split if
     /// no model is bundled. Runs off the main thread (inference can take seconds) and applies on main.
     private func splitFourStems() {
-        guard sample != nil else { return }
+        guard sample != nil, !stemBusy else { return }
         guard FourStemSeparator.modelAvailable else {
             flash("No 4-stem model bundled — using Drums/Melody"); splitStems(); return
         }
-        flash("Separating 4 stems…")
+        stemBusy = true; flash("Separating 4 stems… this can take a moment")
         let src = engine.currentSampleForStems()
         Task.detached(priority: .userInitiated) {
             let stems = FourStemSeparator.separate(src.data, engineSR: src.sr)
             await MainActor.run {
-                guard let stems, !stems.isEmpty else { flash("4-stem separation failed"); return }
+                stemBusy = false
+                // The model can fail to run where there's no Neural Engine (e.g. the Simulator) or under a
+                // compute error — fall back to the on-device 2-way split instead of a dead end.
+                guard let stems, !stems.isEmpty else {
+                    flash("4-stem model couldn't run here — using Drums/Melody")
+                    splitStems()
+                    return
+                }
                 for (i, st) in stems.prefix(Kit.pads.count).enumerated() {
                     project.setPadSample(Kit.pads[i].id, data: st.audio, name: st.name)
                 }
