@@ -838,11 +838,13 @@ final class Project: ObservableObject {
 
     /// Live keyboard note-on (sustains until noteOff). Plays the current patch — or, with
     /// Play Assist on, expands to a chord and/or feeds the arpeggiator.
-    func synthNoteOn(_ key: String, midi: Int) {
+    /// `vel` is a 0…1 dynamics scalar (on-screen keyboard passes 1.0 → unchanged; MIDI passes the
+    /// controller's velocity so soft/hard strikes differ instead of all playing at one level) (#MIDI-02).
+    func synthNoteOn(_ key: String, midi: Int, vel: Double = 1.0) {
         if chordMode == "off" && arpMode == "off" {
-            engine.synthOn(key, midi: midi, patch: editPatch, vel: synthGain)   // play the active part you're editing, not always Lead
+            engine.synthOn(key, midi: midi, patch: editPatch, vel: synthGain * max(0.05, min(1, vel)))   // play the active part you're editing, not always Lead
         } else {
-            assistNoteOn(key, midi)
+            assistNoteOn(key, midi, vel: vel)
         }
     }
     func synthNoteOff(_ key: String) {

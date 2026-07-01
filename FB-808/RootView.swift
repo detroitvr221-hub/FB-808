@@ -648,7 +648,7 @@ struct RootView: View {
                 }
             }
         }
-        midi.onNoteOn  = { [weak project, weak engine] note, _ in engine?.start(); project?.synthNoteOn("midi-\(note)", midi: note) }
+        midi.onNoteOn  = { [weak project, weak engine] note, vel in engine?.start(); project?.synthNoteOn("midi-\(note)", midi: note, vel: vel) }   // pass controller velocity (#MIDI-02)
         midi.onNoteOff = { [weak project] note in project?.synthNoteOff("midi-\(note)") }
         midi.onPanic   = { [weak engine] in engine?.allNotesOff() }
         midi.start()

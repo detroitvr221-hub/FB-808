@@ -34,11 +34,12 @@ extension Project {
 
     // MARK: note routing
 
-    func assistNoteOn(_ key: String, _ midi: Int) {
+    func assistNoteOn(_ key: String, _ midi: Int, vel: Double = 1.0) {
         let tones = chordTones(midi)
         assistHeld[key] = tones
         if arpMode == "off" {
-            for t in tones { engine.synthOn("\(key)#\(t)", midi: t, patch: editPatch, vel: synthGain) }
+            let g = synthGain * max(0.05, min(1, vel))   // honor MIDI velocity on chord notes (#MIDI-02)
+            for t in tones { engine.synthOn("\(key)#\(t)", midi: t, patch: editPatch, vel: g) }
         } else {
             restartArp()   // (re)seed the arp clock with the new held set
         }
