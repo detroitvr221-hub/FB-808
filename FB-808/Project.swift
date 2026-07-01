@@ -908,7 +908,8 @@ final class Project: ObservableObject {
     func removeAudioClip(_ id: UUID) {
         checkpoint("removeClip", coalesce: false)
         audioClips.removeAll { $0.id == id }
-        deleteClipWAV(id: id)
+        // WAV intentionally NOT deleted here — undo must be able to restore the recorded take.
+        // The launch-time orphan sweep reclaims WAVs that no saved project references (#PERSIST-01).
     }
     /// Rebuild in-memory clips from saved metadata (reads the WAVs back). Called on project load.
     func loadAudioClips(from metas: [AudioClipMeta]) {
@@ -929,6 +930,27 @@ final class Project: ObservableObject {
             audioClips[i].startBar = max(0, min(songBars - 1, bar))
         }
     }
+    /// Reconcile in-memory `audioClips` to restored undo/redo metadata. Move/gain/mute undos reuse the
+    /// in-memory audio; a re-added clip re-reads its still-on-disk WAV (deletion is deferred to the
+    /// orphan sweep, so the take is always recoverable within a session). (#PERSIST-01)
+    private func restoreAudioClips(from metas: [AudioClipMeta]) {
+        let byID = Dictionary(audioClips.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var rebuilt: [AudioClip] = []
+        for m in metas {
+            guard let uuid = UUID(uuidString: m.id) else { continue }
+            if var existing = byID[uuid] {
+                existing.startBar = m.startBar; existing.gain = m.gain; existing.muted = m.muted
+                rebuilt.append(existing)
+            } else if let data = readClipWAV(id: uuid, targetSR: engine.sampleRate), !data.isEmpty {
+                var clip = AudioClip(track: m.track, startBar: m.startBar, data: data,
+                                     dataR: readClipWAVRight(id: uuid, targetSR: engine.sampleRate),
+                                     wave: Project.downsamplePeaks(data), name: m.name, durSec: Double(data.count) / engine.sampleRate)
+                clip.id = uuid; clip.gain = m.gain; clip.muted = m.muted
+                rebuilt.append(clip)
+            }   // else: WAV genuinely gone (shouldn't happen mid-session) → drop, matching repaired()
+        }
+        audioClips = rebuilt
+    }
 
     // MARK: pad sample import (Pad Inspector → Sound → Import)
 
@@ -942,7 +964,8 @@ final class Project: ObservableObject {
     /// The pad-sample assignment work WITHOUT an undo checkpoint, so batch ops (chop-to-pads)
     /// can collapse to a single undo step.
     private func applyPadSample(_ padID: String, data: [Float], name: String) {
-        if let old = padParams[padID]?.sampleFile { deletePadSampleWAV(file: old) }
+        // Old pad WAV intentionally kept — an undo snapshot may still reference it. The orphan sweep
+        // reclaims WAVs no saved project references; deleting here destroyed the take on undo (#PERSIST-02).
         let file = UUID().uuidString + ".wav"
         writePadSampleWAV(data, file: file, sr: engine.sampleRate)
         padSampleData[padID] = data
@@ -1027,7 +1050,7 @@ final class Project: ObservableObject {
 
     /// Remove an imported sample from a pad (reverts to its synth / override sound).
     func clearPadSampleFor(_ padID: String) {
-        if let old = padParams[padID]?.sampleFile { deletePadSampleWAV(file: old) }
+        // WAV kept for undo; orphan sweep reclaims it later (#PERSIST-02).
         padSampleData[padID] = nil
         engine.clearPadSample(padID)
         setPadParam(padID) { $0.sampleFile = nil; $0.sampleName = nil }
@@ -1279,7 +1302,14 @@ final class Project: ObservableObject {
     /// Run a destructive/tool sampler edit as ONE undo step, capturing the engine's pre-edit
     /// `sampleOriginal` so undo/redo can restore the AUDIO, not just SampleState.
     func mutateSample(_ key: String, coalesce: Bool = false, _ body: () -> Void) {
-        guard sample != nil else { body(); return }
+        guard sample != nil else {
+            // First sample into a blank project: there's no pre-edit buffer to capture, but this MUST
+            // still checkpoint so the project is marked dirty (autosave gates on it) and the take is
+            // undoable — otherwise the very first recording/import was lost on background/crash (#SAMPLING-01).
+            checkpoint("smp:\(key)", coalesce: false)
+            body()
+            return
+        }
         let token = nextBufferToken; nextBufferToken += 1
         pendingBufferToken = token
         let pushed = checkpoint("smp:\(key)", coalesce: coalesce)   // snapshot() stamps pendingBufferToken
@@ -1350,7 +1380,9 @@ final class Project: ObservableObject {
             lanes = s.lanes; melody = s.melody; stepMeta = s.stepMeta ?? [:]; parts = s.parts ?? []
         }
         sample = s.sample; sliceBank = s.sliceBank   // always restore SampleState (undo of sampler edits); engine buffer re-synced in undo/redo for destructive ops (#19)
-        _ = resetSample   // (kept for call-site clarity; the buffer reload is driven by restore()/undo())
+        // undo/redo must also restore the arrangement's audio clips (load path uses loadAudioClips()
+        // separately). Without this, undoing an add/remove/move left audioClips untouched (#PERSIST-01).
+        if !resetSample { restoreAudioClips(from: s.audioClips ?? []) }
         pushChannelFX()   // re-sync the engine bus pool to busOrder now that `tracks` is set (G3 owned buses)
     }
 
@@ -1378,11 +1410,21 @@ final class Project: ObservableObject {
         return true
     }
 
+    /// Snapshot of which pad currently points at which imported one-shot file. Undo/redo compares
+    /// before vs after so it only re-reads pad WAVs when the assignment actually changed (#PERSIST-02).
+    private func padSampleRefs() -> [String: String] {
+        var m: [String: String] = [:]
+        for (id, pp) in padParams { if let f = pp.sampleFile { m[id] = f } }
+        return m
+    }
+
     func undo() {
         guard let prev = undoStack.popLast() else { return }
         redoStack.append(captureForRedo(crossingSampleEdit: prev.sampleBufferToken != nil))
+        let padRefsBefore = padSampleRefs()
         applyState(prev, resetSample: false)          // restores SampleState too
         restoreSampleBufferToken(prev.sampleBufferToken)   // re-sync engine audio for destructive sampler edits (#19)
+        if padSampleRefs() != padRefsBefore { loadPadSamples() }   // re-register imported pad one-shots (#PERSIST-02)
         lastCheckpointKey = nil
         canUndo = !undoStack.isEmpty
         canRedo = true
@@ -1391,8 +1433,10 @@ final class Project: ObservableObject {
     func redo() {
         guard let next = redoStack.popLast() else { return }
         undoStack.append(captureForRedo(crossingSampleEdit: next.sampleBufferToken != nil))
+        let padRefsBefore = padSampleRefs()
         applyState(next, resetSample: false)
         restoreSampleBufferToken(next.sampleBufferToken)
+        if padSampleRefs() != padRefsBefore { loadPadSamples() }   // re-register imported pad one-shots (#PERSIST-02)
         lastCheckpointKey = nil
         canUndo = true
         canRedo = !redoStack.isEmpty
