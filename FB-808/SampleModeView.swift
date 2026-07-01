@@ -717,6 +717,7 @@ struct SampleModeView: View {
     private func stopAudition() {
         auditionTask?.cancel(); auditionTask = nil
         playPos = nil; looping = false
+        engine.stopSampleAudition()   // actually silence the sounding sample voice, not just the UI timer (#SAMPLING-05)
     }
 
     private func audition() {

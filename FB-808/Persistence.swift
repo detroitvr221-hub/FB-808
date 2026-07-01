@@ -29,23 +29,31 @@ nonisolated func writeWAVData(_ data: [Float], to url: URL, sr: Double = AudioDe
         AVLinearPCMBitDepthKey: 16, AVLinearPCMIsBigEndianKey: false,
         AVLinearPCMIsFloatKey: false, AVLinearPCMIsNonInterleaved: false,
     ]
-    try? FileManager.default.removeItem(at: url)
+    // Write to a temp sibling then atomically replace the destination, so a mid-write kill (backgrounding,
+    // OOM) never leaves a truncated/partial WAV that decodes nil on next launch (#PERSIST-04).
+    let tmp = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".tmp")
+    try? FileManager.default.removeItem(at: tmp)
     do {
-        let file = try AVAudioFile(forWriting: url, settings: settings)
+        let file = try AVAudioFile(forWriting: tmp, settings: settings)
         let pf = file.processingFormat
         let chunk = 16_384
         var i = 0
         while i < data.count {
             let count = min(chunk, data.count - i)
             guard let buf = AVAudioPCMBuffer(pcmFormat: pf, frameCapacity: AVAudioFrameCount(count)),
-                  let ch = buf.floatChannelData else { return false }
+                  let ch = buf.floatChannelData else { try? FileManager.default.removeItem(at: tmp); return false }
             buf.frameLength = AVAudioFrameCount(count)
             for j in 0..<count { ch[0][j] = data[i + j] }
             try file.write(from: buf)
             i += count
         }
+    } catch { fdLog.error("wav write error: \(error.localizedDescription, privacy: .public)"); try? FileManager.default.removeItem(at: tmp); return false }
+    // AVAudioFile finalized on scope exit above; now swap it into place.
+    do {
+        if FileManager.default.fileExists(atPath: url.path) { _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp) }
+        else { try FileManager.default.moveItem(at: tmp, to: url) }
         return true
-    } catch { fdLog.error("wav write error: \(error.localizedDescription, privacy: .public)"); return false }
+    } catch { fdLog.error("wav rename error: \(error.localizedDescription, privacy: .public)"); try? FileManager.default.removeItem(at: tmp); return false }
 }
 
 nonisolated func readWAVData(at url: URL, targetSR: Double? = nil) -> [Float]? {

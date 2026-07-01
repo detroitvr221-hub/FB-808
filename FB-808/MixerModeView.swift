@@ -191,12 +191,14 @@ struct MixerModeView: View {
                 .padding(.bottom, 12)
                 Group {
                     if mixTab == 0 {
-                        HStack(spacing: 12) {
-                            ForEach(Kit.channels) { c in
-                                MixStrip(ch: c.id, name: c.name, color: c.color, meter: meters[c.id] ?? 0, master: false)
+                        ScrollView(.horizontal, showsIndicators: false) {   // narrow layouts (Split View) cramped the strips (#UXA11Y-03)
+                            HStack(spacing: 12) {
+                                ForEach(Kit.channels) { c in
+                                    MixStrip(ch: c.id, name: c.name, color: c.color, meter: meters[c.id] ?? 0, master: false)
+                                }
+                                MixStrip(ch: "melody", name: FDPalette.melodyName, color: FDPalette.melody, meter: meters["melody"] ?? 0, master: false)
+                                MixStrip(ch: "master", name: "MASTER", color: settings.accent, meter: meters["master"] ?? 0, master: true)
                             }
-                            MixStrip(ch: "melody", name: FDPalette.melodyName, color: FDPalette.melody, meter: meters["melody"] ?? 0, master: false)
-                            MixStrip(ch: "master", name: "MASTER", color: settings.accent, meter: meters["master"] ?? 0, master: true)
                         }
                     } else {
                         ScrollView(.horizontal, showsIndicators: false) {

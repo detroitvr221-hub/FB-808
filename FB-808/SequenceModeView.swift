@@ -347,6 +347,8 @@ struct SequenceModeView: View {
                     }
                 }
         }
+        .frame(width: 30, height: 34)      // widen the hit region (glyph stays 19×19) toward the 44pt guideline (#UXA11Y-04)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel(Text(s == "S" ? "Solo" : "Mute"))
         .accessibilityValue(Text(on ? "On" : "Off"))

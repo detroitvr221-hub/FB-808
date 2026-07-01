@@ -617,6 +617,8 @@ final class AudioEngine: ObservableObject {
         core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel, pan: pan)
     }
     func stopClips() { core.stopClips() }
+    /// Stop any sample-audition voices sounding on the sample channel (Sample-tab Stop / leaving the tab). (#SAMPLING-05)
+    func stopSampleAudition() { core.stopClips(channel: Self.sampleChannel) }
 
     /// Out-of-band review playback (e.g. a student submission in the Teacher console). Routes a fully
     /// decoded clip through the engine's master graph instead of a side `AVPlayer`, so ALL audio runs
