@@ -698,6 +698,16 @@ struct TrackModeView: View {
                                 let v = b < project.songAuto.count ? project.songAuto[b] : 1
                                 RoundedRectangle(cornerRadius: 2).fill(settings.accent.opacity(0.7))
                                     .frame(maxWidth: .infinity).frame(height: max(2, CGFloat(v) * 40))
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityLabel(Text("Dynamics bar \(b + 1)"))
+                                    .accessibilityValue(Text("\(Int(v * 100))%"))
+                                    .accessibilityAdjustableAction { dir in
+                                        switch dir {
+                                        case .increment: project.setSongAutoBar(b, min(1, v + 0.1))
+                                        case .decrement: project.setSongAutoBar(b, max(0, v - 0.1))
+                                        @unknown default: break
+                                        }
+                                    }
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(.vertical, 2)
@@ -815,6 +825,17 @@ extension TrackModeView {
                     guard armed, abs(v.translation.width) < 6 else { return }
                     project.punchInBar = max(0, min(BARS - 1, Int(v.location.x / barPx)))
                 })
+                .accessibilityHidden(!armed)
+                .accessibilityLabel(Text("Record start position"))
+                .accessibilityValue(Text("bar \(project.punchInBar + 1)"))
+                .accessibilityHint(Text("Adjust to move where recording begins"))
+                .accessibilityAdjustableAction { dir in
+                    switch dir {
+                    case .increment: project.punchInBar = min(BARS - 1, project.punchInBar + 1)
+                    case .decrement: project.punchInBar = max(0, project.punchInBar - 1)
+                    @unknown default: break
+                    }
+                }
             ForEach(project.audioClips.filter { $0.track == t.id }) { clip in
                 audioClipView(clip, barPx: barPx, barSec: barSec)
             }
@@ -850,6 +871,19 @@ extension TrackModeView {
             }
             .onEnded { _ in audioDrag = nil })
         .onTapGesture { editClip = clip.id }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("\(clip.name) audio clip"))
+        .accessibilityValue(Text("bar \(clip.startBar + 1)\(clip.muted ? ", muted" : "")"))
+        .accessibilityHint(Text("Adjust to move. Double-tap to edit."))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAdjustableAction { dir in
+            switch dir {
+            case .increment: project.moveAudioClip(clip.id, toBar: min(BARS - 1, clip.startBar + 1))
+            case .decrement: project.moveAudioClip(clip.id, toBar: max(0, clip.startBar - 1))
+            @unknown default: break
+            }
+        }
+        .accessibilityAction(named: Text("Edit clip")) { editClip = clip.id }
         .popover(isPresented: Binding(get: { editClip == clip.id }, set: { if !$0 { editClip = nil } })) {
             clipInspector(clip)
         }

@@ -149,6 +149,7 @@ struct SynthModeView: View {
     private var presetBrowser: some View {
         ZStack {
             Color.black.opacity(0.5).ignoresSafeArea().contentShape(Rectangle()).onTapGesture { showBrowser = false }
+                .accessibilityLabel(Text("Close")).accessibilityAddTraits(.isButton).accessibilityAction { showBrowser = false }
             VStack(spacing: 0) {
                 HStack {
                     Text("Choose a Sound").font(FDFont.display(19, .bold)).foregroundStyle(settings.ink)
