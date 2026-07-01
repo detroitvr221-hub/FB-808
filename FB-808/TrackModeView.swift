@@ -388,7 +388,7 @@ struct TrackModeView: View {
                 if t.frozenToAudio {
                     Button { project.unfreezeTrack(t.id) } label: { Label("Unfreeze", systemImage: "arrow.counterclockwise") }
                 } else {
-                    Button { _ = project.freezeTrack(t.id) } label: { Label("Freeze to Audio", systemImage: "snowflake") }
+                    Button { Task { @MainActor in _ = await project.freezeTrack(t.id) } } label: { Label("Freeze to Audio", systemImage: "snowflake") }
                 }
             }
             if !LEGACY_TRACK_IDS.contains(t.id) {

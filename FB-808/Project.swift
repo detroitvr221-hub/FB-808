@@ -235,6 +235,7 @@ final class Project: ObservableObject {
     @Published var quantize = "1/16"
     @Published var barSteps = 16        // steps per bar: 16=4/4, 12=3/4, 8=2/4 (A13)
     @Published var playing = false
+    @Published var isBouncing = false   // an offline render (auto-master / resample / freeze) is running — drives busy UI (#ARCH-01)
     @Published var recording = false
     @Published var micRecordFailed = false   // mic permission denied / tap failed → surface "enable mic access" (transient)
     @Published var metronome = true
@@ -1002,9 +1003,10 @@ final class Project: ObservableObject {
     /// Resample (MPC-style): bounce the current pattern — drums + melody + parts + FX —
     /// to a new one-shot sample on `padID`, exactly `bars` long so it loops seamlessly.
     /// You can then chop it, retune it, or play it like any pad sample: the core MPC loop.
-    func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample") {
+    func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample") async {
         let plan = buildExportPlan(loopBarsOverride: bars)
-        let (l, r) = renderOffline(plan)   // trims trailing silence, so it may be shorter than a full bar
+        isBouncing = true; defer { isBouncing = false }
+        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor so the UI stays live (#ARCH-01)
         guard !l.isEmpty else { return }
         let barSec = Double(max(1, barSteps)) * (60.0 / Double(bpm)) / 4.0
         let frames = max(1, Int((Double(bars) * barSec * engine.sampleRate).rounded()))   // exact bar length → seamless loop
@@ -1020,8 +1022,10 @@ final class Project: ObservableObject {
     /// corrective high-shelf, and arm the limiter so the louder result can't clip. Returns a summary for
     /// the UI, or nil if there's nothing to analyze. Undoable (master fader + master-bus checkpoints).
     @discardableResult
-    func autoMaster() -> String? {
-        let (l, r) = renderOffline(buildExportPlan())
+    func autoMaster() async -> String? {
+        let plan = buildExportPlan()
+        isBouncing = true; defer { isBouncing = false }
+        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor (#ARCH-01)
         let n = min(l.count, r.count)
         guard n > 1000 else { return nil }
         let coef = exp(-2.0 * .pi * 2000.0 / engine.sampleRate)   // ~2 kHz split for a coarse low/high balance

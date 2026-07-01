@@ -225,9 +225,11 @@ struct PadModeView: View {
                 PanelCard(title: "Resample") {
                     perfButton("⟳ Resample → \(Kit.padByID[sel]?.label ?? sel.uppercased())", on: false) {
                         engine.start()
-                        project.resampleToPad(sel)
-                        progress.awardCreative("resample", 6)
-                        flashToast("Resampled your beat onto \(Kit.padByID[sel]?.label ?? sel) — now chop or play it")
+                        Task { @MainActor in
+                            await project.resampleToPad(sel)   // off-main render (#ARCH-01)
+                            progress.awardCreative("resample", 6)
+                            flashToast("Resampled your beat onto \(Kit.padByID[sel]?.label ?? sel) — now chop or play it")
+                        }
                     }
                     Text("Bounce your whole beat onto the selected pad as a new sample — then chop it, retune it, or stack it. The classic MPC flip.")
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).padding(.top, 4)

@@ -274,12 +274,13 @@ extension Project {
     /// Bounce a frozen drum/synth track's content to an AudioClip on itself; live synthesis is then
     /// skipped (plays the clip → one voice instead of N). Best in Song Mode (renders the arrangement).
     @discardableResult
-    func freezeTrack(_ id: String) -> Bool {
+    func freezeTrack(_ id: String) async -> Bool {
         guard let i = tracks.firstIndex(where: { $0.id == id }),
               (tracks[i].isFrozen || tracks[i].isLinked), !tracks[i].frozenToAudio else { return false }
         let plan = buildSoloTrackPlan(tracks[i])   // resolves the link to live content if linked
         guard !plan.drums.isEmpty || !plan.synths.isEmpty else { return false }
-        let (l, r) = renderOffline(plan)
+        isBouncing = true; defer { isBouncing = false }
+        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor so the UI stays live (#ARCH-01)
         guard !l.isEmpty else { return false }
         var mono = [Float](repeating: 0, count: l.count)
         for k in 0..<l.count { mono[k] = (l[k] + r[k]) * 0.5 }
