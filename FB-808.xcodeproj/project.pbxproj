@@ -14,6 +14,7 @@
 		CDA17C0FFEE0000000000002 /* LinkKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDA17C0FFEE0000000000001 /* LinkKit.xcframework */; };
 		EE0000000000000000000005 /* PianoRoll in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000003 /* PianoRoll */; };
 		EE0000000000000000000006 /* Waveform in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000004 /* Waveform */; };
+		FD57ED0000000000000EDB03 /* StemSeparator.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = FD57ED0000000000000EDB02 /* StemSeparator.mlpackage */; settings = {ASSET_TAGS = ("stem-model", ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -60,6 +61,7 @@
 		CD8A94A82FDFBF7E0019294D /* FB-808Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "FB-808Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		CD8A94B22FDFBF7E0019294D /* FB-808UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "FB-808UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDA17C0FFEE0000000000001 /* LinkKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LinkKit.xcframework; path = Frameworks/LinkKit.xcframework; sourceTree = SOURCE_ROOT; };
+		FD57ED0000000000000EDB02 /* StemSeparator.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = StemSeparator.mlpackage; path = "FB-808/StemSeparator.mlpackage"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -69,6 +71,13 @@
 				Info.plist,
 			);
 			target = CD121C0D2FE3062700BDF787 /* FD808AU */;
+		};
+		FD57ED0000000000000EDB01 /* Exceptions for "FB-808" folder in "FB-808" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				StemSeparator.mlpackage,
+			);
+			target = CD8A94982FDFBF7C0019294D /* FB-808 */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -95,6 +104,9 @@
 		};
 		CD8A949B2FDFBF7C0019294D /* FB-808 */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FD57ED0000000000000EDB01 /* Exceptions for "FB-808" folder in "FB-808" target */,
+			);
 			path = "FB-808";
 			sourceTree = "<group>";
 		};
@@ -286,6 +298,9 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
+				KnownAssetTags = (
+					"stem-model",
+				);
 				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
@@ -344,6 +359,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FD57ED0000000000000EDB03 /* StemSeparator.mlpackage in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

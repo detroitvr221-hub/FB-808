@@ -995,6 +995,15 @@ final class Project: ObservableObject {
         padParams[padID] = p
     }
 
+    /// Assign several pads' one-shots as ONE undo step (stem split / multi-pad ops) — was N separate
+    /// checkpoints, one per pad. Empty buffers are skipped.
+    func setPadSamples(_ items: [(id: String, data: [Float], name: String)]) {
+        let real = items.filter { !$0.data.isEmpty }
+        guard !real.isEmpty else { return }
+        checkpoint("padSamples", coalesce: false)
+        for it in real { applyPadSample(it.id, data: it.data, name: it.name) }
+    }
+
     /// Chop the current sample buffer into per-pad one-shots, so the chops are playable in the
     /// step sequencer AND included in export — fixing the bank-C-only `sliceBank` dead-end where
     /// recorded/sequenced chops silently played the pad's drum voice (#26/#28/#118). One undo step.

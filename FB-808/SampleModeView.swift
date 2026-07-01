@@ -42,6 +42,7 @@ struct SampleModeView: View {
     @State private var grainPitch = 0.0
     @State private var selectedSlice: Int?      // for Split / Merge / Extract
     @State private var stemBusy = false          // a stem split is running — disable buttons + show progress (no double-run, no UI freeze)
+    @State private var pendingSplit: StemSplitKind?   // which stem split awaits the "replace pad sounds?" confirmation
     @State private var gpuBuf: SampleBuffer?     // memoized GPU waveform buffer (rebuilt only when the audio changes, not on trim drags)
 
     private var sample: SampleState? { project.sample }
@@ -72,7 +73,16 @@ struct SampleModeView: View {
         .overlay(alignment: .bottom) { if let c = confirm { toast(c) } }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { handleImport($0) }
         .fileImporter(isPresented: $sf2Importing, allowedContentTypes: [UTType(filenameExtension: "sf2") ?? .data], allowsMultipleSelection: false) { handleSF2($0) }
+        .confirmationDialog("Replace pad sounds?", isPresented: Binding(get: { pendingSplit != nil }, set: { if !$0 { pendingSplit = nil } }), titleVisibility: .visible) {
+            let kind = pendingSplit
+            Button("Split & Replace") { if kind == .four { splitFourStems() } else { splitStems() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The stems replace the sounds on the first \(pendingSplit == .four ? 4 : 2) pads. You can undo it.")
+        }
     }
+
+    enum StemSplitKind { case two, four }
 
     // MARK: main
 
@@ -398,9 +408,9 @@ struct SampleModeView: View {
                     }
 
                     PanelCard(title: "Stem Split") {
-                        actionButton("⎘ Split → Drums / Melody", wide: true) { splitStems() }
+                        actionButton("⎘ Split → Drums / Melody", wide: true) { pendingSplit = .two }
                             .disabled(stemBusy).opacity(stemBusy ? 0.5 : 1)
-                        actionButton(FourStemSeparator.modelAvailable ? "⎙ Split → 4 Stems" : "⎙ 4 Stems (needs model)", wide: true) { splitFourStems() }
+                        actionButton("⎙ Split → 4 Stems", wide: true) { pendingSplit = .four }
                             .disabled(stemBusy).opacity(stemBusy ? 0.5 : 1)
                         if stemBusy {
                             HStack(spacing: 8) {
@@ -408,7 +418,7 @@ struct SampleModeView: View {
                                 Text("Separating stems…").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.accent)
                             }.accessibilityElement().accessibilityLabel(Text("Separating stems, please wait"))
                         }
-                        Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a bundled Core ML model — the first 30s are separated on the Neural Engine, which can take a few seconds.")
+                        Text("Drums/Melody is on-device, no model. 4 Stems (vocals/drums/bass/other) uses a Core ML model downloaded once on first use, then separates the first 30s on the Neural Engine (a few seconds).")
                             .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -519,22 +529,24 @@ struct SampleModeView: View {
                 stemBusy = false
                 guard !p.isEmpty, !h.isEmpty else { flash("Couldn't split this sample"); return }
                 let drumID = Kit.pads[0].id, melID = Kit.pads[1].id
-                project.setPadSample(drumID, data: p, name: "Drums")
-                project.setPadSample(melID, data: h, name: "Melody")
+                project.setPadSamples([(drumID, p, "Drums"), (melID, h, "Melody")])   // one undo step
                 flash("Split → Drums on \(Kit.padByID[drumID]?.label ?? "pad 1") · Melody on \(Kit.padByID[melID]?.label ?? "pad 2")")
             }
         }
     }
-    /// Split into 4 stems via the bundled Core ML model (D1 full path); falls back to the 2-way split if
-    /// no model is bundled. Runs off the main thread (inference can take seconds) and applies on main.
+    /// Split into 4 stems via the Core ML model, downloading it on demand (On-Demand Resource) the first
+    /// time. Falls back to the 2-way split if the model can't be fetched or run. Off-main; applies on main.
     private func splitFourStems() {
         guard sample != nil, !stemBusy else { return }
-        guard FourStemSeparator.modelAvailable else {
-            flash("No 4-stem model bundled — using Drums/Melody"); splitStems(); return
-        }
-        stemBusy = true; flash("Separating 4 stems… this can take a moment")
+        stemBusy = true
+        flash(FourStemSeparator.modelAvailable ? "Separating 4 stems… this can take a moment" : "Getting the 4-stem model…")
         let src = engine.currentSampleForStems()
         Task.detached(priority: .userInitiated) {
+            guard await FourStemSeparator.ensureModel() else {   // downloads the ODR model if not present
+                await MainActor.run { stemBusy = false; flash("Couldn't get the 4-stem model — using Drums/Melody"); splitStems() }
+                return
+            }
+            await MainActor.run { flash("Separating 4 stems… this can take a moment") }
             let stems = FourStemSeparator.separate(src.data, engineSR: src.sr)
             await MainActor.run {
                 stemBusy = false
@@ -545,10 +557,10 @@ struct SampleModeView: View {
                     splitStems()
                     return
                 }
-                for (i, st) in stems.prefix(Kit.pads.count).enumerated() {
-                    project.setPadSample(Kit.pads[i].id, data: st.audio, name: st.name)
-                }
-                flash("Split into \(stems.count) stems → first \(min(stems.count, Kit.pads.count)) pads")
+                project.setPadSamples(stems.prefix(Kit.pads.count).enumerated().map { (Kit.pads[$0].id, $1.audio, $1.name) })   // one undo step
+                let srcSec = Double(src.data.count) / src.sr
+                let trimmed = srcSec > FourStemSeparator.maxSeconds + 0.25 ? " · first \(Int(FourStemSeparator.maxSeconds))s" : ""
+                flash("Split into \(stems.count) stems → first \(min(stems.count, Kit.pads.count)) pads\(trimmed)")
             }
         }
     }

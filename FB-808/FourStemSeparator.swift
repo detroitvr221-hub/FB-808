@@ -34,12 +34,35 @@ nonisolated final class FourStemSeparator {
 
     private static let log = Logger(subsystem: "com.FB-808", category: "stems")
 
-    /// Is a 4-stem Core ML model bundled with the app?
+    /// On-Demand Resources tag the 93 MB model is shipped under, so it isn't part of the initial app
+    /// download — it's fetched from the App Store the first time the user runs 4-stem separation.
+    static let odrTag = "stem-model"
+    /// Held for the lifetime of the process once fetched, so the OS keeps the downloaded model in place.
+    private nonisolated(unsafe) static var heldRequest: NSBundleResourceRequest?
+
+    /// Is the model present RIGHT NOW (already downloaded, or bundled directly)? Fetch it with `ensureModel()`.
     static var modelAvailable: Bool { modelURL != nil }
 
     private static var modelURL: URL? {
         Bundle.main.url(forResource: StemModelContract.modelName, withExtension: "mlmodelc")
         ?? Bundle.main.url(forResource: StemModelContract.modelName, withExtension: "mlpackage")
+    }
+
+    /// Ensure the model is available, downloading the On-Demand Resource if needed. Returns false if the
+    /// fetch fails (offline / not enough space) — callers should fall back to the 2-way split. If the model
+    /// is bundled directly (ODR not configured), this returns true immediately without a network request.
+    static func ensureModel() async -> Bool {
+        if modelURL != nil { return true }                       // already downloaded, or bundled directly
+        let req = NSBundleResourceRequest(tags: [odrTag])
+        req.loadingPriority = NSBundleResourceRequestLoadingPriorityUrgent
+        do {
+            try await req.beginAccessingResources()              // downloads from the App Store if not cached
+            heldRequest = req                                    // retain so the OS doesn't purge it mid-use
+            return modelURL != nil
+        } catch {
+            log.error("stems: ODR fetch failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     /// Log the bundled model's input/output descriptions — run once after adding a model to reconcile the contract.
