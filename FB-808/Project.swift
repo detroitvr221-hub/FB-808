@@ -939,9 +939,11 @@ final class Project: ObservableObject {
         }
         audioClips = clips
     }
-    func moveAudioClip(_ id: UUID, toBar bar: Int) {
+    func moveAudioClip(_ id: UUID, toBar bar: Int, checkpoint doCheckpoint: Bool = true) {
         if let i = audioClips.firstIndex(where: { $0.id == id }) {
-            checkpoint("audioMove", coalesce: true)
+            // A drag checkpoints ONCE at its start (see TrackModeView) and passes false here; per-frame
+            // coalesced checkpoints only merged within 0.6s, so a slow drag left undo partway (#FUNCNAV-02).
+            if doCheckpoint { checkpoint("audioMove", coalesce: false) }
             audioClips[i].startBar = max(0, min(songBars - 1, bar))
         }
     }

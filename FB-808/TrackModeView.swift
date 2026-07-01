@@ -801,9 +801,9 @@ extension TrackModeView {
         .gesture(DragGesture(minimumDistance: 3)
             .onChanged { v in
                 let orig = audioDrag?.id == clip.id ? (audioDrag?.orig ?? clip.startBar) : clip.startBar
-                if audioDrag == nil { audioDrag = (clip.id, clip.startBar) }
+                if audioDrag == nil { audioDrag = (clip.id, clip.startBar); project.checkpoint("audioMove", coalesce: false) }   // one undo step for the whole drag (#FUNCNAV-02)
                 let nb = max(0, min(BARS - 1, Int((CGFloat(orig) * barPx + v.translation.width) / barPx + 0.5)))
-                project.moveAudioClip(clip.id, toBar: nb)
+                project.moveAudioClip(clip.id, toBar: nb, checkpoint: false)
             }
             .onEnded { _ in audioDrag = nil })
         .onTapGesture { editClip = clip.id }
