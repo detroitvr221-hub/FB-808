@@ -352,13 +352,20 @@ final class Transport: ObservableObject {
         nextStepTime += secPerStep()
         let n = max(1, project.barSteps)
         let prev = step16
+        let wasCounting = countSteps > 0   // count-in active at the START of this advance (incl. the count→play transition)
         step16 += 1; if step16 >= n { step16 = 0 }
         if countSteps > 0 { countSteps -= 1 }
         if step16 == 0 && prev == n - 1 {
-            barCount = (barCount + 1) % max(1, project.songBars)
-            nudgeToLinkPhase()   // align the downbeat to the Link session (no-op when Link is off)
-            // Performance mode: apply a queued pattern launch on the bar line
-            if let q = project.queuedSeq { project.switchSequence(q, record: false); project.queuedSeq = nil }
+            // Count-in shares step16 with playback but MUST leave the arrangement pinned at bar 0, or
+            // Song Mode starts N bars in and skips its intro (#TIMING-01). Only advance on real bar lines.
+            if !wasCounting {
+                // Loop (non-song) mode loops the single active pattern, so pin the arrangement bar at 0 —
+                // otherwise the counter/Tracks playhead swept 0→songBars while one bar looped (#FUNCNAV-01).
+                if project.songMode { barCount = (barCount + 1) % max(1, project.songBars) }
+                nudgeToLinkPhase()   // align the downbeat to the Link session (no-op when Link is off)
+                // Performance mode: apply a queued pattern launch on the bar line
+                if let q = project.queuedSeq { project.switchSequence(q, record: false); project.queuedSeq = nil }
+            }
         }
     }
 
@@ -371,7 +378,7 @@ final class Transport: ObservableObject {
             link.proposeTempo(Double(project.bpm), atHostTime: HostClock.now())
         } else if let t = link.sessionTempo() {
             let r = max(40, min(220, Int(t.rounded())))
-            if r != project.bpm { project.setBpm(r) }
+            if r != project.bpm { project.setBpmFromLink(r) }   // silent adopt — no undo spam / op flood (#TIMING-02)
         }
         lastSyncedBpm = project.bpm
     }
@@ -403,6 +410,7 @@ final class Transport: ObservableObject {
             } else {                                  // named groove feel (E4) — per-16th micro-timing
                 t += secPerStep() * Groove.byID(p.grooveID).push[step16 % 16]
             }
+            t = max(t, engine.now() + 0.001)   // negative-push grooves must never schedule into the past → flam (#TIMING-03)
             scheduleStep(step16, t)
             let showStep = step16
             let showBar = barCount            // the bar of THIS step — published at its real time, in lock-step with the step

@@ -815,6 +815,9 @@ final class Project: ObservableObject {
     func setBank(_ b: String) { _ = checkpoint("bank", coalesce: false); bank = b; emit(.setBank(bank: b)) }   // emit → students' bank follows the teacher live
     func setBpm(_ v: Int) { _ = checkpoint("bpm"); bpm = max(40, min(220, v)); emit(.setTempo(bpm: bpm)) }   // coalesced: a tap/drag is one undo step
     func setBpm(_ v: Double) { setBpm(Int(v.rounded())) }
+    /// Adopt an externally-driven tempo (Ableton Link) WITHOUT a checkpoint or sync op — a moving-tempo
+    /// peer would otherwise flood undo history with phantom bpm steps and spam followers each tick (#TIMING-02).
+    func setBpmFromLink(_ v: Int) { bpm = max(40, min(220, v)) }
 
     // MARK: synth / melody
 
