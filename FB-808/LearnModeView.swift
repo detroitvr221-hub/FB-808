@@ -441,7 +441,7 @@ struct PracticeView: View {
                 hudBar
                 ZStack {
                     PadGridView(pads: Kit.pads, showLabels: true, maxSide: 520,
-                                onHit: { model.onHit($0) })
+                                onHit: { pid, _ in model.onHit(pid) })
                     if let c = model.count {
                         Text(c).font(FDFont.display(140, .bold)).foregroundStyle(settings.ink)
                             .shadow(color: .black.opacity(0.6), radius: 30, y: 8)

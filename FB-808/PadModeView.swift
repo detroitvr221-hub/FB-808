@@ -262,7 +262,7 @@ struct PadModeView: View {
 
     // MARK: interactions
 
-    private func onHit(_ padID: String) {
+    private func onHit(_ padID: String, _ vel: Double = 0.85) {
         engine.start()
         if project.muteMode {   // Mute mode: tap toggles the pad's mute live (no trigger)
             project.rowMute[padID] = !(project.rowMute[padID] ?? false)
@@ -277,14 +277,14 @@ struct PadModeView: View {
         }
         fx.bump(padID)
         if editMode { editMode = false; editPadID = padID; return }
-        project.triggerPad(padID, accent: project.fullLevel)
+        project.triggerPad(padID, accent: project.fullLevel, vel: vel)   // finger pressure → dynamics (#PADS-01)
         if project.recording {
             // quantize to the step the user actually heard (audio clock), honoring the bar length.
             // Bank-D synth pads record as melody notes (sequence/export as synth); others as drum hits.
             if project.bank == "D", project.synthBank?[padID] != nil {
                 project.recordSynthPad(padID, transport.recordFraction())
             } else {
-                project.recordHit(padID, transport.recordFraction(), vel: project.fullLevel ? 1.0 : 0.85)
+                project.recordHit(padID, transport.recordFraction(), vel: project.fullLevel ? 1.0 : vel)   // capture the played dynamics (#PADS-01)
             }
         }
         if project.noteRepeat { startRepeat(padID) }

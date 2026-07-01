@@ -670,10 +670,13 @@ final class Project: ObservableObject {
         return padID
     }
 
-    func triggerPad(_ padID: String, accent: Bool = false, when: Double? = nil) {
+    /// `vel` is a 0…1 strike velocity (finger pressure). nil keeps the old fixed 0.85/accent behavior;
+    /// Fixed-Velocity mode (fullLevel) always plays at 1.0 regardless (#PADS-01).
+    func triggerPad(_ padID: String, accent: Bool = false, when: Double? = nil, vel: Double? = nil) {
         let g = padGain(padID)
         if g <= 0 { return }
-        let base = padVel(padID, fullLevel ? 1.0 : (accent ? 1.0 : 0.85))
+        let level = fullLevel ? 1.0 : (vel ?? (accent ? 1.0 : 0.85))
+        let base = padVel(padID, level)
         let pv = padVolMul(padID)
         let off = padOffsetSec(padID)
         let when = off > 0 ? (when ?? engine.now()) + off : when    // lay-back offset
