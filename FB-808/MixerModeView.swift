@@ -79,6 +79,10 @@ private func mixerFXSlider(_ label: String, _ value: Binding<Double>, _ lo: Doub
             Text(fmt(value.wrappedValue)).font(FDFont.mono(11, .bold)).foregroundStyle(s.ink)
         }
         Slider(value: value, in: lo...hi).tint(s.accent)
+            // Without these the whole FX control set (EQ / exciter / compressor / bit-crush …) is invisible
+            // to VoiceOver — the slider announced no name and the label Text sat as a separate element.
+            .accessibilityLabel(Text(label))
+            .accessibilityValue(Text(fmt(value.wrappedValue)))
     }
 }
 

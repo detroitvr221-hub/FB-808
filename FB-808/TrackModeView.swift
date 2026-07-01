@@ -837,6 +837,8 @@ extension TrackModeView {
                 }
                 Slider(value: Binding(get: { curClip(clip)?.gain ?? 1 },
                                       set: { v in project.updateAudioClip(clip.id) { $0.gain = v } }), in: 0...2).tint(settings.accent)
+                    .accessibilityLabel(Text("Clip gain"))
+                    .accessibilityValue(Text("\(Int((curClip(clip)?.gain ?? 1) * 100)) percent"))
             }
             Button { project.updateAudioClip(clip.id) { $0.muted.toggle() } } label: {
                 HStack(spacing: 7) {

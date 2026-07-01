@@ -432,6 +432,8 @@ struct SequenceModeView: View {
                 }
                 Slider(value: Binding(get: { project.stepMeta[sel]?[step]?.prob ?? 1 },
                                       set: { v in project.setStepMeta(sel, step) { $0.prob = v } }), in: 0...1).tint(settings.accent)
+                    .accessibilityLabel(Text("Probability"))
+                    .accessibilityValue(Text("\(Int(meta.prob * 100)) percent"))
             }
             Text("CONDITION").font(FDFont.mono(9, .bold)).tracking(1).foregroundStyle(settings.inkFaint)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 4), spacing: 5) {
@@ -478,6 +480,8 @@ struct SequenceModeView: View {
             if on {
                 Slider(value: Binding(get: { project.stepMeta[sel]?[step]?[keyPath: kp] ?? def },
                                       set: { v in project.setStepMeta(sel, step) { $0[keyPath: kp] = v } }), in: lo...hi).tint(settings.accent)
+                    .accessibilityLabel(Text(label))
+                    .accessibilityValue(Text(fmt(cur ?? def)))
             }
         }
     }

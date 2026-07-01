@@ -270,6 +270,8 @@ struct PadInspectorView: View {
                     }.pickerStyle(.menu).tint(settings.ink).frame(width: 96, alignment: .leading)
                     Text("VOL").font(FDFont.mono(8, .bold)).foregroundStyle(settings.inkFaint)
                     Slider(value: Binding(get: { ly.vol }, set: { v in up { $0.layers[i].vol = v } }), in: 0...1).tint(settings.accent)
+                        .accessibilityLabel(Text("Layer \(i + 1) volume"))
+                        .accessibilityValue(Text("\(Int(ly.vol * 100)) percent"))
                     Button { up { $0.layers.remove(at: i) } } label: {
                         Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(settings.inkFaint).frame(width: 24, height: 24)
                     }.buttonStyle(.plain)
