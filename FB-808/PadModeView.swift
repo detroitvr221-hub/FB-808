@@ -271,8 +271,15 @@ struct PadModeView: View {
         }
         if project.sixteenLevels, let pad = Kit.padByID[padID] {
             let lvl = Double(pad.index + 1) / 16
-            engine.trigger(sel, vel: 0.15 + lvl * 1.05)
+            let v = 0.15 + lvl * 0.85   // normalized 0.15→1.0 ramp so the top levels don't clip (#PADS-04)
+            // Route through triggerPad so padGain / choke-opts / mute-solo are honored (was a raw engine.trigger
+            // that ignored all of them), and record the played level like a normal hit (#PADS-04).
+            project.triggerPad(sel, vel: v)
             fx.bump(padID)
+            if project.recording {
+                if project.bank == "D", project.synthBank?[sel] != nil { project.recordSynthPad(sel, transport.recordFraction()) }
+                else { project.recordHit(sel, transport.recordFraction(), vel: v) }
+            }
             return
         }
         fx.bump(padID)

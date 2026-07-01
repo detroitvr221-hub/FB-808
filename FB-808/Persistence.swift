@@ -273,6 +273,15 @@ final class ProjectStore: ObservableObject {
     }
 
     func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: fileURL(name).path) }
+    /// True when saving under `name` would clobber a DIFFERENT project — i.e. the target file exists and its
+    /// embedded projectID differs from the open project's. Catches the sanitize-collision case the name-only
+    /// guard missed (new project sharing a saved beat's name silently overwrote it) (#PERSIST-03).
+    func wouldOverwriteDifferentProject(name: String, openID: String) -> Bool {
+        let url = fileURL(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard let snap = Self.decodeSnapshot(url), let id = snap.id else { return true }   // unreadable/legacy → be safe, confirm
+        return id != openID
+    }
 
     private func decode(_ url: URL) -> ProjectSnapshot? { Self.decodeSnapshot(url) }   // rename/duplicate (infrequent, sync)
     private func writeSnap(_ snap: ProjectSnapshot, to url: URL) { _ = Self.writeSnapshot(snap, to: url, pretty: true) }
