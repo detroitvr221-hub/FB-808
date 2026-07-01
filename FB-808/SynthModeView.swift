@@ -997,6 +997,17 @@ struct SynthRoll: View {
                             RoundedRectangle(cornerRadius: 2).fill(settings.panel2.darker(0.1))
                             if v > 0 { RoundedRectangle(cornerRadius: 2).fill(color.opacity(0.85)).frame(height: max(2, CGFloat(v) * 34)) }
                         }.frame(maxWidth: .infinity)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityHidden(v <= 0)
+                            .accessibilityLabel(Text("Velocity step \(s + 1)"))
+                            .accessibilityValue(Text("\(Int(v * 100))%"))
+                            .accessibilityAdjustableAction { dir in
+                                switch dir {
+                                case .increment: project.setActiveNoteVel(step: s, min(1.0, v + 0.1))
+                                case .decrement: project.setActiveNoteVel(step: s, max(0.1, v - 0.1))
+                                @unknown default: break
+                                }
+                            }
                     }
                 }
                 .contentShape(Rectangle())

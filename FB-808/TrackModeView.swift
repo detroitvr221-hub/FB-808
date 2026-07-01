@@ -194,6 +194,12 @@ struct TrackModeView: View {
                             .offset(x: Double(a.start) / Double(BARS) * g.size.width, y: 5)
                             .contentShape(Rectangle())
                             .onTapGesture { cycleSeq(a.id) }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Text("\(sec.name) section"))
+                            .accessibilityValue(Text("pattern \(seqName(a.seq))"))
+                            .accessibilityHint(Text("Double-tap to change pattern"))
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAction { cycleSeq(a.id) }
                         }
                     }
                     if project.playing {
@@ -458,6 +464,17 @@ struct TrackModeView: View {
                         project.checkpoint("clip", coalesce: false)
                         project.clips[t.id, default: []].append(Clip(s: bar, l: 2, color: t.color))
                     })
+                .accessibilityLabel(Text("\(t.name) lane"))
+                .accessibilityHint(Text("Add a clip"))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction {
+                    let taken = project.clips[t.id] ?? []
+                    var bar = 0
+                    while bar <= BARS - 2 && taken.contains(where: { bar >= $0.s && bar < $0.s + $0.l }) { bar += 1 }
+                    guard bar <= BARS - 2 else { return }
+                    project.checkpoint("clip", coalesce: false)
+                    project.clips[t.id, default: []].append(Clip(s: bar, l: 2, color: t.color))
+                }
             // empty-lane affordance: a dashed "tap to add" ghost in bar 1 so the tap target is visible
             // (the Color.clear hit layer behind handles the actual tap).
             if (project.clips[t.id] ?? []).isEmpty {
@@ -515,6 +532,32 @@ struct TrackModeView: View {
             }
             .onEnded { _ in drag = nil })
         .onTapGesture { editClip = c.id }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("\(t.name) clip"))
+        .accessibilityValue(Text("bar \(c.s + 1), \(c.l) bar\(c.l == 1 ? "" : "s")\(c.muted ? ", muted" : "")"))
+        .accessibilityHint(Text("Adjust to move. Double-tap to edit."))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAdjustableAction { dir in
+            guard var arr = project.clips[t.id], i < arr.count else { return }
+            let ns: Int
+            switch dir {
+            case .increment: ns = min(BARS - c.l, c.s + 1)
+            case .decrement: ns = max(0, c.s - 1)
+            @unknown default: return
+            }
+            if ns != arr[i].s { project.checkpoint("clipmove", coalesce: false); arr[i].s = ns; project.clips[t.id] = arr }
+        }
+        .accessibilityAction(named: Text("Edit clip")) { editClip = c.id }
+        .accessibilityAction(named: Text("Longer")) {
+            guard var arr = project.clips[t.id], i < arr.count else { return }
+            let nl = min(BARS - c.s, c.l + 1)
+            if nl != arr[i].l { project.checkpoint("clipresize", coalesce: false); arr[i].l = nl; project.clips[t.id] = arr }
+        }
+        .accessibilityAction(named: Text("Shorter")) {
+            guard var arr = project.clips[t.id], i < arr.count else { return }
+            let nl = max(1, c.l - 1)
+            if nl != arr[i].l { project.checkpoint("clipresize", coalesce: false); arr[i].l = nl; project.clips[t.id] = arr }
+        }
         .popover(isPresented: Binding(get: { editClip == c.id }, set: { if !$0 { editClip = nil } })) {
             programClipInspector(t, c)
         }

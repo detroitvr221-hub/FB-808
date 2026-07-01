@@ -449,6 +449,8 @@ struct MixStrip: View {
                 Text(fmt(value.wrappedValue)).font(FDFont.mono(11, .bold)).foregroundStyle(settings.ink)
             }
             Slider(value: value, in: lo...hi).tint(settings.accent)
+                .accessibilityLabel(Text(label))
+                .accessibilityValue(Text(fmt(value.wrappedValue)))
         }
     }
 
@@ -959,6 +961,8 @@ struct TrackStrip: View {
                 Text(String(format: "%.1f", val.wrappedValue)).font(FDFont.mono(10, .bold)).foregroundStyle(settings.ink)
             }
             Slider(value: val, in: lo...hi).tint(settings.accent)
+                .accessibilityLabel(Text(label))
+                .accessibilityValue(Text(String(format: "%.1f", val.wrappedValue)))
         }
     }
 }
