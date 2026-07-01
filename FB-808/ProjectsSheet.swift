@@ -140,7 +140,9 @@ struct ProjectsSheet: View {
     /// Confirm before clobbering a DIFFERENT existing save; a plain re-save of the open project saves directly.
     /// Identity-based (vs the open project's name) so renaming the open beat to its own name never false-warns. (#221)
     private func attemptSave() {
-        if !trimmedName.isEmpty && store.exists(trimmedName) && trimmedName != project.name {
+        // Identity-based: confirm only when the target file belongs to a DIFFERENT project (by embedded id),
+        // so re-saving/renaming the open beat never false-warns, but a name collision with another beat does. (#PERSIST-03, #221)
+        if !trimmedName.isEmpty && store.wouldOverwriteDifferentProject(name: trimmedName, openID: project.projectID) {
             confirmOverwrite = true
         } else {
             doSave()

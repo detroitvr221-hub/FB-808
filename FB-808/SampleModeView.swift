@@ -584,7 +584,12 @@ struct SampleModeView: View {
             project.sample = SampleState(name: name.isEmpty ? "Imported" : name, kind: "import",
                                          dur: r.dur, wave: r.wave, transients: r.transients)
             project.sliceBank = nil
-            flash("Imported \(name) · \(String(format: "%.1f", r.dur))s")
+            // Surface truncation instead of silently keeping only the first N seconds (#SAMPLING-03).
+            if r.dur >= AudioDefaults.maxSampleSeconds - 0.25 {
+                flash("Imported \(name) · trimmed to \(Int(AudioDefaults.maxSampleSeconds))s")
+            } else {
+                flash("Imported \(name) · \(String(format: "%.1f", r.dur))s")
+            }
         }
     }
 
@@ -717,6 +722,7 @@ struct SampleModeView: View {
     private func stopAudition() {
         auditionTask?.cancel(); auditionTask = nil
         playPos = nil; looping = false
+        engine.stopSampleAudition()   // actually silence the sounding sample voice, not just the UI timer (#SAMPLING-05)
     }
 
     private func audition() {
@@ -819,7 +825,7 @@ struct SampleModeView: View {
     /// Extract the selected slice's audio as a new one-shot on the matching pad (MPC SHIFT+B1 Extract).
     private func extractSlice() {
         guard let s = project.sample, let i = selectedSlice, i < s.slices.count else { return }
-        let buf = engine.currentSampleOriginal()
+        let buf = engine.currentSampleData()   // the EDITED buffer, so extracted chops match what was auditioned (#SAMPLING-02)
         guard !buf.isEmpty else { flash("No audio to extract"); return }
         let a = s.slices[i], b = i + 1 < s.slices.count ? s.slices[i + 1] : 1
         let lo = max(0, min(buf.count, Int(a * Double(buf.count))))
@@ -846,7 +852,7 @@ struct SampleModeView: View {
         guard let s = sample, !s.slices.isEmpty else { return }
         // Extract each slice's audio onto its pad as a real one-shot — so the chops are playable
         // in the sequencer and bounce into export (not the old bank-C-only sliceBank dead-end).
-        let n = project.assignSlicesToPads(buffer: engine.currentSampleOriginal(), slices: s.slices, reverse: s.reverseSlices)
+        let n = project.assignSlicesToPads(buffer: engine.currentSampleData(), slices: s.slices, reverse: s.reverseSlices)   // EDITED buffer → chops match audition + export (#SAMPLING-02)
         guard n > 0 else { flash("No audio to slice"); return }
         project.setBank("C")
         flash("\(n) chops on Bank C — tap to play, sequence them & they’ll export")

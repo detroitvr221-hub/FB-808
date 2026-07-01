@@ -16,7 +16,7 @@ struct MultiTouchGrid: UIViewRepresentable {
     let cell: CGFloat
     let gap: CGFloat
     let padIDs: [String]
-    let onDown: (String) -> Void
+    let onDown: (String, Double) -> Void   // padID, 0…1 strike velocity (#PADS-01)
     let onUp: ((String) -> Void)?
 
     func makeUIView(context: Context) -> TouchView {
@@ -35,6 +35,17 @@ struct MultiTouchGrid: UIViewRepresentable {
 
         func apply(_ c: MultiTouchGrid) { cfg = c }
 
+        /// 0…1 strike velocity from finger pressure: 3D-touch/Pencil force when available, else contact
+        /// radius (a flatter/harder hit reads wider), else a musical default. (#PADS-01)
+        private func velocity(_ t: UITouch) -> Double {
+            if t.maximumPossibleForce > 0, t.force > 0 {
+                return max(0.15, min(1.0, Double(t.force / t.maximumPossibleForce)))
+            }
+            let r = Double(t.majorRadius)
+            if r > 0 { return max(0.4, min(1.0, 0.4 + (r - 8) / 40)) }   // ~8pt→0.4 … ~48pt→1.0
+            return 0.85
+        }
+
         /// Map a point in the grid's own coordinates to a pad index, rejecting the gutters between cells.
         private func padIndex(at p: CGPoint) -> Int? {
             guard let c = cfg else { return nil }
@@ -49,12 +60,14 @@ struct MultiTouchGrid: UIViewRepresentable {
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             guard let c = cfg else { return }
-            haptic.prepare()
+            let hapticsOn = Haptics.shared.enabled   // honor Settings → Haptics (was always-on here) (#PADS-05)
+            if hapticsOn { haptic.prepare() }
             for t in touches where padIndex(at: t.location(in: self)) != nil {
                 let idx = padIndex(at: t.location(in: self))!
                 held[ObjectIdentifier(t)] = idx
-                c.onDown(c.padIDs[idx])
-                haptic.impactOccurred(intensity: 0.7)
+                let v = velocity(t)
+                c.onDown(c.padIDs[idx], v)
+                if hapticsOn { haptic.impactOccurred(intensity: CGFloat(0.4 + v * 0.6)) }   // firmer hit → stronger tap
             }
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -64,7 +77,7 @@ struct MultiTouchGrid: UIViewRepresentable {
                 let now = padIndex(at: t.location(in: self))
                 if now != held[key] {                            // slid across cells → release old, hit new
                     if let was = held[key] { c.onUp?(c.padIDs[was]) }
-                    if let n = now { c.onDown(c.padIDs[n]); held[key] = n; haptic.impactOccurred(intensity: 0.6) }
+                    if let n = now { c.onDown(c.padIDs[n], velocity(t)); held[key] = n; if Haptics.shared.enabled { haptic.impactOccurred(intensity: 0.6) } }
                     else { held[key] = nil }
                 }
             }

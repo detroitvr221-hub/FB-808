@@ -235,6 +235,7 @@ final class Project: ObservableObject {
     @Published var quantize = "1/16"
     @Published var barSteps = 16        // steps per bar: 16=4/4, 12=3/4, 8=2/4 (A13)
     @Published var playing = false
+    @Published var isBouncing = false   // an offline render (auto-master / resample / freeze) is running — drives busy UI (#ARCH-01)
     @Published var recording = false
     @Published var micRecordFailed = false   // mic permission denied / tap failed → surface "enable mic access" (transient)
     @Published var metronome = true
@@ -615,9 +616,18 @@ final class Project: ObservableObject {
 
     /// The per-hit shaping opts for a pad, or nil if it has no inspector edits.
     func padOpts(_ id: String) -> TriggerOpts? {
-        guard let pp = padParams[id] else { return nil }
-        // Mono pads self-cut via a per-pad reserved choke group (100+index) — no engine change needed.
-        let choke = (!pp.polyV && pp.choke == 0) ? (100 + (Kit.padByID[id]?.index ?? 0)) : pp.choke
+        let defChoke = Kit.padByID[id]?.defaultChoke ?? 0   // e.g. open/closed hats share one out of the box (#PADS-02)
+        guard let pp = padParams[id] else {
+            // No inspector edits, but a family default choke must still cut (open hat ↔ closed hat).
+            guard defChoke != 0 else { return nil }
+            var o = TriggerOpts(); o.chokeGroup = defChoke; return o
+        }
+        // Priority: explicit user choke → family default → per-pad mono self-cut (reserved 100+index).
+        let choke: Int
+        if pp.choke != 0 { choke = pp.choke }
+        else if defChoke != 0 { choke = defChoke }
+        else if !pp.polyV { choke = 100 + (Kit.padByID[id]?.index ?? 0) }
+        else { choke = 0 }
         return TriggerOpts(
             pitch: pp.pitch, pan: pp.pan,
             cutoff: pp.cutoff < 18000 ? pp.cutoff : nil, reso: pp.reso,
@@ -660,10 +670,13 @@ final class Project: ObservableObject {
         return padID
     }
 
-    func triggerPad(_ padID: String, accent: Bool = false, when: Double? = nil) {
+    /// `vel` is a 0…1 strike velocity (finger pressure). nil keeps the old fixed 0.85/accent behavior;
+    /// Fixed-Velocity mode (fullLevel) always plays at 1.0 regardless (#PADS-01).
+    func triggerPad(_ padID: String, accent: Bool = false, when: Double? = nil, vel: Double? = nil) {
         let g = padGain(padID)
         if g <= 0 { return }
-        let base = padVel(padID, fullLevel ? 1.0 : (accent ? 1.0 : 0.85))
+        let level = fullLevel ? 1.0 : (vel ?? (accent ? 1.0 : 0.85))
+        let base = padVel(padID, level)
         let pv = padVolMul(padID)
         let off = padOffsetSec(padID)
         let when = off > 0 ? (when ?? engine.now()) + off : when    // lay-back offset
@@ -814,6 +827,9 @@ final class Project: ObservableObject {
     func setBank(_ b: String) { _ = checkpoint("bank", coalesce: false); bank = b; emit(.setBank(bank: b)) }   // emit → students' bank follows the teacher live
     func setBpm(_ v: Int) { _ = checkpoint("bpm"); bpm = max(40, min(220, v)); emit(.setTempo(bpm: bpm)) }   // coalesced: a tap/drag is one undo step
     func setBpm(_ v: Double) { setBpm(Int(v.rounded())) }
+    /// Adopt an externally-driven tempo (Ableton Link) WITHOUT a checkpoint or sync op — a moving-tempo
+    /// peer would otherwise flood undo history with phantom bpm steps and spam followers each tick (#TIMING-02).
+    func setBpmFromLink(_ v: Int) { bpm = max(40, min(220, v)) }
 
     // MARK: synth / melody
 
@@ -834,11 +850,13 @@ final class Project: ObservableObject {
 
     /// Live keyboard note-on (sustains until noteOff). Plays the current patch — or, with
     /// Play Assist on, expands to a chord and/or feeds the arpeggiator.
-    func synthNoteOn(_ key: String, midi: Int) {
+    /// `vel` is a 0…1 dynamics scalar (on-screen keyboard passes 1.0 → unchanged; MIDI passes the
+    /// controller's velocity so soft/hard strikes differ instead of all playing at one level) (#MIDI-02).
+    func synthNoteOn(_ key: String, midi: Int, vel: Double = 1.0) {
         if chordMode == "off" && arpMode == "off" {
-            engine.synthOn(key, midi: midi, patch: editPatch, vel: synthGain)   // play the active part you're editing, not always Lead
+            engine.synthOn(key, midi: midi, patch: editPatch, vel: synthGain * max(0.05, min(1, vel)))   // play the active part you're editing, not always Lead
         } else {
-            assistNoteOn(key, midi)
+            assistNoteOn(key, midi, vel: vel)
         }
     }
     func synthNoteOff(_ key: String) {
@@ -908,7 +926,8 @@ final class Project: ObservableObject {
     func removeAudioClip(_ id: UUID) {
         checkpoint("removeClip", coalesce: false)
         audioClips.removeAll { $0.id == id }
-        deleteClipWAV(id: id)
+        // WAV intentionally NOT deleted here — undo must be able to restore the recorded take.
+        // The launch-time orphan sweep reclaims WAVs that no saved project references (#PERSIST-01).
     }
     /// Rebuild in-memory clips from saved metadata (reads the WAVs back). Called on project load.
     func loadAudioClips(from metas: [AudioClipMeta]) {
@@ -923,11 +942,34 @@ final class Project: ObservableObject {
         }
         audioClips = clips
     }
-    func moveAudioClip(_ id: UUID, toBar bar: Int) {
+    func moveAudioClip(_ id: UUID, toBar bar: Int, checkpoint doCheckpoint: Bool = true) {
         if let i = audioClips.firstIndex(where: { $0.id == id }) {
-            checkpoint("audioMove", coalesce: true)
+            // A drag checkpoints ONCE at its start (see TrackModeView) and passes false here; per-frame
+            // coalesced checkpoints only merged within 0.6s, so a slow drag left undo partway (#FUNCNAV-02).
+            if doCheckpoint { checkpoint("audioMove", coalesce: false) }
             audioClips[i].startBar = max(0, min(songBars - 1, bar))
         }
+    }
+    /// Reconcile in-memory `audioClips` to restored undo/redo metadata. Move/gain/mute undos reuse the
+    /// in-memory audio; a re-added clip re-reads its still-on-disk WAV (deletion is deferred to the
+    /// orphan sweep, so the take is always recoverable within a session). (#PERSIST-01)
+    private func restoreAudioClips(from metas: [AudioClipMeta]) {
+        let byID = Dictionary(audioClips.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var rebuilt: [AudioClip] = []
+        for m in metas {
+            guard let uuid = UUID(uuidString: m.id) else { continue }
+            if var existing = byID[uuid] {
+                existing.startBar = m.startBar; existing.gain = m.gain; existing.muted = m.muted
+                rebuilt.append(existing)
+            } else if let data = readClipWAV(id: uuid, targetSR: engine.sampleRate), !data.isEmpty {
+                var clip = AudioClip(track: m.track, startBar: m.startBar, data: data,
+                                     dataR: readClipWAVRight(id: uuid, targetSR: engine.sampleRate),
+                                     wave: Project.downsamplePeaks(data), name: m.name, durSec: Double(data.count) / engine.sampleRate)
+                clip.id = uuid; clip.gain = m.gain; clip.muted = m.muted
+                rebuilt.append(clip)
+            }   // else: WAV genuinely gone (shouldn't happen mid-session) → drop, matching repaired()
+        }
+        audioClips = rebuilt
     }
 
     // MARK: pad sample import (Pad Inspector → Sound → Import)
@@ -942,7 +984,8 @@ final class Project: ObservableObject {
     /// The pad-sample assignment work WITHOUT an undo checkpoint, so batch ops (chop-to-pads)
     /// can collapse to a single undo step.
     private func applyPadSample(_ padID: String, data: [Float], name: String) {
-        if let old = padParams[padID]?.sampleFile { deletePadSampleWAV(file: old) }
+        // Old pad WAV intentionally kept — an undo snapshot may still reference it. The orphan sweep
+        // reclaims WAVs no saved project references; deleting here destroyed the take on undo (#PERSIST-02).
         let file = UUID().uuidString + ".wav"
         writePadSampleWAV(data, file: file, sr: engine.sampleRate)
         padSampleData[padID] = data
@@ -979,9 +1022,10 @@ final class Project: ObservableObject {
     /// Resample (MPC-style): bounce the current pattern — drums + melody + parts + FX —
     /// to a new one-shot sample on `padID`, exactly `bars` long so it loops seamlessly.
     /// You can then chop it, retune it, or play it like any pad sample: the core MPC loop.
-    func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample") {
+    func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample") async {
         let plan = buildExportPlan(loopBarsOverride: bars)
-        let (l, r) = renderOffline(plan)   // trims trailing silence, so it may be shorter than a full bar
+        isBouncing = true; defer { isBouncing = false }
+        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor so the UI stays live (#ARCH-01)
         guard !l.isEmpty else { return }
         let barSec = Double(max(1, barSteps)) * (60.0 / Double(bpm)) / 4.0
         let frames = max(1, Int((Double(bars) * barSec * engine.sampleRate).rounded()))   // exact bar length → seamless loop
@@ -997,8 +1041,10 @@ final class Project: ObservableObject {
     /// corrective high-shelf, and arm the limiter so the louder result can't clip. Returns a summary for
     /// the UI, or nil if there's nothing to analyze. Undoable (master fader + master-bus checkpoints).
     @discardableResult
-    func autoMaster() -> String? {
-        let (l, r) = renderOffline(buildExportPlan())
+    func autoMaster() async -> String? {
+        let plan = buildExportPlan()
+        isBouncing = true; defer { isBouncing = false }
+        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor (#ARCH-01)
         let n = min(l.count, r.count)
         guard n > 1000 else { return nil }
         let coef = exp(-2.0 * .pi * 2000.0 / engine.sampleRate)   // ~2 kHz split for a coarse low/high balance
@@ -1027,7 +1073,7 @@ final class Project: ObservableObject {
 
     /// Remove an imported sample from a pad (reverts to its synth / override sound).
     func clearPadSampleFor(_ padID: String) {
-        if let old = padParams[padID]?.sampleFile { deletePadSampleWAV(file: old) }
+        // WAV kept for undo; orphan sweep reclaims it later (#PERSIST-02).
         padSampleData[padID] = nil
         engine.clearPadSample(padID)
         setPadParam(padID) { $0.sampleFile = nil; $0.sampleName = nil }
@@ -1279,7 +1325,14 @@ final class Project: ObservableObject {
     /// Run a destructive/tool sampler edit as ONE undo step, capturing the engine's pre-edit
     /// `sampleOriginal` so undo/redo can restore the AUDIO, not just SampleState.
     func mutateSample(_ key: String, coalesce: Bool = false, _ body: () -> Void) {
-        guard sample != nil else { body(); return }
+        guard sample != nil else {
+            // First sample into a blank project: there's no pre-edit buffer to capture, but this MUST
+            // still checkpoint so the project is marked dirty (autosave gates on it) and the take is
+            // undoable — otherwise the very first recording/import was lost on background/crash (#SAMPLING-01).
+            checkpoint("smp:\(key)", coalesce: false)
+            body()
+            return
+        }
         let token = nextBufferToken; nextBufferToken += 1
         pendingBufferToken = token
         let pushed = checkpoint("smp:\(key)", coalesce: coalesce)   // snapshot() stamps pendingBufferToken
@@ -1350,7 +1403,9 @@ final class Project: ObservableObject {
             lanes = s.lanes; melody = s.melody; stepMeta = s.stepMeta ?? [:]; parts = s.parts ?? []
         }
         sample = s.sample; sliceBank = s.sliceBank   // always restore SampleState (undo of sampler edits); engine buffer re-synced in undo/redo for destructive ops (#19)
-        _ = resetSample   // (kept for call-site clarity; the buffer reload is driven by restore()/undo())
+        // undo/redo must also restore the arrangement's audio clips (load path uses loadAudioClips()
+        // separately). Without this, undoing an add/remove/move left audioClips untouched (#PERSIST-01).
+        if !resetSample { restoreAudioClips(from: s.audioClips ?? []) }
         pushChannelFX()   // re-sync the engine bus pool to busOrder now that `tracks` is set (G3 owned buses)
     }
 
@@ -1378,11 +1433,21 @@ final class Project: ObservableObject {
         return true
     }
 
+    /// Snapshot of which pad currently points at which imported one-shot file. Undo/redo compares
+    /// before vs after so it only re-reads pad WAVs when the assignment actually changed (#PERSIST-02).
+    private func padSampleRefs() -> [String: String] {
+        var m: [String: String] = [:]
+        for (id, pp) in padParams { if let f = pp.sampleFile { m[id] = f } }
+        return m
+    }
+
     func undo() {
         guard let prev = undoStack.popLast() else { return }
         redoStack.append(captureForRedo(crossingSampleEdit: prev.sampleBufferToken != nil))
+        let padRefsBefore = padSampleRefs()
         applyState(prev, resetSample: false)          // restores SampleState too
         restoreSampleBufferToken(prev.sampleBufferToken)   // re-sync engine audio for destructive sampler edits (#19)
+        if padSampleRefs() != padRefsBefore { loadPadSamples() }   // re-register imported pad one-shots (#PERSIST-02)
         lastCheckpointKey = nil
         canUndo = !undoStack.isEmpty
         canRedo = true
@@ -1391,8 +1456,10 @@ final class Project: ObservableObject {
     func redo() {
         guard let next = redoStack.popLast() else { return }
         undoStack.append(captureForRedo(crossingSampleEdit: next.sampleBufferToken != nil))
+        let padRefsBefore = padSampleRefs()
         applyState(next, resetSample: false)
         restoreSampleBufferToken(next.sampleBufferToken)
+        if padSampleRefs() != padRefsBefore { loadPadSamples() }   // re-register imported pad one-shots (#PERSIST-02)
         lastCheckpointKey = nil
         canUndo = true
         canRedo = !redoStack.isEmpty

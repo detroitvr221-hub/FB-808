@@ -225,9 +225,11 @@ struct PadModeView: View {
                 PanelCard(title: "Resample") {
                     perfButton("⟳ Resample → \(Kit.padByID[sel]?.label ?? sel.uppercased())", on: false) {
                         engine.start()
-                        project.resampleToPad(sel)
-                        progress.awardCreative("resample", 6)
-                        flashToast("Resampled your beat onto \(Kit.padByID[sel]?.label ?? sel) — now chop or play it")
+                        Task { @MainActor in
+                            await project.resampleToPad(sel)   // off-main render (#ARCH-01)
+                            progress.awardCreative("resample", 6)
+                            flashToast("Resampled your beat onto \(Kit.padByID[sel]?.label ?? sel) — now chop or play it")
+                        }
                     }
                     Text("Bounce your whole beat onto the selected pad as a new sample — then chop it, retune it, or stack it. The classic MPC flip.")
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).padding(.top, 4)
@@ -260,7 +262,7 @@ struct PadModeView: View {
 
     // MARK: interactions
 
-    private func onHit(_ padID: String) {
+    private func onHit(_ padID: String, _ vel: Double = 0.85) {
         engine.start()
         if project.muteMode {   // Mute mode: tap toggles the pad's mute live (no trigger)
             project.rowMute[padID] = !(project.rowMute[padID] ?? false)
@@ -269,20 +271,27 @@ struct PadModeView: View {
         }
         if project.sixteenLevels, let pad = Kit.padByID[padID] {
             let lvl = Double(pad.index + 1) / 16
-            engine.trigger(sel, vel: 0.15 + lvl * 1.05)
+            let v = 0.15 + lvl * 0.85   // normalized 0.15→1.0 ramp so the top levels don't clip (#PADS-04)
+            // Route through triggerPad so padGain / choke-opts / mute-solo are honored (was a raw engine.trigger
+            // that ignored all of them), and record the played level like a normal hit (#PADS-04).
+            project.triggerPad(sel, vel: v)
             fx.bump(padID)
+            if project.recording {
+                if project.bank == "D", project.synthBank?[sel] != nil { project.recordSynthPad(sel, transport.recordFraction()) }
+                else { project.recordHit(sel, transport.recordFraction(), vel: v) }
+            }
             return
         }
         fx.bump(padID)
         if editMode { editMode = false; editPadID = padID; return }
-        project.triggerPad(padID, accent: project.fullLevel)
+        project.triggerPad(padID, accent: project.fullLevel, vel: vel)   // finger pressure → dynamics (#PADS-01)
         if project.recording {
             // quantize to the step the user actually heard (audio clock), honoring the bar length.
             // Bank-D synth pads record as melody notes (sequence/export as synth); others as drum hits.
             if project.bank == "D", project.synthBank?[padID] != nil {
                 project.recordSynthPad(padID, transport.recordFraction())
             } else {
-                project.recordHit(padID, transport.recordFraction(), vel: project.fullLevel ? 1.0 : 0.85)
+                project.recordHit(padID, transport.recordFraction(), vel: project.fullLevel ? 1.0 : vel)   // capture the played dynamics (#PADS-01)
             }
         }
         if project.noteRepeat { startRepeat(padID) }

@@ -394,7 +394,7 @@ struct TrackModeView: View {
                 if t.frozenToAudio {
                     Button { project.unfreezeTrack(t.id) } label: { Label("Unfreeze", systemImage: "arrow.counterclockwise") }
                 } else {
-                    Button { _ = project.freezeTrack(t.id) } label: { Label("Freeze to Audio", systemImage: "snowflake") }
+                    Button { Task { @MainActor in _ = await project.freezeTrack(t.id) } } label: { Label("Freeze to Audio", systemImage: "snowflake") }
                 }
             }
             if !LEGACY_TRACK_IDS.contains(t.id) {
@@ -865,9 +865,9 @@ extension TrackModeView {
         .gesture(DragGesture(minimumDistance: 3)
             .onChanged { v in
                 let orig = audioDrag?.id == clip.id ? (audioDrag?.orig ?? clip.startBar) : clip.startBar
-                if audioDrag == nil { audioDrag = (clip.id, clip.startBar) }
+                if audioDrag == nil { audioDrag = (clip.id, clip.startBar); project.checkpoint("audioMove", coalesce: false) }   // one undo step for the whole drag (#FUNCNAV-02)
                 let nb = max(0, min(BARS - 1, Int((CGFloat(orig) * barPx + v.translation.width) / barPx + 0.5)))
-                project.moveAudioClip(clip.id, toBar: nb)
+                project.moveAudioClip(clip.id, toBar: nb, checkpoint: false)
             }
             .onEnded { _ in audioDrag = nil })
         .onTapGesture { editClip = clip.id }

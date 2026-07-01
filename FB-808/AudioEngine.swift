@@ -26,6 +26,9 @@ nonisolated enum AudioDefaults {
     /// Unity channel level (linear). Reads as 0 dB on the mixer, the default channel/track volume, and
     /// the fader double-tap reset — kept here so the dB readout and the reset value can't drift apart.
     static let unityGain: Double = 0.82
+    /// Max seconds captured for a sampler buffer — shared by mic record AND file import so an imported
+    /// loop isn't silently trimmed to a shorter cap than a recording (#SAMPLING-03).
+    static let maxSampleSeconds: Double = 60
 }
 
 // MARK: - Engine wrapper (main actor)
@@ -597,7 +600,7 @@ final class AudioEngine: ObservableObject {
     }
 
     /// Off-thread decode then load into the sampler buffer (Phase 2) — the UI doesn't block on the file read.
-    func importAudioAsync(url: URL, maxSeconds: Double = 30) async -> (dur: Double, transients: [Double], wave: [Double])? {
+    func importAudioAsync(url: URL, maxSeconds: Double = AudioDefaults.maxSampleSeconds) async -> (dur: Double, transients: [Double], wave: [Double])? {
         ensure()
         guard let data = await SampleEngine.decodeAsync(url: url, targetSR: core.sr, maxSeconds: maxSeconds) else { return nil }
         return core.loadExternal(data)
@@ -617,6 +620,8 @@ final class AudioEngine: ObservableObject {
         core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel, pan: pan)
     }
     func stopClips() { core.stopClips() }
+    /// Stop any sample-audition voices sounding on the sample channel (Sample-tab Stop / leaving the tab). (#SAMPLING-05)
+    func stopSampleAudition() { core.stopClips(channel: Self.sampleChannel) }
 
     /// Out-of-band review playback (e.g. a student submission in the Teacher console). Routes a fully
     /// decoded clip through the engine's master graph instead of a side `AVPlayer`, so ALL audio runs

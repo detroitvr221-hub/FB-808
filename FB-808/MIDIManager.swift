@@ -190,6 +190,7 @@ final class MIDIManager: ObservableObject {
 
     private func connectAllSources() {
         guard inPort != 0 else { return }
+        let prev = sourceCount
         let n = MIDIGetNumberOfSources()
         var connected = 0
         for i in 0..<n {
@@ -197,6 +198,9 @@ final class MIDIManager: ObservableObject {
             if src != 0, MIDIPortConnectSource(inPort, src, nil) == noErr { connected += 1 }
         }
         sourceCount = connected
+        // A controller was unplugged mid-play → its held note-offs will never arrive. Release everything
+        // so we don't strand a droning voice (there's no per-source note tracking to be surgical) (#MIDI-03).
+        if connected < prev { onPanic?() }
     }
 
     private func drainAndDispatch() {

@@ -232,8 +232,11 @@ extension Project {
             audioEnd = max(audioEnd, atSample + Double(clip.data.count))
         }
 
-        // longer tail when reverb/delay is on, so the wash isn't cut off
-        let tail = (fxSettings.reverbMix > 0.001 || fxSettings.delayMix > 0.001) ? 4.0 : 2.0
+        // longer tail when reverb/delay is on, so the wash isn't cut off — check AUTOMATION too, not just the
+        // static mix, or a beat that sweeps reverb/delay up toward the end exports with the tail chopped (#IMPEXP-03).
+        let autoWash = ((autoTarget == "reverb" || autoTarget == "delay") && autoLane.contains { $0 > 0.02 })
+            || ((songAutoTarget == "reverb" || songAutoTarget == "delay") && songAuto.contains { $0 > 0.02 })
+        let tail = (fxSettings.reverbMix > 0.001 || fxSettings.delayMix > 0.001 || autoWash) ? 4.0 : 2.0
         let songFrames = Int(Double(totalBars * n) * stepDur * sr) + Int(tail * sr)
         let totalFrames = max(songFrames, Int(audioEnd) + Int(0.1 * sr))   // don't clip an audio take short
         let order = busOrder

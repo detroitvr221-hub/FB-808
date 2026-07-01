@@ -9,7 +9,7 @@ struct PadGridView: View {
     var badges: [String: String]? = nil
     var mutedIDs: Set<String> = []     // pads shown as muted (red/dim) in Mute mode
     var maxSide: CGFloat = 600
-    var onHit: (String) -> Void
+    var onHit: (String, Double) -> Void   // padID, 0…1 strike velocity (#PADS-01)
     var onUp: ((String) -> Void)? = nil
 
     var body: some View {
@@ -22,7 +22,9 @@ struct PadGridView: View {
                     HStack(spacing: gap) {
                         ForEach(0..<4, id: \.self) { c in
                             let pad = pads[r * 4 + c]
-                            PadView(pad: pad, showLabel: showLabels, badge: badges?[pad.id], muted: mutedIDs.contains(pad.id), onHit: onHit, onUp: onUp)
+                            // The SwiftUI pad is the VoiceOver/tap fallback (no pressure) → fixed default velocity;
+                            // real strike velocity comes from the MultiTouchGrid overlay below.
+                            PadView(pad: pad, showLabel: showLabels, badge: badges?[pad.id], muted: mutedIDs.contains(pad.id), onHit: { onHit($0, 0.85) }, onUp: onUp)
                                 .frame(width: cell, height: cell)
                         }
                     }

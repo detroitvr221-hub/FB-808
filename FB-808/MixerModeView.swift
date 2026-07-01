@@ -195,12 +195,14 @@ struct MixerModeView: View {
                 .padding(.bottom, 12)
                 Group {
                     if mixTab == 0 {
-                        HStack(spacing: 12) {
-                            ForEach(Kit.channels) { c in
-                                MixStrip(ch: c.id, name: c.name, color: c.color, meter: meters[c.id] ?? 0, master: false)
+                        ScrollView(.horizontal, showsIndicators: false) {   // narrow layouts (Split View) cramped the strips (#UXA11Y-03)
+                            HStack(spacing: 12) {
+                                ForEach(Kit.channels) { c in
+                                    MixStrip(ch: c.id, name: c.name, color: c.color, meter: meters[c.id] ?? 0, master: false)
+                                }
+                                MixStrip(ch: "melody", name: FDPalette.melodyName, color: FDPalette.melody, meter: meters["melody"] ?? 0, master: false)
+                                MixStrip(ch: "master", name: "MASTER", color: settings.accent, meter: meters["master"] ?? 0, master: true)
                             }
-                            MixStrip(ch: "melody", name: FDPalette.melodyName, color: FDPalette.melody, meter: meters["melody"] ?? 0, master: false)
-                            MixStrip(ch: "master", name: "MASTER", color: settings.accent, meter: meters["master"] ?? 0, master: true)
                         }
                     } else {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -565,9 +567,11 @@ struct MasterFXBar: View {
             HStack(alignment: .top, spacing: 16) {
                 group("AUTO-MASTER", color: settings.accent) {
                     Button {
-                        let msg = project.autoMaster() ?? "Nothing to master yet"
-                        withAnimation { autoMsg = msg }
-                        Task { @MainActor in try? await Task.sleep(nanoseconds: 2_600_000_000); withAnimation { autoMsg = nil } }
+                        Task { @MainActor in
+                            let msg = await project.autoMaster() ?? "Nothing to master yet"
+                            withAnimation { autoMsg = msg }
+                            try? await Task.sleep(nanoseconds: 2_600_000_000); withAnimation { autoMsg = nil }
+                        }
                     } label: {
                         VStack(spacing: 4) {
                             Image(systemName: "wand.and.stars").font(.system(size: 18)).foregroundStyle(settings.accent)
@@ -575,7 +579,9 @@ struct MasterFXBar: View {
                         }
                         .frame(width: 104, height: 56).frame(maxHeight: .infinity)
                         .fdCard(10, fill: settings.panel2)
+                        .overlay { if project.isBouncing { ProgressView().controlSize(.small) } }
                     }.buttonStyle(.plain)
+                    .disabled(project.isBouncing)   // one bounce at a time; keep UI responsive (#ARCH-01)
                     .accessibilityLabel(Text("Auto-master")).accessibilityHint(Text("Analyze the mix and set the master chain"))
                     Text(autoMsg ?? "Sets gain + limiter + glue to a loudness target")
                         .font(FDFont.mono(9)).foregroundStyle(autoMsg == nil ? settings.inkFaint : settings.accent)
