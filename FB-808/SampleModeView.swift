@@ -584,7 +584,12 @@ struct SampleModeView: View {
             project.sample = SampleState(name: name.isEmpty ? "Imported" : name, kind: "import",
                                          dur: r.dur, wave: r.wave, transients: r.transients)
             project.sliceBank = nil
-            flash("Imported \(name) · \(String(format: "%.1f", r.dur))s")
+            // Surface truncation instead of silently keeping only the first N seconds (#SAMPLING-03).
+            if r.dur >= AudioDefaults.maxSampleSeconds - 0.25 {
+                flash("Imported \(name) · trimmed to \(Int(AudioDefaults.maxSampleSeconds))s")
+            } else {
+                flash("Imported \(name) · \(String(format: "%.1f", r.dur))s")
+            }
         }
     }
 

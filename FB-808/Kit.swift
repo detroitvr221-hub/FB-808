@@ -11,7 +11,11 @@ struct PadDef: Identifiable {
     var color: Color
     let key: String       // keyboard hint shown on the cap
     var index: Int = 0
+    var defaultChoke: Int = 0   // family choke group applied even with no inspector edits (e.g. open/closed hats) (#PADS-02)
 }
+
+// Reserved default choke group ids (kept clear of the 1–8 user groups and the 100+ per-pad mono self-cut range).
+enum DefaultChoke { static let hats = 20 }
 
 // A user-saved drum kit (per-pad sound map). Persisted in AppSettings, shared across projects.
 struct UserKitDef: Codable, Identifiable, Equatable { var id: String; var name: String; var sounds: [String: String] }
@@ -26,8 +30,8 @@ nonisolated enum Kit {
             PadDef(id: "sub808",    label: "808",     sound: "sub808",    family: "boom", color: Color(hex: "#FF7A1A"), key: "2"),
             PadDef(id: "snare",     label: "SNARE",   sound: "snare",     family: "snap", color: Color(hex: "#FFC23C"), key: "3"),
             PadDef(id: "clap",      label: "CLAP",    sound: "clap",      family: "snap", color: Color(hex: "#FFD84D"), key: "4"),
-            PadDef(id: "hatClosed", label: "HAT",     sound: "hatClosed", family: "hat",  color: Color(hex: "#33E0D4"), key: "Q"),
-            PadDef(id: "hatOpen",   label: "OPEN",    sound: "hatOpen",   family: "hat",  color: Color(hex: "#27C2E8"), key: "W"),
+            PadDef(id: "hatClosed", label: "HAT",     sound: "hatClosed", family: "hat",  color: Color(hex: "#33E0D4"), key: "Q", defaultChoke: DefaultChoke.hats),
+            PadDef(id: "hatOpen",   label: "OPEN",    sound: "hatOpen",   family: "hat",  color: Color(hex: "#27C2E8"), key: "W", defaultChoke: DefaultChoke.hats),
             PadDef(id: "rim",       label: "RIM",     sound: "rim",       family: "snap", color: Color(hex: "#7AE582"), key: "E"),
             PadDef(id: "cowbell",   label: "COWBELL", sound: "cowbell",   family: "perc", color: Color(hex: "#B6E84D"), key: "R"),
             PadDef(id: "lowTom",    label: "LO TOM",  sound: "lowTom",    family: "tom",  color: Color(hex: "#4DD07A"), key: "A"),

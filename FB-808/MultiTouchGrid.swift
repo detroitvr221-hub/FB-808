@@ -49,12 +49,13 @@ struct MultiTouchGrid: UIViewRepresentable {
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             guard let c = cfg else { return }
-            haptic.prepare()
+            let hapticsOn = Haptics.shared.enabled   // honor Settings → Haptics (was always-on here) (#PADS-05)
+            if hapticsOn { haptic.prepare() }
             for t in touches where padIndex(at: t.location(in: self)) != nil {
                 let idx = padIndex(at: t.location(in: self))!
                 held[ObjectIdentifier(t)] = idx
                 c.onDown(c.padIDs[idx])
-                haptic.impactOccurred(intensity: 0.7)
+                if hapticsOn { haptic.impactOccurred(intensity: 0.7) }
             }
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -64,7 +65,7 @@ struct MultiTouchGrid: UIViewRepresentable {
                 let now = padIndex(at: t.location(in: self))
                 if now != held[key] {                            // slid across cells → release old, hit new
                     if let was = held[key] { c.onUp?(c.padIDs[was]) }
-                    if let n = now { c.onDown(c.padIDs[n]); held[key] = n; haptic.impactOccurred(intensity: 0.6) }
+                    if let n = now { c.onDown(c.padIDs[n]); held[key] = n; if Haptics.shared.enabled { haptic.impactOccurred(intensity: 0.6) } }
                     else { held[key] = nil }
                 }
             }

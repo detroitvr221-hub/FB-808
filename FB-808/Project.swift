@@ -616,9 +616,18 @@ final class Project: ObservableObject {
 
     /// The per-hit shaping opts for a pad, or nil if it has no inspector edits.
     func padOpts(_ id: String) -> TriggerOpts? {
-        guard let pp = padParams[id] else { return nil }
-        // Mono pads self-cut via a per-pad reserved choke group (100+index) — no engine change needed.
-        let choke = (!pp.polyV && pp.choke == 0) ? (100 + (Kit.padByID[id]?.index ?? 0)) : pp.choke
+        let defChoke = Kit.padByID[id]?.defaultChoke ?? 0   // e.g. open/closed hats share one out of the box (#PADS-02)
+        guard let pp = padParams[id] else {
+            // No inspector edits, but a family default choke must still cut (open hat ↔ closed hat).
+            guard defChoke != 0 else { return nil }
+            var o = TriggerOpts(); o.chokeGroup = defChoke; return o
+        }
+        // Priority: explicit user choke → family default → per-pad mono self-cut (reserved 100+index).
+        let choke: Int
+        if pp.choke != 0 { choke = pp.choke }
+        else if defChoke != 0 { choke = defChoke }
+        else if !pp.polyV { choke = 100 + (Kit.padByID[id]?.index ?? 0) }
+        else { choke = 0 }
         return TriggerOpts(
             pitch: pp.pitch, pan: pp.pan,
             cutoff: pp.cutoff < 18000 ? pp.cutoff : nil, reso: pp.reso,
