@@ -98,6 +98,19 @@ final class AppSettings: ObservableObject {
         for p in patches where !savedSynths.contains(where: { $0.name == p.name }) { savedSynths.append(p) }
     }
 
+    /// Restore every preference to its shipped default. Deliberately leaves the user's saved kits and
+    /// synth patches alone — those are content, not settings. Live-apply happens via the existing
+    /// onChange observers in RootView.
+    func resetToDefaults() {
+        themeName = .studio; accentHex = "#FF6A2B"; level = .creator
+        padLabels = true; glow = 1.0; mpcCoach = false
+        audioBufferMs = 0; polyphony = 32
+        limiterOn = true; limiterCeilingDb = -1.0
+        sampleRate = AudioDefaults.sampleRate
+        stereoInput = false; haptics = false
+        hqInterp = true; equalPowerPan = false; bandlimitedOsc = true; exportDither = true
+    }
+
     var theme: Theme { Theme.make(themeName) }
     var accent: Color { Color(hex: accentHex) }
 }

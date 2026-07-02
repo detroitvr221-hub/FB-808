@@ -2,6 +2,7 @@
 //  with overwrite / unsaved-changes guards.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ProjectsSheet: View {
     @EnvironmentObject var project: Project
@@ -22,6 +23,9 @@ struct ProjectsSheet: View {
     @State private var renameOverwriteName = ""
     @State private var missingAudio: [String] = []
     @State private var loadFailed = false   // surface a decode/read failure instead of a dead Load button
+    @State private var shareFile: ExportFile?       // .fd808 project-file share sheet
+    @State private var importingProject = false     // .fd808 file importer
+    @State private var importFailed = false
 
     private var trimmedName: String { nameField.trimmingCharacters(in: .whitespaces) }
 
@@ -80,6 +84,34 @@ struct ProjectsSheet: View {
         .alert("Couldn't open that project", isPresented: $loadFailed) {
             Button("OK", role: .cancel) {}
         } message: { Text("The save file couldn't be read — it may be corrupted. Your other projects are unaffected.") }
+        .alert("Couldn't import that file", isPresented: $importFailed) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("The file isn't a readable FD·808 project. Your existing projects are unaffected.") }
+        .fileImporter(isPresented: $importingProject,
+                      allowedContentTypes: [UTType(filenameExtension: "fd808") ?? .data],
+                      allowsMultipleSelection: false) { handleProjectImport($0) }
+        .sheet(item: $shareFile) { f in ShareSheet(urls: f.urls) }
+    }
+
+    private func handleProjectImport(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        Task { @MainActor in
+            if await store.importArchive(from: url) == nil { importFailed = true }
+        }
+    }
+
+    /// Bundle a saved project + its audio into one shareable .fd808 file. Reads the snapshot directly
+    /// (not store.load) so sharing never re-stamps the "last opened" project.
+    private func shareProjectFile(_ item: SavedProject) {
+        let url = item.url
+        Task { @MainActor in
+            guard let snap = await Task.detached(priority: .userInitiated, operation: { ProjectStore.decodeSnapshot(url) }).value else {
+                loadFailed = true; return
+            }
+            sweepExportDirs()
+            if let out = await store.exportArchive(snap) { shareFile = ExportFile(urls: [out]) }
+            else { loadFailed = true }
+        }
     }
 
     /// Rename, but if the target name belongs to a DIFFERENT saved beat, confirm the overwrite first
@@ -98,6 +130,17 @@ struct ProjectsSheet: View {
         HStack {
             Text("Projects").font(FDFont.display(24, .bold)).foregroundStyle(settings.ink)
             Spacer()
+            Button { importingProject = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.and.arrow.down").font(.system(size: 13, weight: .semibold))
+                    Text("Import").font(FDFont.ui(13, .semibold))
+                }
+                .foregroundStyle(settings.inkDim)
+                .padding(.horizontal, 14).frame(height: 36)
+                .fdCard(9, fill: settings.panel2)
+                .frame(minHeight: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            .accessibilityLabel(Text("Import a project file"))
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill").font(.system(size: 26))
                     .foregroundStyle(settings.inkFaint)
@@ -217,6 +260,7 @@ struct ProjectsSheet: View {
             Menu {
                 Button { renameText = item.name; renameItem = item } label: { Label("Rename", systemImage: "pencil") }
                 Button { store.duplicate(item) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                Button { shareProjectFile(item) } label: { Label("Share Project File", systemImage: "square.and.arrow.up") }
                 Divider()
                 Button(role: .destructive) { pendingDelete = item } label: { Label("Delete", systemImage: "trash") }
             } label: {

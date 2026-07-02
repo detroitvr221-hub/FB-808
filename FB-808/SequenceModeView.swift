@@ -3,7 +3,7 @@
 
 import SwiftUI
 
-private let QUANTS = ["1/8", "1/16", "1/32"]
+private let QUANTS = FD_RECORD_QUANTS
 private let SWINGS = [0.0, 0.12, 0.25, 0.4, 0.55]
 private let SIGS = [16, 12, 8]   // steps per bar → 4/4, 3/4, 2/4
 

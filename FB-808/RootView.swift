@@ -36,7 +36,7 @@ struct TourOverlay: View {
                     }
                 }.padding(.top, 4)
                 HStack(spacing: 12) {
-                    Button { show = false } label: {   // Skip dismisses but stays un-toured so it re-prompts next launch (#tour)
+                    Button { finish() } label: {   // Skip still completes onboarding — persists `toured` and shows the genre picker
                         Text("Skip").font(FDFont.ui(15, .semibold)).foregroundStyle(settings.inkDim)
                             .padding(.horizontal, 22).frame(height: 46)
                             // NB: inline chrome (not .fdCard) — this overlay doesn't inherit @EnvironmentObject,
@@ -251,6 +251,7 @@ struct RootView: View {
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
     @State private var exporting = false             // rail Share action — export is reachable at EVERY level (not just Tracks)
     @State private var exportFile: ExportFile?
+    @State private var pendingQuickExport: ExportFormat?   // Song Mode off + arrangement exists → ask song vs loop first
     // Periodic autosave to the recovery slot: scenePhase isn't reliably delivered before an OOM kill, so a
     // long editing session that crashed used to lose everything since the last manual save (#audit-data).
     private let autosaveTick = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
@@ -368,7 +369,7 @@ struct RootView: View {
             // Sheets don't inherit environmentObjects injected mid-hierarchy (settings/progress/midi live on
             // RootView, not the App root), so re-inject everything SettingsSheet reads — incl. midi (Phase 6).
             SettingsSheet().environmentObject(settings).environmentObject(progress).environmentObject(midi)
-                .presentationDetents([.medium, .large])
+                .presentationSizing(.page)   // full page sheet — the card sections need the height
         }
         .sheet(isPresented: $showProjects) {
             ProjectsSheet(onNewBeat: requestNewBeat)
@@ -378,6 +379,11 @@ struct RootView: View {
                 .presentationDetents([.large])
         }
         .sheet(item: $exportFile) { f in ShareSheet(urls: f.urls) }
+        .confirmationDialog("Share your beat", isPresented: Binding(get: { pendingQuickExport != nil }, set: { if !$0 { pendingQuickExport = nil } }), titleVisibility: .visible) {
+            Button("Full song · \(project.songBars) bars") { if let f = pendingQuickExport { runQuickExport(f, fullSong: true) }; pendingQuickExport = nil }
+            Button("Current loop · 4 bars") { if let f = pendingQuickExport { runQuickExport(f, fullSong: false) }; pendingQuickExport = nil }
+            Button("Cancel", role: .cancel) { pendingQuickExport = nil }
+        } message: { Text("You have an arrangement, but Song Mode is off. Share the whole song, or just the loop that's playing?") }
     }
 
     /// Bounce the song to M4A and present the share sheet — a level-independent entry point so Export is
@@ -401,17 +407,24 @@ struct RootView: View {
         }
     }
 
-    private func quickExport() {
+    private func quickExport(_ format: ExportFormat) {
         guard !exporting, project.hasExportableContent else { return }
+        if !project.songMode && !project.arrangement.isEmpty { pendingQuickExport = format; return }
+        runQuickExport(format, fullSong: false)
+    }
+
+    private func runQuickExport(_ format: ExportFormat, fullSong: Bool) {
+        guard !exporting else { return }
         exporting = true
-        let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let plan = project.buildExportPlan(songModeOverride: fullSong ? true : nil,
+                                           safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
         let dither = settings.exportDither
         Task {
             sweepExportDirs()
             let dir = fd808ExportDir()
             let url = await Task.detached(priority: .userInitiated) {
                 let (l, r) = renderOffline(plan)
-                return writeAudio(.m4a, left: l, right: r, sr: plan.sr, name: plan.name, dir: dir, dither: dither)
+                return writeAudio(format, left: l, right: r, sr: plan.sr, name: plan.name, dir: dir, dither: dither)
             }.value
             exporting = false
             if let url { exportFile = ExportFile(urls: [url]); progress.awardCreative("export", 10) }
@@ -484,12 +497,16 @@ struct RootView: View {
             .accessibilityLabel(Text("Projects"))
             .accessibilityValue(Text(project.hasUnsavedChanges ? "Unsaved changes" : ""))
             if project.hasExportableContent {   // bounce & share from any level (Tracks tab is hidden at Beginner)
-                Button { quickExport() } label: {
+                Menu {
+                    Button { quickExport(.m4a) } label: { Label("M4A · easy to share", systemImage: "waveform") }
+                    Button { quickExport(.wav) } label: { Label("WAV · lossless", systemImage: "waveform.path") }
+                } label: {
                     Group {
                         if exporting { ProgressView().controlSize(.small).tint(th.inkFaint) }
                         else { Image(systemName: "square.and.arrow.up").font(.system(size: 17)).foregroundStyle(th.inkFaint) }
                     }.frame(width: 44, height: 44)
-                }.buttonStyle(.plain).disabled(exporting)
+                }
+                .menuStyle(.button).buttonStyle(.plain).disabled(exporting)
                 .accessibilityLabel(Text("Export and share this beat"))
             }
             Button { showTour = true } label: {

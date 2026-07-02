@@ -102,7 +102,7 @@ struct PadModeView: View {
     private var bankIsEmpty: Bool {
         let ids = (Kit.banks[project.bank]?.pads ?? []).map(\.id)
         switch project.bank {
-        case "C": return (project.sliceBank?.isEmpty ?? true) && ids.allSatisfy { project.padSampleData[$0] == nil }
+        case "C": return (project.sliceBank?.isEmpty ?? true) && ids.allSatisfy { !project.padSampleActive($0) }   // bank-scoped samples (F0)
         case "D": return project.synthBank?.isEmpty ?? true
         default:  return false
         }
@@ -231,6 +231,9 @@ struct PadModeView: View {
                             flashToast("Resampled your beat onto \(Kit.padByID[sel]?.label ?? sel) — now chop or play it")
                         }
                     }
+                    if project.padSampleData[sel]?.isEmpty == false {   // only pads that actually hold sample data (F1)
+                        perfButton("✂︎ Edit in Sampler", on: false) { editInSampler(sel) }
+                    }
                     Text("Bounce your whole beat onto the selected pad as a new sample — then chop it, retune it, or stack it. The classic MPC flip.")
                         .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).padding(.top, 4)
                 }
@@ -308,6 +311,20 @@ struct PadModeView: View {
 
     private func onUp(_ padID: String) { stopRepeat(padID); longTimer?.invalidate() }
 
+    /// F1: push a pad's one-shot into the sampler for chopping — closes the loop the Resample toast
+    /// promises ("now chop it"). Undoable: mutateSample captures the prior sampler buffer first.
+    private func editInSampler(_ padID: String) {
+        guard let data = project.padSampleData[padID], !data.isEmpty else { return }
+        engine.start()
+        let name = project.padParams[padID]?.sampleName ?? (Kit.padByID[padID]?.label ?? "Pad")
+        project.mutateSample("padToSampler") {
+            let r = engine.importBuffer(data)
+            project.sample = SampleState(name: name, kind: "pad", dur: r.dur, wave: r.wave, transients: r.transients)
+            project.sliceBank = nil
+        }
+        openTab("sample")
+    }
+
     private func startRepeat(_ padID: String) {
         stopRepeat(padID)
         let beats = DIV_BEATS[project.repeatDiv] ?? 0.25
@@ -316,6 +333,13 @@ struct PadModeView: View {
             Task { @MainActor in
                 self.project.triggerPad(padID, accent: self.project.fullLevel)
                 self.fx.bump(padID)
+                if self.project.recording {
+                    if self.project.bank == "D", self.project.synthBank?[padID] != nil {
+                        self.project.recordSynthPad(padID, self.transport.recordFraction())
+                    } else {
+                        self.project.recordHit(padID, self.transport.recordFraction(), vel: self.project.fullLevel ? 1.0 : 0.85)
+                    }
+                }
             }
         }
         repeatTimers[padID] = t
@@ -385,7 +409,7 @@ struct PadModeView: View {
 
     private func perfButton(_ label: String, on: Bool, _ action: @escaping () -> Void) -> some View {
         // Strip leading decorative glyphs (⟳ ✎ 📖 → and arrows) so VoiceOver reads the words, not the symbol.
-        let spoken = label.trimmingCharacters(in: CharacterSet(charactersIn: "⟳✎📖→⟶➜… ")).trimmingCharacters(in: .whitespaces)
+        let spoken = label.trimmingCharacters(in: CharacterSet(charactersIn: "⟳✎📖→⟶➜✂︎… ")).trimmingCharacters(in: .whitespaces)
         return Button(action: action) {
             Text(label).font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
                 .frame(maxWidth: .infinity).frame(height: 46)

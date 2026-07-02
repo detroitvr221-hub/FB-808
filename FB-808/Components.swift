@@ -17,6 +17,11 @@ func styledText(_ segments: [(String, Color?, Font?)]) -> Text {
     return Text(s)
 }
 
+/// Record-quantize options — only values recordHit can actually honor on the 16-slot grid
+/// (a "1/32" chip used to be offered but silently fell back to 1/16). Shared by the Sequence
+/// tools row and the TransportBar chip next to ●.
+let FD_RECORD_QUANTS = ["1/8", "1/16"]
+
 // MARK: - Type helpers
 
 struct Eyebrow: View {
@@ -242,6 +247,12 @@ struct TransportBar: View {
                 tpButton(label: project.countIn != 0 ? "\(project.countIn) BAR" : "CNT OFF") { cycleCount() }
                     .accessibilityLabel(Text("Count-in"))
                     .accessibilityValue(Text(project.countIn == 0 ? "Off" : "\(project.countIn) bars"))
+                tpButton(label: "Q \(project.quantize)") {
+                    project.checkpoint("quant", coalesce: false)
+                    project.quantize = FD_RECORD_QUANTS.next(after: project.quantize)
+                }
+                .accessibilityLabel(Text("Record quantize"))
+                .accessibilityValue(Text(project.quantize))
                 VStack(alignment: .leading, spacing: 0) {
                     Text("\(Int(project.swing * 100))%").font(FDFont.mono(14, .bold)).foregroundStyle(th.ink)
                     Text("SWING").font(FDFont.mono(9, .bold)).tracking(1).foregroundStyle(th.inkFaint)
@@ -348,25 +359,37 @@ struct TransportBar: View {
 // MARK: - Recording waveform
 
 /// A live, scrolling waveform of the audio output — shown while the transport
-/// is recording so you can see the music being captured.
+/// is recording so you can see the music being captured. Polls at ~30 Hz (slower under
+/// Reduce Motion) instead of every frame, and skips the redraw when the snapshot hasn't
+/// changed, so it can't crowd Transport's main-thread scheduler on slow devices.
 struct RecordingWaveform: View {
     @EnvironmentObject var engine: AudioEngine
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var color: Color
     var body: some View {
-        TimelineView(.animation) { _ in
-            Canvas { ctx, size in
-                let peaks = engine.recordingWaveform()
-                let n = peaks.count
-                guard n > 1, size.width > 1 else { return }
-                let mid = size.height / 2
-                let cw = size.width / CGFloat(n)
-                for i in 0..<n {
-                    let p = CGFloat(min(1, Double(peaks[i]) * 1.5))
-                    let h = max(1.5, p * size.height)
-                    let x = CGFloat(i) * cw
-                    let rect = CGRect(x: x, y: mid - h / 2, width: max(0.7, cw - 0.6), height: h)
-                    ctx.fill(Path(rect), with: .color(color.opacity(0.3 + Double(p) * 0.7)))
-                }
+        TimelineView(.periodic(from: .now, by: reduceMotion ? 0.25 : 1.0 / 30.0)) { _ in
+            RecordingWaveformCanvas(peaks: engine.recordingWaveform(), color: color)
+                .equatable()
+        }
+    }
+}
+
+private struct RecordingWaveformCanvas: View, Equatable {
+    let peaks: [Float]
+    let color: Color
+    static func == (a: Self, b: Self) -> Bool { a.peaks == b.peaks && a.color == b.color }
+    var body: some View {
+        Canvas { ctx, size in
+            let n = peaks.count
+            guard n > 1, size.width > 1 else { return }
+            let mid = size.height / 2
+            let cw = size.width / CGFloat(n)
+            for i in 0..<n {
+                let p = CGFloat(min(1, Double(peaks[i]) * 1.5))
+                let h = max(1.5, p * size.height)
+                let x = CGFloat(i) * cw
+                let rect = CGRect(x: x, y: mid - h / 2, width: max(0.7, cw - 0.6), height: h)
+                ctx.fill(Path(rect), with: .color(color.opacity(0.3 + Double(p) * 0.7)))
             }
         }
     }

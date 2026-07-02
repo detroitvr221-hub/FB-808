@@ -39,6 +39,9 @@ nonisolated final class FourStemSeparator {
     static let odrTag = "stem-model"
     /// Held for the lifetime of the process once fetched, so the OS keeps the downloaded model in place.
     private nonisolated(unsafe) static var heldRequest: NSBundleResourceRequest?
+    /// Compiled model cached alongside the held request — reloading from disk cost a few hundred ms per
+    /// split (S5). Only touched from the single stem task (`stemBusy` serializes runs).
+    private nonisolated(unsafe) static var cachedModel: MLModel?
 
     /// Is the model present RIGHT NOW (already downloaded, or bundled directly)? Fetch it with `ensureModel()`.
     static var modelAvailable: Bool { modelURL != nil }
@@ -83,10 +86,20 @@ nonisolated final class FourStemSeparator {
     /// unbounded import means a multi-minute, memory-heavy, uncancellable wall — cap to keep it bounded.
     static let maxSeconds: Double = 30
 
-    static func separate(_ mono: [Float], engineSR: Double) -> [Stem]? {
+    /// `progress` reports 0…1 between inference chunks; the loop also honors task cancellation
+    /// (returns nil — callers distinguish a cancel from a failure via `Task.isCancelled`).
+    static func separate(_ mono: [Float], engineSR: Double,
+                         progress: (@Sendable (Double) -> Void)? = nil) -> [Stem]? {
         guard let url = modelURL else { return nil }
-        let cfg = MLModelConfiguration(); cfg.computeUnits = .all
-        guard let model = try? MLModel(contentsOf: url, configuration: cfg) else { log.error("stems: model load failed"); return nil }
+        let model: MLModel
+        if let cached = cachedModel {
+            model = cached
+        } else {
+            let cfg = MLModelConfiguration(); cfg.computeUnits = .all
+            guard let loaded = try? MLModel(contentsOf: url, configuration: cfg) else { log.error("stems: model load failed"); return nil }
+            cachedModel = loaded
+            model = loaded
+        }
         let desc = model.modelDescription
 
         // Discover the audio input feature + its shape.
@@ -119,6 +132,8 @@ nonisolated final class FourStemSeparator {
 
         var pos = 0
         while pos < n {
+            if Task.isCancelled { return nil }                  // Cancel button — bail between chunks (S1)
+            progress?(Double(pos) / Double(n))
             let len = min(seg, n - pos)
             guard let input = try? MLMultiArray(shape: inShape.map { NSNumber(value: $0 > 0 ? $0 : seg) }, dataType: .float32) else { return nil }
             fill(input, from: x, at: pos, count: len, channels: inChannels, segLen: seg)
@@ -137,6 +152,7 @@ nonisolated final class FourStemSeparator {
             pos += stride
         }
         guard sources > 0 else { return nil }
+        progress?(1)
 
         // Normalize the overlap-add, resample each source back to engine rate, name + return.
         return (0..<sources).map { s in

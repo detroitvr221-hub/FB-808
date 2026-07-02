@@ -29,6 +29,9 @@ struct TrackModeView: View {
     @State private var exportFile: ExportFile?
     @State private var exporting = false
     @State private var exportError: String?   // surface a failed render instead of silently stopping the spinner
+    @State private var pendingExport: ExportFormat?   // Song Mode off + arrangement exists → ask song vs loop first
+    @State private var loopBars = 4                   // loop-mode export length (buildExportPlan loopBarsOverride)
+    @State private var fullSection: Kit.Section?      // addSection hit the end of the timeline → offer to extend
     @State private var renameID: String?
     @State private var renameText = ""
     @State private var importTrackID = "audio"
@@ -51,6 +54,7 @@ struct TrackModeView: View {
                          : (project.songMode ? "Song Mode · clips build the arrangement" : "Arrange your patterns into a song — tap a lane to add a clip, drag to move"))
                         .font(FDFont.ui(12.5)).foregroundStyle(project.audioArmedTrack != nil ? settings.theme.miss : settings.inkFaint).lineLimit(1)
                     if project.audioArmedTrack != nil { punchControl; recOffset }
+                    lengthButton
                     songAutoButton
                     rangeButton
                     buildSongButton
@@ -86,6 +90,21 @@ struct TrackModeView: View {
         .alert("Export didn't work", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("OK", role: .cancel) { exportError = nil }
         } message: { Text(exportError ?? "") }
+        .confirmationDialog("Export", isPresented: Binding(get: { pendingExport != nil }, set: { if !$0 { pendingExport = nil } }), titleVisibility: .visible) {
+            Button("Full song · \(BARS) bars") { if let f = pendingExport { runExport(f, fullSong: true) }; pendingExport = nil }
+            Button("Current loop · \(loopBars) bar\(loopBars == 1 ? "" : "s")") { if let f = pendingExport { runExport(f, fullSong: false) }; pendingExport = nil }
+            Button("Cancel", role: .cancel) { pendingExport = nil }
+        } message: { Text("You have an arrangement, but Song Mode is off. Export the whole song, or just the loop that's playing?") }
+        .alert("Timeline is full", isPresented: Binding(get: { fullSection != nil }, set: { if !$0 { fullSection = nil } })) {
+            if BARS < 64 {
+                Button("Extend to \(min(64, BARS + 16)) bars") {
+                    let sec = fullSection; fullSection = nil
+                    project.setSongBars(min(64, BARS + 16))
+                    if let sec { addSection(sec) }
+                }
+            }
+            Button("Cancel", role: .cancel) { fullSection = nil }
+        } message: { Text("All \(BARS) bars are used. Extend the song to add more sections.") }
     }
 
     private func handleAudioImport(_ result: Result<[URL], Error>) {
@@ -102,7 +121,18 @@ struct TrackModeView: View {
             Button { exportSong(.m4a) } label: { Label("M4A · AAC (compressed)", systemImage: "waveform") }
             Button { exportSong(.wav) } label: { Label("WAV · lossless", systemImage: "waveform.path") }
             Button { exportStems() } label: { Label("Stems · per-track WAV (pre-master, FX-dry)", systemImage: "square.stack.3d.up") }
-            Button { sweepExportDirs(); if let url = project.exportMIDIFile() { exportFile = ExportFile(urls: [url]) } } label: { Label("MIDI · .mid", systemImage: "pianokeys") }
+            Button {
+                sweepExportDirs()
+                if let url = project.exportMIDIFile() { exportFile = ExportFile(urls: [url]) }
+                else { exportError = "Couldn't export MIDI. Add some drum hits or melody notes first." }
+            } label: { Label("MIDI · .mid", systemImage: "pianokeys") }
+            if !project.songMode {
+                Menu {
+                    ForEach([1, 2, 4, 8], id: \.self) { n in
+                        Button { loopBars = n } label: { Label("\(n) bar\(n == 1 ? "" : "s")", systemImage: loopBars == n ? "checkmark" : "") }
+                    }
+                } label: { Label("Loop length · \(loopBars) bar\(loopBars == 1 ? "" : "s")", systemImage: "repeat") }
+            }
         } label: {
             HStack(spacing: 7) {
                 if exporting {
@@ -128,8 +158,16 @@ struct TrackModeView: View {
 
     private func exportSong(_ format: ExportFormat) {
         guard !exporting else { return }
+        if !project.songMode && !project.arrangement.isEmpty { pendingExport = format; return }
+        runExport(format, fullSong: false)
+    }
+
+    private func runExport(_ format: ExportFormat, fullSong: Bool) {
+        guard !exporting else { return }
         exporting = true
-        let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let plan = project.buildExportPlan(loopBarsOverride: (fullSong || project.songMode) ? nil : loopBars,
+                                           songModeOverride: fullSong ? true : nil,
+                                           safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
         let dither = settings.exportDither   // captured on the main actor before detaching
         Task {
             sweepExportDirs()            // reclaim PRIOR batches first → never deletes the dir we're about to share (#227)
@@ -149,18 +187,37 @@ struct TrackModeView: View {
         exporting = true
         let plan = project.buildExportPlan(safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
         let dither = settings.exportDither   // captured on the main actor before detaching
+        let stemNames = stemDisplayNames()   // bus id → track display name (sanitized, deduped)
         Task {
             sweepExportDirs()            // reclaim PRIOR batches first (#227)
             let dir = fd808ExportDir()   // all stems of this batch share one dir
             let urls = await Task.detached(priority: .userInitiated) { () -> [URL] in
                 renderStems(plan).compactMap { stem in
-                    writeAudio(.wav, left: stem.left, right: stem.right, sr: plan.sr, name: "\(plan.name) - \(stem.name)", dir: dir, dither: dither)
+                    writeAudio(.wav, left: stem.left, right: stem.right, sr: plan.sr, name: "\(plan.name) - \(stemNames[stem.name] ?? stem.name)", dir: dir, dither: dither)
                 }
             }.value
             exporting = false
             if !urls.isEmpty { exportFile = ExportFile(urls: urls); progress.awardCreative("export", 10) }
             else { exportError = "Couldn't export stems. Make sure the project has sounds in it." }
         }
+    }
+
+    /// Stem filenames use the track's DISPLAY name, not its internal bus id — sanitized for the
+    /// filesystem and deduped ("Drums", "Drums 2") so two same-named tracks can't overwrite each other.
+    private func stemDisplayNames() -> [String: String] {
+        var seen = Set<String>()
+        var names: [String: String] = [:]
+        for id in project.busOrder {
+            let raw = project.tracks.first { $0.id == id }?.name ?? id
+            let base = raw.components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>")).joined(separator: "-")
+                .trimmingCharacters(in: .whitespaces)
+            var nm = base.isEmpty ? id : base
+            var i = 2
+            while seen.contains(nm) { nm = "\(base) \(i)"; i += 1 }
+            seen.insert(nm)
+            names[id] = nm
+        }
+        return names
     }
 
     private var arrBox: some View {
@@ -461,8 +518,7 @@ struct TrackModeView: View {
                         let bar = max(0, min(BARS - 2, Int(v.location.x / barPx)))
                         // don't drop a clip on top of one that's already there
                         if (project.clips[t.id] ?? []).contains(where: { bar >= $0.s && bar < $0.s + $0.l }) { return }
-                        project.checkpoint("clip", coalesce: false)
-                        project.clips[t.id, default: []].append(Clip(s: bar, l: 2, color: t.color))
+                        addClip(t, at: bar)
                     })
                 .accessibilityLabel(Text("\(t.name) lane"))
                 .accessibilityHint(Text("Add a clip"))
@@ -472,8 +528,7 @@ struct TrackModeView: View {
                     var bar = 0
                     while bar <= BARS - 2 && taken.contains(where: { bar >= $0.s && bar < $0.s + $0.l }) { bar += 1 }
                     guard bar <= BARS - 2 else { return }
-                    project.checkpoint("clip", coalesce: false)
-                    project.clips[t.id, default: []].append(Clip(s: bar, l: 2, color: t.color))
+                    addClip(t, at: bar)
                 }
             // empty-lane affordance: a dashed "tap to add" ghost in bar 1 so the tap target is visible
             // (the Color.clear hit layer behind handles the actual tap).
@@ -647,6 +702,29 @@ struct TrackModeView: View {
             .accessibilityLabel(Text(s == "+" ? "Increase" : "Decrease"))
     }
 
+    private var lengthButton: some View {
+        Menu {
+            ForEach([16, 32, 64], id: \.self) { n in
+                Button { project.setSongBars(n) } label: {
+                    Label("\(n) bars", systemImage: n == BARS ? "checkmark" : "")
+                }
+                .disabled(n < project.usedSongBars)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "ruler").font(.system(size: 12, weight: .semibold))
+                Text("\(BARS) Bars").font(FDFont.ui(13, .semibold))
+            }
+            .foregroundStyle(settings.ink)
+            .padding(.horizontal, 12).frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.line, lineWidth: 1))
+        }
+        .menuStyle(.button).buttonStyle(.plain)
+        .accessibilityLabel(Text("Song length"))
+        .accessibilityValue(Text("\(BARS) bars"))
+    }
+
     private var buildSongButton: some View {
         Button { confirmBuildSong = true } label: {
             HStack(spacing: 7) {
@@ -801,9 +879,18 @@ struct TrackModeView: View {
 
     private func addSection(_ sec: Kit.Section) {
         let last = project.arrangement.reduce(0) { max($0, $1.start + $1.len) }
-        if last >= BARS { return }
+        if last >= BARS { fullSection = sec; return }
         project.checkpoint("addsection", coalesce: false)
+        if project.arrangement.isEmpty { project.songMode = true }   // first section = a new arrangement → play it as a song
         project.arrangement.append(ArrItem(id: "a\(Int(Date().timeIntervalSince1970 * 1000))", section: sec.id, start: last, len: 2))
+    }
+
+    /// Add a program clip, flipping Song Mode on for the very FIRST clip of a new arrangement
+    /// (so manual arranging is actually heard/exported) — never re-flips once clips exist.
+    private func addClip(_ t: Track, at bar: Int) {
+        project.checkpoint("clip", coalesce: false)
+        if project.clips.values.allSatisfy({ $0.isEmpty }) { project.songMode = true }
+        project.clips[t.id, default: []].append(Clip(s: bar, l: 2, color: t.color))
     }
 }
 

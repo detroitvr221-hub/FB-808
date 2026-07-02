@@ -125,11 +125,11 @@ final class MIDIManager: ObservableObject {
     private let fifo = MIDIInputFIFO()
     private var client = MIDIClientRef()
     private var inPort = MIDIPortRef()
-    private var drainTimer: Timer?
+    private var drainSource: DispatchSourceUserDataAdd?
     private var started = false
 
     deinit {
-        drainTimer?.invalidate()
+        drainSource?.cancel()
         if inPort != 0 { MIDIPortDispose(inPort) }
         if client != 0 { MIDIClientDispose(client) }
     }
@@ -150,6 +150,16 @@ final class MIDIManager: ObservableObject {
         var status = MIDIClientCreateWithBlock("FD808.MIDIClient" as CFString, &client, notifyBlock)
         guard status == noErr else { started = false; return }
 
+        // Event-driven drain: the CoreMIDI thread kicks this source after ingesting, so the main thread
+        // only wakes when MIDI actually arrived (the old 10 ms poll woke 100×/s even with no controller
+        // activity). Coalesced adds fire the handler once per burst.
+        let source = DispatchSource.makeUserDataAddSource(queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.drainAndDispatch() }
+        }
+        source.activate()
+        drainSource = source
+
         // Block-based read callback. Runs on a high-priority CoreMIDI thread → only the lock-guarded FIFO
         // is touched (the `fifo` reference is Sendable; no main-actor state is read here).
         let fifo = self.fifo
@@ -165,23 +175,20 @@ final class MIDIManager: ObservableObject {
                     p = UnsafePointer(MIDIPacketNext(p))
                 }
             }
+            source.add(data: 1)
         }
         status = MIDIInputPortCreateWithBlock(client, "FD808.Input" as CFString, &inPort, readBlock)
         guard status == noErr else {
+            drainSource?.cancel(); drainSource = nil
             MIDIClientDispose(client); client = MIDIClientRef(); started = false; return
         }
 
         connectAllSources()
         enabled = true
-
-        // ~10 ms main-queue drain. Same Timer + assumeIsolated pattern the engine uses for its reclaim/diag.
-        drainTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.drainAndDispatch() }
-        }
     }
 
     func stop() {
-        drainTimer?.invalidate(); drainTimer = nil
+        drainSource?.cancel(); drainSource = nil
         if inPort != 0 { MIDIPortDispose(inPort); inPort = MIDIPortRef() }
         if client != 0 { MIDIClientDispose(client); client = MIDIClientRef() }
         fifo.resetParser()

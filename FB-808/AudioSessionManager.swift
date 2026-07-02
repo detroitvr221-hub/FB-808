@@ -24,7 +24,8 @@ final class AudioSessionManager: ObservableObject {
     /// can still pick "Low · 3 ms" manually.
     var targetFrames: Int {
         guard manualBufferSec <= 0 else { return Int((manualBufferSec * grantedSampleRate).rounded()) }
-        return routeClass == .bluetooth ? 1024 : 512
+        if routeClass == .bluetooth || DeviceTier.current == .low { return 1024 }   // 2 GB hardware needs the doubled budget
+        return 512
     }
     private var grantedSampleRate: Double { max(8000, AVAudioSession.sharedInstance().sampleRate) }
 

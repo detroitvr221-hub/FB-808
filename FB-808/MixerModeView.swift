@@ -746,6 +746,8 @@ struct LUFSReadout: View {
                 .padding(.horizontal, 7).frame(height: 18)
                 .fdCard(5, fill: settings.panel2)
         }
+        .onAppear { engine.setMetersActive(true) }     // K-weighting only runs while this readout is up
+        .onDisappear { engine.setMetersActive(false) }
     }
 }
 

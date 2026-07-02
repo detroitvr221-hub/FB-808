@@ -36,6 +36,37 @@ final class Transport: ObservableObject {
     private var audioRecBar0 = 0.0
     private var audioRecStartBar = 0
 
+    // Per-BAR cache of the track-derived lookups scheduleStep needs — the dict/set rebuilds were
+    // per 16th note (known ARCH-03). Refreshed on every bar line (and when the track list changes),
+    // so mid-bar link/vol edits settle at the next downbeat instead of costing every step.
+    private var stepCacheBar = -1
+    private var stepCacheTracks = -1
+    private var cachedBusIdx: [String: Int] = [:]
+    private var cachedTrackVol: [String: Double] = [:]
+    private var cachedOwnedRows = Set<String>()
+    private var cachedOwnedLeadMelody = false
+    private var cachedOwnedPartIDs = Set<String>()
+
+    private func refreshStepCache(bar: Int, curLanes: [String: [Double]]) {
+        let p = project
+        stepCacheBar = bar
+        stepCacheTracks = p.tracks.count
+        cachedBusIdx = p.busIndex
+        cachedTrackVol = Dictionary(p.tracks.map { ($0.id, $0.vol) }, uniquingKeysWith: { a, _ in a })
+        cachedOwnedRows = []
+        cachedOwnedLeadMelody = false
+        cachedOwnedPartIDs = []
+        for track in p.tracks where track.isLinked {
+            guard let link = track.source.link else { continue }
+            switch link.kind {
+            case .lanes:  if let rows = link.rows { cachedOwnedRows.formUnion(rows) } else { cachedOwnedRows.formUnion(curLanes.keys) }
+            case .melody: cachedOwnedLeadMelody = true
+            case .part:   if link.partID == nil || link.partID == "lead" { cachedOwnedLeadMelody = true } else if let pid = link.partID { cachedOwnedPartIDs.insert(pid) }
+            case .sequenceLanes, .sequenceMelody: break
+            }
+        }
+    }
+
     init(project: Project, engine: AudioEngine, fx: PadFX) {
         self.project = project
         self.engine = engine
@@ -52,6 +83,7 @@ final class Transport: ObservableObject {
         engine.stopClips()      // clear any clip voices lingering from a prior run
         playing = true
         step16 = 0
+        stepCacheBar = -1
         let bars = countInBars ?? project.countIn
         countSteps = bars * max(1, project.barSteps)
         nextStepTime = engine.now() + 0.08
@@ -73,6 +105,7 @@ final class Transport: ObservableObject {
         if playing { stop() }
         engine.start(); engine.stopClips()
         playing = true
+        stepCacheBar = -1
         let n = max(1, project.barSteps)
         step16 = ((step % n) + n) % n
         countSteps = 0
@@ -215,18 +248,12 @@ final class Transport: ObservableObject {
         // Sources a live-linked track now OWNS — suppress them in the classic paths below so a promoted /
         // sent pattern plays exactly ONCE (via its track), not doubled. Seeded tracks have no link so they
         // own nothing; frozen copies carry their own data and don't reference the source. (#review)
-        var ownedRows = Set<String>()
-        var ownedLeadMelody = false
-        var ownedPartIDs = Set<String>()
-        for track in p.tracks where track.isLinked {
-            guard let link = track.source.link else { continue }
-            switch link.kind {
-            case .lanes:  if let rows = link.rows { ownedRows.formUnion(rows) } else { ownedRows.formUnion(curLanes.keys) }
-            case .melody: ownedLeadMelody = true
-            case .part:   if link.partID == nil || link.partID == "lead" { ownedLeadMelody = true } else if let pid = link.partID { ownedPartIDs.insert(pid) }
-            case .sequenceLanes, .sequenceMelody: break   // point at a stored sequence bank, not the live scratch buffers
-            }
+        if s == 0 || stepCacheBar != bar || stepCacheTracks != p.tracks.count {
+            refreshStepCache(bar: bar, curLanes: curLanes)
         }
+        let ownedRows = cachedOwnedRows
+        let ownedLeadMelody = cachedOwnedLeadMelody
+        let ownedPartIDs = cachedOwnedPartIDs
 
         for (padID, lane) in curLanes {
             guard s < lane.count else { continue }
@@ -295,8 +322,8 @@ final class Transport: ObservableObject {
         //    tracks have neither a link nor a copy, so they're untouched — played by the classic paths
         //    above (no double-trigger). Link resolution is per-step here, matching the existing
         //    curLanes/trackVol per-step cost; a per-bar cache is a future optimization. (SYSTEM_AUDIT Step 1)
-        let busIdx = p.busIndex
-        let trackVol = Dictionary(p.tracks.map { ($0.id, $0.vol) }, uniquingKeysWith: { a, _ in a })
+        let busIdx = cachedBusIdx
+        let trackVol = cachedTrackVol
         for track in p.tracks where track.playsAdditively {   // linked OR frozen, not frozen-to-audio (plays via clip)
             if p.trackMute[track.id] == true { continue }
             if trackSolo && !(p.trackSolo[track.id] ?? false) { continue }

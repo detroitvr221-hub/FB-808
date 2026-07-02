@@ -31,6 +31,17 @@ nonisolated enum AudioDefaults {
     static let maxSampleSeconds: Double = 60
 }
 
+/// Coarse hardware tier (by RAM: 2 GB ≈ A10, 3–4 GB ≈ A12-class) so slow devices get a bigger IO buffer,
+/// a lower voice ceiling, and a 48 kHz clamp up front — before the CPU governor has to shed voices after
+/// the crackle already happened.
+nonisolated enum DeviceTier {
+    case low, mid, high
+    static let current: DeviceTier = {
+        let gib = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
+        return gib <= 2.5 ? .low : (gib <= 4.5 ? .mid : .high)
+    }()
+}
+
 // MARK: - Engine wrapper (main actor)
 
 @MainActor
@@ -39,7 +50,8 @@ final class AudioEngine: ObservableObject {
     /// 48k). A live switch would require recreating the core + graph + re-resampling every loaded sample,
     /// so the rate is fixed per launch (a change applies on the next launch) — safe and behavior-preserving.
     static func savedSampleRate() -> Double {
-        let v = UserDefaults.standard.object(forKey: "fd.sampleRate") as? Double ?? AudioDefaults.sampleRate
+        var v = UserDefaults.standard.object(forKey: "fd.sampleRate") as? Double ?? AudioDefaults.sampleRate
+        if DeviceTier.current == .low { v = min(v, AudioDefaults.sampleRate) }   // 88.2/96k is 2× render cost — not on 2 GB hardware
         return AudioDefaults.supportedSampleRates.contains(v) ? v : AudioDefaults.sampleRate
     }
     let core = SynthCore(sampleRate: AudioEngine.savedSampleRate())
@@ -103,7 +115,7 @@ final class AudioEngine: ObservableObject {
     }
     private static let tsFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
 
-    init() {}
+    init() { core.metersActive = false }   // the LUFS readout turns this on when visible
 
     deinit {
         reclaimTimer?.invalidate()
@@ -367,6 +379,17 @@ final class AudioEngine: ObservableObject {
         audioObservers.append(nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: session, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.restartAudio(reconfigure: true) }
         })
+        audioObservers.append(nc.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let state = ProcessInfo.processInfo.thermalState
+                let throttle = state == .serious || state == .critical
+                guard throttle != self.thermalThrottled else { return }
+                self.thermalThrottled = throttle
+                self.core.setVoiceLimit(self.cappedPolyphony())
+                self.logEvent("thermal", throttle ? "throttled — voices capped at 24" : "recovered — voice cap restored")
+            }
+        })
     }
 
     /// Re-activate the session and restart the engine if it stopped. Idempotent. Re-applies the per-route
@@ -392,10 +415,25 @@ final class AudioEngine: ObservableObject {
     /// Push the user's audio preferences to the engine. Buffer changes restart the IO; polyphony +
     /// limiter apply live.
     func applyAudioSettings(bufferSec: Double, polyphony: Int, limiterOn: Bool, limiterCeilingDb: Double) {
-        core.setVoiceLimit(polyphony)
+        userPolyphony = polyphony
+        core.setVoiceLimit(cappedPolyphony())
         core.setSafetyLimiter(ceilingDb: limiterCeilingDb, enabled: limiterOn)
         setPreferredBuffer(bufferSec)
     }
+
+    private var userPolyphony = 32
+    private var thermalThrottled = false
+    /// Low-tier hardware never gets more than 32 voices regardless of the Settings slider; a serious/critical
+    /// thermal state tightens any tier to 24 until it recovers.
+    private func cappedPolyphony() -> Int {
+        var cap = DeviceTier.current == .low ? 32 : 128
+        if thermalThrottled { cap = Swift.min(cap, 24) }
+        return Swift.max(4, Swift.min(userPolyphony, cap))
+    }
+
+    /// Live K-weighted loudness metering is CPU the render thread pays on every block; only the LUFS
+    /// readout consumes it, so it stays off until that view appears.
+    func setMetersActive(_ on: Bool) { core.metersActive = on }
 
     /// The IO buffer the system actually granted (may differ from preferred; the OS quantizes it).
     func currentBufferDuration() -> Double { sessionMgr.currentBufferDuration() }
@@ -459,7 +497,8 @@ final class AudioEngine: ObservableObject {
         let input = engine.inputNode
         let fmt = input.inputFormat(forBus: 0)
         guard fmt.channelCount > 0, fmt.sampleRate > 0,
-              let cap = MicCapture(inputFormat: fmt, sr: core.sr, channels: stereoCapture ? 2 : 1) else {
+              let cap = MicCapture(inputFormat: fmt, sr: core.sr, channels: stereoCapture ? 2 : 1,
+                                   maxSeconds: AudioDefaults.maxSampleSeconds) else {   // shared cap, not the duplicated default 60
             started = false; start(); return false           // restore playback
         }
         mic = cap
@@ -562,11 +601,6 @@ final class AudioEngine: ObservableObject {
     func setHQInterpolation(_ on: Bool) { core.setHQInterpolation(on) }   // opt-in HQ DSP (default off)
     func setEqualPowerPan(_ on: Bool) { core.setEqualPowerPan(on) }
     func setBandlimitedOsc(_ on: Bool) { core.setBandlimitedOsc(on) }
-    func detectPitch() -> Double { ensure(); return core.detectPitch() }
-    /// Estimate the loaded sample's tempo (BPM) — 0 if unclear. (D4)
-    func detectTempo() -> Double { ensure(); return SynthCore.detectTempo(core.currentSampleOriginal(), sr: core.sr) }
-    /// Estimate the loaded sample's musical key (root pitch-class 0–11, isMinor). (D4)
-    func detectKey() -> (root: Int, minor: Bool)? { ensure(); return SynthCore.detectKey(core.currentSampleOriginal(), sr: core.sr) }
     /// Split the loaded sample into harmonic (melody) + percussive (drums) stems — on-device, no model. (D1)
     func splitStems() -> (harmonic: [Float], percussive: [Float]) {
         ensure(); return StemSplit.harmonicPercussive(core.currentSampleOriginal(), sr: core.sr)
@@ -575,7 +609,9 @@ final class AudioEngine: ObservableObject {
     func currentSampleForStems() -> (data: [Float], sr: Double) { ensure(); return (core.currentSampleOriginal(), core.sr) }
     func makeWavetableFromSample() -> [Float]? { ensure(); return core.makeWavetableFromSample() }
     func sampleToSynth() { core.sampleToSynth() }
-    func resampleOutput() -> (dur: Double, wave: [Double]) { ensure(); return core.resampleOutput() }
+    /// The last few seconds of live output, silence-trimmed — nil when the capture holds no real signal,
+    /// so Resample Mix in a silent project can't replace a loaded sample with a flat line (E3).
+    func captureMixOutput() -> [Float]? { ensure(); return core.captureOutputTrimmed() }
     func scopeSnapshot() -> [Float] { core.scopeSnapshot() }
     func recordingWaveform() -> [Float] { core.recWaveSnapshot() }
     func momentaryLUFS() -> Double { core.momentaryLUFS() }
@@ -599,14 +635,9 @@ final class AudioEngine: ObservableObject {
         return core.makeSampleBuffer(kind)
     }
 
-    /// Off-thread decode then load into the sampler buffer (Phase 2) — the UI doesn't block on the file read.
-    func importAudioAsync(url: URL, maxSeconds: Double = AudioDefaults.maxSampleSeconds) async -> (dur: Double, transients: [Double], wave: [Double])? {
-        ensure()
-        guard let data = await SampleEngine.decodeAsync(url: url, targetSR: core.sr, maxSeconds: maxSeconds) else { return nil }
-        return core.loadExternal(data)
-    }
-
     /// Off-thread decode — the UI never blocks on import or large files (Phase 2). Returns on the caller.
+    /// (Sampler import decodes here, then commits via `importBuffer` inside `mutateSample` so the undo
+    /// capture happens on decode SUCCESS, right before the buffer is replaced — C7.)
     func decodeAudioFileAsync(url: URL, maxSeconds: Double = 60) async -> [Float]? {
         ensure(); return await SampleEngine.decodeAsync(url: url, targetSR: core.sr, maxSeconds: maxSeconds)
     }

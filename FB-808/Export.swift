@@ -48,13 +48,13 @@ nonisolated enum ExportFormat: Sendable {
 // MARK: - Build the plan from the project (mirrors the transport's per-step logic)
 
 extension Project {
-    func buildExportPlan(loopBarsOverride: Int? = nil, safetyEnabled: Bool = true, safetyCeilingDb: Double = -1.0) -> ExportPlan {
+    func buildExportPlan(loopBarsOverride: Int? = nil, songModeOverride: Bool? = nil, safetyEnabled: Bool = true, safetyCeilingDb: Double = -1.0) -> ExportPlan {
         let sr = engine.sampleRate   // render at the engine rate (Phase 5/8) so recorded audio clips stay in sync; 48 k by default
         let bpmD = Double(bpm)
         let stepDur = (60 / bpmD) / 4
         let n = max(1, barSteps)        // steps per bar (A13 time signature)
         // Resample (loopBarsOverride set) always bounces the current PATTERN, never the arrangement.
-        let songMode = loopBarsOverride == nil ? self.songMode : false
+        let songMode = loopBarsOverride == nil ? (songModeOverride ?? self.songMode) : false
         let totalBars = loopBarsOverride ?? (songMode ? songBars : 4)
         let masterCh = mixer["master"] ?? MixChannel(vol: 0.9)
         // Live applies the fader (baked into velocities) AND a fixed 0.9 render trim (RootView
@@ -137,7 +137,7 @@ extension Project {
                         atS += (Double(hs % 2000) / 1000.0 - 1) * humanize * 0.012 * sr
                     }
                     drums.append(ExportDrum(sound: soundFor(padID), vel: vel, opts: padOpts(padID, meta: sm) ?? TriggerOpts(),
-                                            atSample: atS, sampleData: padParams[padID]?.sampleFile != nil ? padSampleData[padID] : nil))
+                                            atSample: atS, sampleData: padSampleActive(padID) ? padSampleData[padID] : nil))
                     for ly in padParams[padID]?.layers ?? [] {   // stacked layers — were dropped from bounces (#20)
                         drums.append(ExportDrum(sound: ly.sound, vel: vel * ly.vol, opts: TriggerOpts(pitch: ly.pitch, pan: ly.pan), atSample: atS))
                     }
@@ -203,7 +203,7 @@ extension Project {
                             opts.pan = max(-1, min(1, opts.pan + track.pan))
                             drums.append(ExportDrum(sound: soundFor(padID), vel: vel, opts: opts,
                                                     atSample: atSample + padOffsetSec(padID) * sr,
-                                                    sampleData: padParams[padID]?.sampleFile != nil ? padSampleData[padID] : nil, busKey: busKey))
+                                                    sampleData: padSampleActive(padID) ? padSampleData[padID] : nil, busKey: busKey))
                         }
                     case .synthPart:
                         guard let (notes, patch) = trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
@@ -271,7 +271,7 @@ extension Project {
                         var opts = padOpts(padID) ?? TriggerOpts(); opts.pan = max(-1, min(1, opts.pan + track.pan))
                         drums.append(ExportDrum(sound: soundFor(padID), vel: padVel(padID, fullLevel ? 1 : lane[step]) * m.vol * Project.padDrive * track.vol,
                                                 opts: opts, atSample: atSample + padOffsetSec(padID) * sr,
-                                                sampleData: padParams[padID]?.sampleFile != nil ? padSampleData[padID] : nil))
+                                                sampleData: padSampleActive(padID) ? padSampleData[padID] : nil))
                     }
                 case .synthPart:
                     guard let (notes, patch) = trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked

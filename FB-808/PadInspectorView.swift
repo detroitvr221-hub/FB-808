@@ -176,8 +176,12 @@ struct PadInspectorView: View {
 
     // MARK: sound source (swap to any built-in drum, or import a one-shot)
 
+    /// The imported sample only counts here when it's audible in the CURRENT bank (F0) — a Bank-C
+    /// chop must not be shown as (or cleared as) the pad's sound while editing it from Bank A.
+    private var sampleActive: Bool { project.padSampleActive(pad.id) }
+
     private var currentSoundText: String {
-        if pp.sampleFile != nil { return pp.sampleName ?? "Imported Sample" }
+        if sampleActive { return pp.sampleName ?? "Imported Sample" }
         if let s = pp.sound { return Kit.soundLabel(s) }
         return "Default · " + Kit.soundLabel(pad.sound)
     }
@@ -187,20 +191,20 @@ struct PadInspectorView: View {
             HStack(spacing: 8) {
                 Menu {
                     Button { project.setPadSound(pad.id, nil) } label: {
-                        Label("Default · \(Kit.soundLabel(pad.sound))", systemImage: pp.sound == nil && pp.sampleFile == nil ? "checkmark" : "")
+                        Label("Default · \(Kit.soundLabel(pad.sound))", systemImage: pp.sound == nil && !sampleActive ? "checkmark" : "")
                     }
                     ForEach(Kit.drumSoundCats, id: \.self) { cat in
                         Section(cat) {
                             ForEach(Kit.drumSounds.filter { $0.cat == cat }) { ds in
                                 Button { project.setPadSound(pad.id, ds.id) } label: {
-                                    Label(ds.label, systemImage: pp.sound == ds.id && pp.sampleFile == nil ? "checkmark" : "")
+                                    Label(ds.label, systemImage: pp.sound == ds.id && !sampleActive ? "checkmark" : "")
                                 }
                             }
                         }
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: pp.sampleFile != nil ? "waveform" : "dial.medium").font(.system(size: 13))
+                        Image(systemName: sampleActive ? "waveform" : "dial.medium").font(.system(size: 13))
                         Text(currentSoundText).lineLimit(1)
                         Spacer(minLength: 4)
                         Image(systemName: "chevron.up.chevron.down").font(.system(size: 10))
@@ -220,7 +224,7 @@ struct PadInspectorView: View {
                 }.buttonStyle(.plain)
             }
 
-            if pp.sampleFile != nil {
+            if sampleActive {
                 HStack(spacing: 6) {
                     Image(systemName: "waveform.circle.fill").foregroundStyle(settings.accent)
                     Text(pp.sampleName ?? "Sample").font(FDFont.ui(11, .semibold)).foregroundStyle(settings.inkDim).lineLimit(1)
@@ -245,7 +249,7 @@ struct PadInspectorView: View {
         Task {   // decode off the main thread so a big file never hitches the UI (Phase 2)
             let data = await engine.decodeAudioFileAsync(url: url, maxSeconds: 12)
             guard let data, !data.isEmpty else { importError = "Couldn't read that file."; return }
-            project.setPadSample(padID, data: data, name: name)
+            project.setPadSample(padID, data: data, name: name, bank: project.bank)   // scoped to the bank it was imported in (F0)
         }
     }
 

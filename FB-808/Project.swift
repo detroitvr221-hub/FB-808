@@ -132,6 +132,7 @@ struct PadParam: Equatable, Codable {
     var sound: String? = nil        // base-sound override (a Kit.drumSounds id); nil = the pad's default
     var sampleFile: String? = nil   // imported one-shot WAV in FD808Samples/<file>; takes precedence over `sound`
     var sampleName: String? = nil   // display name of the imported sample
+    var sampleBank: String? = nil   // bank ("A"–"D") the sample applies in; nil = every bank (legacy saves, F0)
     // MPC "Play" params (optional → old saves decode; Swift synthesized Codable throws on missing non-optionals)
     var poly: Bool? = nil           // nil/true = Poly · false = Mono (the pad cuts its own previous hit)
     var offset: Double? = nil       // 0..1 trigger offset (lay-back micro-timing)
@@ -151,7 +152,9 @@ struct SampleState: Codable {
     var slices: [Double] = []          // normalized positions 0..1
     var count: Int = 0
     var tools: [String: Bool] = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]
-    var pitch: Int = 0                 // semitones for audition / slice playback
+    var pitch: Int = 0                 // semitones for audition / slice playback (the user-facing slider)
+    var tuneOffset: Int = 0            // Tune-to-Key correction, applied ON TOP of pitch so a later
+                                       // slider touch can't silently destroy the tuning (UX #63)
     var gain: Double = 1               // 0..2
     var loop: Bool = false             // loop the audition region continuously
     var reverseSlices: Bool = false    // map slices in reverse order onto pads
@@ -161,13 +164,13 @@ struct SampleState: Codable {
     var harmonize: Bool = false        // D6 — add diatonic 3rd+5th voices on playback
 
     // Tolerant decode so older saves (which lacked most of these) still load.
-    enum CodingKeys: String, CodingKey { case name, kind, dur, trim, slices, count, tools, pitch, gain, loop, reverseSlices, wave, transients, audioFile, harmonize }
+    enum CodingKeys: String, CodingKey { case name, kind, dur, trim, slices, count, tools, pitch, tuneOffset, gain, loop, reverseSlices, wave, transients, audioFile, harmonize }
     init(name: String, kind: String, dur: Double, trim: [Double] = [0, 1], slices: [Double] = [], count: Int = 0,
          tools: [String: Bool] = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false],
-         pitch: Int = 0, gain: Double = 1, loop: Bool = false, reverseSlices: Bool = false,
+         pitch: Int = 0, tuneOffset: Int = 0, gain: Double = 1, loop: Bool = false, reverseSlices: Bool = false,
          wave: [Double] = [], transients: [Double] = [], audioFile: String? = nil, harmonize: Bool = false) {
         self.name = name; self.kind = kind; self.dur = dur; self.trim = trim; self.slices = slices; self.count = count
-        self.tools = tools; self.pitch = pitch; self.gain = gain; self.loop = loop; self.reverseSlices = reverseSlices
+        self.tools = tools; self.pitch = pitch; self.tuneOffset = tuneOffset; self.gain = gain; self.loop = loop; self.reverseSlices = reverseSlices
         self.wave = wave; self.transients = transients; self.audioFile = audioFile; self.harmonize = harmonize
     }
     init(from d: Decoder) throws {
@@ -180,6 +183,7 @@ struct SampleState: Codable {
         count = (try? c.decode(Int.self, forKey: .count)) ?? 0
         tools = (try? c.decode([String: Bool].self, forKey: .tools)) ?? ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]
         pitch = (try? c.decode(Int.self, forKey: .pitch)) ?? 0
+        tuneOffset = (try? c.decode(Int.self, forKey: .tuneOffset)) ?? 0
         gain = (try? c.decode(Double.self, forKey: .gain)) ?? 1
         loop = (try? c.decode(Bool.self, forKey: .loop)) ?? false
         reverseSlices = (try? c.decode(Bool.self, forKey: .reverseSlices)) ?? false
@@ -238,7 +242,7 @@ final class Project: ObservableObject {
     @Published var isBouncing = false   // an offline render (auto-master / resample / freeze) is running — drives busy UI (#ARCH-01)
     @Published var recording = false
     @Published var micRecordFailed = false   // mic permission denied / tap failed → surface "enable mic access" (transient)
-    @Published var metronome = true
+    @Published var metronome = false
     @Published var countIn = 0          // bars: 0,1,2,4
     @Published var step = -1            // live playhead step (0..15); -1 stopped
     @Published var bar = 0             // live arrangement bar
@@ -272,7 +276,7 @@ final class Project: ObservableObject {
     @Published var trackMute: [String: Bool] = [:]
     @Published var trackSolo: [String: Bool] = [:]
     @Published var songMode = false       // when on, playback follows the arrangement clips
-    let songBars = 16
+    @Published var songBars = 16          // arrangement length in bars (16/32/64) — persisted; old saves decode 16
 
     // dynamic track list (the 99-layered-tracks foundation). Seeded with the 6 legacy lanes;
     // "Add Track" / send-to-track append frozen-content tracks. See Track.swift.
@@ -660,13 +664,20 @@ final class Project: ObservableObject {
     }
     private func padVolMul(_ id: String) -> Double { padParams[id].map { $0.vol / 0.85 } ?? 1 }
 
-    /// The voice id a pad should make sound with: an imported sample wins, then a
-    /// sound override, else the pad's own default sound. Sample ids use the "smp:" namespace.
+    /// True when the pad's imported sample applies in the CURRENT bank (F0). Sample assignments are
+    /// bank-scoped — chops land on Bank C without silently replacing the Bank A/B drum kit. A nil
+    /// `sampleBank` is a legacy (pre-scoping) save and keeps its old behavior: the sample plays in
+    /// every bank. Live triggering, the sequencer, and export all resolve through this same check.
+    func padSampleActive(_ padID: String) -> Bool {
+        guard let pp = padParams[padID], pp.sampleFile != nil else { return false }
+        return pp.sampleBank == nil || pp.sampleBank == bank
+    }
+
+    /// The voice id a pad should make sound with: an imported sample (active in this bank) wins, then
+    /// a sound override, else the pad's own default sound. Sample ids use the "smp:" namespace.
     func soundFor(_ padID: String) -> String {
-        if let pp = padParams[padID] {
-            if pp.sampleFile != nil { return "smp:" + padID }
-            if let s = pp.sound, !s.isEmpty { return s }
-        }
+        if padSampleActive(padID) { return "smp:" + padID }
+        if let s = padParams[padID]?.sound, !s.isEmpty { return s }
         return padID
     }
 
@@ -703,6 +714,26 @@ final class Project: ObservableObject {
     func trackPlaysInSong(_ track: String, atBar bar: Int) -> Bool {
         guard let cs = clips[track], !cs.isEmpty else { return true }
         return cs.contains { bar >= $0.s && bar < $0.s + $0.l && !$0.muted }
+    }
+
+    /// The last authored bar across sections, program clips and audio clips — the minimum song length.
+    var usedSongBars: Int {
+        var b = arrangement.reduce(0) { max($0, $1.start + $1.len) }
+        for cs in clips.values { for c in cs { b = max(b, c.s + c.l) } }
+        for c in audioClips { b = max(b, c.startBar + 1) }
+        return b
+    }
+
+    /// Change the arrangement length (16/32/64 bars). Never shrinks below the last authored bar,
+    /// so extending is always safe and shrinking can't orphan content. Grows the song automation lane.
+    func setSongBars(_ n: Int) {
+        let v = min(64, max(4, max(n, usedSongBars)))
+        guard v != songBars else { return }
+        checkpoint("songbars", coalesce: false)
+        songBars = v
+        if songAuto.count < v {
+            songAuto.append(contentsOf: Array(repeating: songAuto.last ?? 1, count: v - songAuto.count))
+        }
     }
 
     // MARK: arrangement clip editing (FL-Mobile-style)
@@ -976,14 +1007,15 @@ final class Project: ObservableObject {
 
     /// Assign a decoded one-shot to a pad: persist a WAV, register it with the engine,
     /// keep a copy in memory for offline export, and point the PadParam at it.
-    func setPadSample(_ padID: String, data: [Float], name: String) {
+    /// `bank` scopes where the sample plays (F0); nil = every bank (legacy behavior).
+    func setPadSample(_ padID: String, data: [Float], name: String, bank: String?) {
         guard !data.isEmpty else { return }
         checkpoint("padSample:\(padID)", coalesce: false)
-        applyPadSample(padID, data: data, name: name)
+        applyPadSample(padID, data: data, name: name, bank: bank)
     }
     /// The pad-sample assignment work WITHOUT an undo checkpoint, so batch ops (chop-to-pads)
     /// can collapse to a single undo step.
-    private func applyPadSample(_ padID: String, data: [Float], name: String) {
+    private func applyPadSample(_ padID: String, data: [Float], name: String, bank: String?) {
         // Old pad WAV intentionally kept — an undo snapshot may still reference it. The orphan sweep
         // reclaims WAVs no saved project references; deleting here destroyed the take on undo (#PERSIST-02).
         let file = UUID().uuidString + ".wav"
@@ -991,38 +1023,58 @@ final class Project: ObservableObject {
         padSampleData[padID] = data
         engine.registerPadSample(padID, data)
         var p = padParams[padID] ?? PadParam()
-        p.sampleFile = file; p.sampleName = String(name.prefix(24)); p.sound = nil
+        p.sampleFile = file; p.sampleName = String(name.prefix(24)); p.sound = nil; p.sampleBank = bank
         padParams[padID] = p
     }
 
     /// Assign several pads' one-shots as ONE undo step (stem split / multi-pad ops) — was N separate
     /// checkpoints, one per pad. Empty buffers are skipped.
-    func setPadSamples(_ items: [(id: String, data: [Float], name: String)]) {
+    func setPadSamples(_ items: [(id: String, data: [Float], name: String)], bank: String?) {
         let real = items.filter { !$0.data.isEmpty }
         guard !real.isEmpty else { return }
         checkpoint("padSamples", coalesce: false)
-        for it in real { applyPadSample(it.id, data: it.data, name: it.name) }
+        for it in real { applyPadSample(it.id, data: it.data, name: it.name, bank: bank) }
+    }
+
+    /// Nearest sign change in `buf` within ±`maxOff` samples of `idx` (zero-cross snap, SAMPLING-04) —
+    /// cutting on a crossing keeps chop/trim edges click-free. Returns the clamped `idx` when no
+    /// crossing is found. nonisolated: pure math, callable from detached render work.
+    nonisolated static func nearestZeroCross(_ buf: [Float], near idx: Int, within maxOff: Int) -> Int {
+        let i0 = max(0, min(buf.count - 1, idx))
+        guard buf.count > 1, maxOff > 0 else { return i0 }
+        for off in 0...maxOff {
+            for cand in (off == 0 ? [i0] : [i0 - off, i0 + off]) where cand > 0 && cand < buf.count {
+                if (buf[cand - 1] < 0) != (buf[cand] < 0) { return cand }
+            }
+        }
+        return i0
     }
 
     /// Chop the current sample buffer into per-pad one-shots, so the chops are playable in the
     /// step sequencer AND included in export — fixing the bank-C-only `sliceBank` dead-end where
     /// recorded/sequenced chops silently played the pad's drum voice (#26/#28/#118). One undo step.
     @discardableResult
-    func assignSlicesToPads(buffer: [Float], slices: [Double], reverse: Bool) -> Int {
+    func assignSlicesToPads(buffer: [Float], slices: [Double], reverse: Bool, mirror: Bool = false) -> Int {
         guard !buffer.isEmpty, !slices.isEmpty else { return 0 }
         checkpoint("assignChops", coalesce: false)
         sliceBank = nil   // supersede the legacy live-only slice bank — chops are real pad samples now
         let count = slices.count
         var assigned = 0
+        let zc = Int(0.005 * engine.sampleRate)   // ±5 ms zero-cross snap window (SAMPLING-04)
         for (i, p) in Kit.pads.enumerated() {
             if i >= count { break }
             let si = reverse ? (count - 1 - i) : i
-            let a = slices[si]
-            let b = si + 1 < count ? slices[si + 1] : 1
-            let lo = max(0, min(buffer.count, Int(a * Double(buffer.count))))
-            let hi = max(lo, min(buffer.count, Int(b * Double(buffer.count))))
+            let a0 = slices[si]
+            let b0 = si + 1 < count ? slices[si + 1] : 1
+            // A baked Reverse tool flips the audio but slices were detected on the forward buffer —
+            // mirror each window so the cut lands where the transient actually is (F3).
+            let (a, b) = mirror ? (1 - b0, 1 - a0) : (a0, b0)
+            var lo = max(0, min(buffer.count, Int(a * Double(buffer.count))))
+            var hi = max(lo, min(buffer.count, Int(b * Double(buffer.count))))
+            if lo > 0 { lo = Self.nearestZeroCross(buffer, near: lo, within: zc) }             // interior edges only —
+            if hi < buffer.count { hi = Self.nearestZeroCross(buffer, near: hi, within: zc) }  // 0 and end ARE boundaries
             guard hi > lo else { continue }
-            applyPadSample(p.id, data: Array(buffer[lo..<hi]), name: "Chop \(si + 1)")
+            applyPadSample(p.id, data: Array(buffer[lo..<hi]), name: "Chop \(si + 1)", bank: "C")   // chops live on Bank C only (F0)
             assigned += 1
         }
         return assigned
@@ -1032,6 +1084,7 @@ final class Project: ObservableObject {
     /// to a new one-shot sample on `padID`, exactly `bars` long so it loops seamlessly.
     /// You can then chop it, retune it, or play it like any pad sample: the core MPC loop.
     func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample") async {
+        let targetBank = bank   // scope the bounce to the bank it was resampled in (F0); bank may change mid-render
         let plan = buildExportPlan(loopBarsOverride: bars)
         isBouncing = true; defer { isBouncing = false }
         let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor so the UI stays live (#ARCH-01)
@@ -1042,7 +1095,7 @@ final class Project: ObservableObject {
         var peak: Float = 0
         for i in 0..<min(frames, l.count) { let v = (l[i] + r[i]) * 0.5; mono[i] = v; peak = max(peak, abs(v)) }
         if peak > 1 { for i in mono.indices { mono[i] /= peak } }   // guard inter-sum clipping
-        setPadSample(padID, data: mono, name: name)
+        setPadSample(padID, data: mono, name: name, bank: targetBank)
     }
 
     /// One-knob auto-master (D2, heuristic — no ML): bounce the current beat, measure its loudness +
@@ -1085,12 +1138,13 @@ final class Project: ObservableObject {
         // WAV kept for undo; orphan sweep reclaims it later (#PERSIST-02).
         padSampleData[padID] = nil
         engine.clearPadSample(padID)
-        setPadParam(padID) { $0.sampleFile = nil; $0.sampleName = nil }
+        setPadParam(padID) { $0.sampleFile = nil; $0.sampleName = nil; $0.sampleBank = nil }
     }
 
-    /// Choose a built-in synth sound for a pad (clears any imported sample).
+    /// Choose a built-in synth sound for a pad (clears an imported sample only when that sample is
+    /// audible in the current bank — picking a Bank A sound must not destroy a Bank C chop, F0).
     func setPadSound(_ padID: String, _ sound: String?) {
-        if padParams[padID]?.sampleFile != nil { clearPadSampleFor(padID) }
+        if padSampleActive(padID) { clearPadSampleFor(padID) }
         setPadParam(padID) { $0.sound = sound }
         activeKit = ""   // a manual swap means the loaded kit no longer matches → "Custom"
     }
@@ -1098,7 +1152,7 @@ final class Project: ObservableObject {
     /// Remap every pad's sound from a `padID → sound` map (imported samples are kept untouched).
     private func applySoundMap(_ sounds: [String: String]) {
         for pad in Kit.pads {
-            if padParams[pad.id]?.sampleFile != nil { continue }   // don't stomp an imported sample
+            if padSampleActive(pad.id) { continue }   // don't stomp a sample that's audible in this bank
             let snd = sounds[pad.id]
             let override = (snd != nil && snd != pad.sound) ? snd : nil
             if var p = padParams[pad.id] {
@@ -1129,7 +1183,7 @@ final class Project: ObservableObject {
     func currentPadSounds() -> [String: String] {
         var m: [String: String] = [:]
         for pad in Kit.pads {
-            guard let pp = padParams[pad.id], pp.sampleFile == nil, let s = pp.sound, s != pad.sound else { continue }
+            guard let pp = padParams[pad.id], !padSampleActive(pad.id), let s = pp.sound, s != pad.sound else { continue }
             m[pad.id] = s
         }
         return m
@@ -1297,6 +1351,7 @@ final class Project: ObservableObject {
             tracks: tracks, melodyMuted: melodyMuted, countIn: countIn, metronome: metronome)
         snap.sampleBufferToken = pendingBufferToken
         snap.id = projectID
+        snap.songBars = songBars
         return snap
     }
 
@@ -1382,6 +1437,7 @@ final class Project: ObservableObject {
         activeSeq = s.sequences.isEmpty ? 0 : max(0, min(s.activeSeq, s.sequences.count - 1))
         mixer = s.mixer
         pushMasterVolume()   // restore the live engine master from the loaded master fader (was launch-only 0.9)
+        songBars = max(4, min(64, s.songBars ?? 16))
         arrangement = s.arrangement; clips = s.clips; trackMute = s.trackMute; trackSolo = s.trackSolo; songMode = s.songMode
         melodyKey = s.melodyKey; melodyScale = s.melodyScale; melodyOctave = s.melodyOctave; melodyDensity = s.melodyDensity
         scaleLock = s.scaleLock; rollLen = s.rollLen
@@ -1400,7 +1456,7 @@ final class Project: ObservableObject {
         tracks = (s.tracks.map { !$0.isEmpty } == true) ? s.tracks! : Project.seedTracks()
         melodyMuted = s.melodyMuted ?? false
         countIn = s.countIn ?? 0
-        metronome = s.metronome ?? true
+        metronome = s.metronome ?? false
         // make the live buffers match the active sequence
         if sequences.indices.contains(activeSeq) {
             lanes = sequences[activeSeq].lanes
@@ -1572,6 +1628,7 @@ nonisolated struct ProjectSnapshot: Codable, Sendable {   // Sendable + nonisola
     var melodyMuted: Bool?                      // optional → was dropped on save before (data-loss fix #22)
     var countIn: Int?                           // optional → transport prefs now persist
     var metronome: Bool?
+    var songBars: Int? = nil                    // optional → older saves decode to nil and load as 16 bars
     var sampleBufferToken: Int? = nil           // #19: in-memory only — links an undo snapshot to a stored engine buffer
     var id: String? = nil                        // optional → v1/name-keyed saves decode to nil; minted on first load, stamped on save (#219)
 }

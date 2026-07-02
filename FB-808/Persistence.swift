@@ -346,6 +346,97 @@ final class ProjectStore: ObservableObject {
         refresh()
     }
 
+    // MARK: - Project-file share / import (.fd808)
+
+    /// One self-contained shareable file: the snapshot plus every referenced audio asset (recorded
+    /// takes, pad one-shots, the sampler buffer) as raw WAV bytes. JSON container — no archive
+    /// framework needed, tolerant to future fields, and safe to validate on import.
+    nonisolated struct ProjectArchive: Codable, Sendable {
+        var version = 1
+        var snapshot: ProjectSnapshot
+        var clipWAVs: [String: Data] = [:]       // FD808Audio/<id>.wav (+ .R.wav) → file bytes
+        var padSampleWAVs: [String: Data] = [:]  // FD808Samples/<file> → file bytes
+    }
+
+    /// Bundle a snapshot + its audio into a shareable `.fd808` file in a fresh export batch dir.
+    func exportArchive(_ snap: ProjectSnapshot) async -> URL? {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = Self.buildArchive(snap) else { return nil }
+            let safe = snap.name.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
+            let url = fd808ExportDir().appendingPathComponent("\(safe.isEmpty ? "FD808 Beat" : safe).fd808")
+            do { try data.write(to: url); return url } catch { return nil }
+        }.value
+    }
+
+    nonisolated static func buildArchive(_ snap: ProjectSnapshot) -> Data? {
+        var arc = ProjectArchive(snapshot: snap)
+        let audioDir = fd808AudioDir(), sampleDir = fd808SampleDir()
+        for c in snap.audioClips ?? [] {
+            for f in ["\(c.id).wav", "\(c.id).R.wav"] {
+                if let d = try? Data(contentsOf: audioDir.appendingPathComponent(f)) { arc.clipWAVs[f] = d }
+            }
+        }
+        var sampleFiles = Set<String>()
+        for (_, pp) in snap.padParams { if let f = pp.sampleFile { sampleFiles.insert(f) } }
+        if let f = snap.sample?.audioFile { sampleFiles.insert(f) }
+        for f in sampleFiles {
+            if let d = try? Data(contentsOf: sampleDir.appendingPathComponent(f)) { arc.padSampleWAVs[f] = d }
+        }
+        return try? JSONEncoder().encode(arc)
+    }
+
+    /// Import a shared `.fd808` file as a NEW saved project — fresh stable id, fresh asset filenames
+    /// and a unique name, so an import can never overwrite or cross-link an existing project.
+    /// Returns the saved snapshot, or nil if the file couldn't be read/validated.
+    func importArchive(from url: URL) async -> ProjectSnapshot? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        let data = try? Data(contentsOf: url)
+        if scoped { url.stopAccessingSecurityScopedResource() }
+        guard let data else { return nil }
+        guard var snap = await Task.detached(priority: .userInitiated, operation: { Self.unpackArchive(data) }).value else { return nil }
+        if exists(snap.name) {
+            var nm = "\(snap.name) (imported)"; var i = 2
+            while exists(nm) { nm = "\(snap.name) (imported \(i))"; i += 1 }
+            snap.name = nm
+        }
+        guard await save(snap) else { return nil }
+        return snap
+    }
+
+    nonisolated static func unpackArchive(_ data: Data) -> ProjectSnapshot? {
+        guard let arc = try? JSONDecoder().decode(ProjectArchive.self, from: data), arc.version >= 1 else { return nil }
+        var snap = arc.snapshot
+        snap.id = UUID().uuidString   // an import is a NEW project — never collide with an existing one
+        let audioDir = fd808AudioDir(), sampleDir = fd808SampleDir()
+        if let clips = snap.audioClips {   // recorded takes: write under fresh ids, remap the metadata
+            snap.audioClips = clips.compactMap { c in
+                guard let d = arc.clipWAVs["\(c.id).wav"], !d.isEmpty else { return nil }   // drop clips whose audio didn't ship
+                var nc = c
+                let nu = UUID().uuidString
+                do { try d.write(to: audioDir.appendingPathComponent("\(nu).wav")) } catch { return nil }
+                if let r = arc.clipWAVs["\(c.id).R.wav"] { try? r.write(to: audioDir.appendingPathComponent("\(nu).R.wav")) }
+                nc.id = nu
+                return nc
+            }
+        }
+        var fileMap: [String: String] = [:]   // old FD808Samples name → freshly-written name
+        func imported(_ f: String) -> String? {
+            if let nf = fileMap[f] { return nf }
+            guard let d = arc.padSampleWAVs[f], !d.isEmpty else { return nil }
+            let nf = UUID().uuidString + ".wav"
+            guard (try? d.write(to: sampleDir.appendingPathComponent(nf))) != nil else { return nil }
+            fileMap[f] = nf
+            return nf
+        }
+        for (pad, pp) in snap.padParams {
+            guard let f = pp.sampleFile else { continue }
+            if let nf = imported(f) { snap.padParams[pad]?.sampleFile = nf }
+            else { snap.padParams[pad]?.sampleFile = nil; snap.padParams[pad]?.sampleName = nil; snap.padParams[pad]?.sampleBank = nil }
+        }
+        if let f = snap.sample?.audioFile { snap.sample?.audioFile = imported(f) }
+        return snap
+    }
+
     // MARK: - Autosave / crash recovery (#206)
 
     /// Write the current state to the hidden recovery slot (no list refresh, no lastProject change).
@@ -439,7 +530,7 @@ final class ProjectStore: ObservableObject {
         }
         for (pad, pp) in s.padParams {
             if let f = pp.sampleFile, !fm.fileExists(atPath: sampleDir.appendingPathComponent(f).path) {
-                s.padParams[pad]?.sampleFile = nil; s.padParams[pad]?.sampleName = nil
+                s.padParams[pad]?.sampleFile = nil; s.padParams[pad]?.sampleName = nil; s.padParams[pad]?.sampleBank = nil
                 log.append("cleared dead pad sample (\(pad))")
             }
         }

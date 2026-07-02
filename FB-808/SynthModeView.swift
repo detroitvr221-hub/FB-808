@@ -871,22 +871,33 @@ struct WaveShape: Shape {
 struct ScopeView: View {
     @EnvironmentObject var engine: AudioEngine
     @EnvironmentObject var settings: AppSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        TimelineView(.animation) { _ in
-            Canvas { ctx, size in
-                let samples = engine.scopeSnapshot()
-                guard samples.count > 1 else { return }
-                var path = Path()
-                let mid = size.height / 2
-                let n = samples.count
-                for x in 0..<Int(size.width) {
-                    let si = Swift.min(n - 1, x * n / Swift.max(1, Int(size.width)))
-                    let y = mid - Double(samples[si]) * size.height * 0.42
-                    let pt = CGPoint(x: Double(x), y: y)
-                    if x == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
-                }
-                ctx.stroke(path, with: .color(settings.accent), style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+        // 30 Hz (4 Hz under Reduce Motion) instead of display-rate: the snapshot copy + full-path rebuild
+        // is real main-thread work on old iPads, and the Equatable child skips the redraw entirely while
+        // the scope isn't changing.
+        TimelineView(.periodic(from: .now, by: reduceMotion ? 0.25 : 1.0 / 30.0)) { _ in
+            ScopeCanvas(samples: engine.scopeSnapshot(), color: settings.accent).equatable()
+        }
+    }
+}
+
+private struct ScopeCanvas: View, Equatable {
+    let samples: [Float]
+    let color: Color
+    var body: some View {
+        Canvas { ctx, size in
+            guard samples.count > 1 else { return }
+            var path = Path()
+            let mid = size.height / 2
+            let n = samples.count
+            for x in 0..<Int(size.width) {
+                let si = Swift.min(n - 1, x * n / Swift.max(1, Int(size.width)))
+                let y = mid - Double(samples[si]) * size.height * 0.42
+                let pt = CGPoint(x: Double(x), y: y)
+                if x == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
             }
+            ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2, lineJoin: .round))
         }
     }
 }
