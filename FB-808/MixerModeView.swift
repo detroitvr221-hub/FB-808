@@ -66,6 +66,12 @@ let MIXER_FX_MODULES: [MixerFXModule] = [
     MixerFXModule(id: "tape", label: "Tape / Lo-Fi", short: "TAPE",
                   isAdded: { $0.tapeOn }, add: { $0.tapeOn = true },
                   remove: { $0.tapeOn = false; $0.tapeWow = 0.3; $0.tapeFlutter = 0.2; $0.tapeSat = 0.4; $0.tapeNoise = 0.15 }),
+    MixerFXModule(id: "gate", label: "Gate / Expander", short: "GATE",
+                  isAdded: { $0.gateOn }, add: { $0.gateOn = true },
+                  remove: { $0.gateOn = false; $0.gateThresh = -40; $0.gateRange = -60 }),
+    MixerFXModule(id: "deess", label: "De-esser", short: "DEESS",
+                  isAdded: { $0.deessOn }, add: { $0.deessOn = true },
+                  remove: { $0.deessOn = false; $0.deessFreq = 5500; $0.deessThresh = -28; $0.deessAmount = 0.6 }),
 ]
 
 func mixerFXModule(_ id: String) -> MixerFXModule { MIXER_FX_MODULES.first { $0.id == id } ?? MIXER_FX_MODULES[0] }
@@ -164,6 +170,17 @@ private func mixerFXControls(_ kind: String, cfx: ChannelFX, _ s: AppSettings,
         mixerFXSlider("Saturation", dbl(\.tapeSat), 0, 1, s) { "\(Int($0 * 100))%" }
         mixerFXSlider("Hiss / Crackle", dbl(\.tapeNoise), 0, 1, s) { "\(Int($0 * 100))%" }
         Text("Wow+flutter wobble, tape warmth and vinyl noise — instant lo-fi.")
+            .font(FDFont.ui(11)).foregroundStyle(s.inkFaint).fixedSize(horizontal: false, vertical: true)
+    case "gate":
+        mixerFXSlider("Threshold", dbl(\.gateThresh), -70, 0, s) { "\(Int($0)) dB" }
+        mixerFXSlider("Range", dbl(\.gateRange), -80, 0, s) { "\(Int($0)) dB" }
+        Text("Silences signal below the threshold — tighten loose drums or gate reverb tails.")
+            .font(FDFont.ui(11)).foregroundStyle(s.inkFaint).fixedSize(horizontal: false, vertical: true)
+    case "deess":
+        mixerFXSlider("Frequency", dbl(\.deessFreq), 3000, 9000, s) { "\(Int($0)) Hz" }
+        mixerFXSlider("Threshold", dbl(\.deessThresh), -50, 0, s) { "\(Int($0)) dB" }
+        mixerFXSlider("Amount", dbl(\.deessAmount), 0, 1, s) { "\(Int($0 * 100))%" }
+        Text("Ducks sibilance/harsh highs above the crossover — smooths vocals & bright samples.")
             .font(FDFont.ui(11)).foregroundStyle(s.inkFaint).fixedSize(horizontal: false, vertical: true)
     default:   // "drive"
         mixerFXSegment(["Soft", "Fold"], selected: cfx.driveType, s) { setInt(\.driveType, $0) }
