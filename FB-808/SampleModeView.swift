@@ -34,6 +34,10 @@ struct SampleModeView: View {
     @State private var importing = false
     @State private var sf2Importing = false
     @State private var stretchRatio = 1.0
+    @State private var specFreeze = 0.0
+    @State private var specBlur = 0.0
+    @State private var specShift = 0.0
+    @State private var specMix = 1.0
     @State private var chopThreshold = 0.0      // transient sensitivity: higher → fewer, wider-spaced slices
     // Granular cloud params
     @State private var grainPos = 0.3
@@ -686,7 +690,17 @@ struct SampleModeView: View {
                     .disabled(analysisBusy)
                     .opacity(analysisBusy ? 0.75 : 1)
 
-                    PanelCard(title: "Stem Split") {
+                    PanelCard(title: "Spectral") {
+                    sliderRow("Freeze", value: $specFreeze, range: 0...1, readout: "\(Int(specFreeze * 100))%")
+                    sliderRow("Blur", value: $specBlur, range: 0...1, readout: "\(Int(specBlur * 100))%")
+                    sliderRow("Shift", value: $specShift, range: -40...40, readout: "\(Int(specShift)) bins")
+                    sliderRow("Mix", value: $specMix, range: 0...1, readout: "\(Int(specMix * 100))%")
+                    actionButton("✳︎ Apply Spectral", wide: true) { applySpectral() }
+                    Text("Freeze sustains the sample into an evolving pad; Blur smears it ambient; Shift moves the spectrum (inharmonic). FFT-based, on-device.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+
+                PanelCard(title: "Stem Split") {
                         actionButton("⎘ Split → Drums / Melody", wide: true) { pendingSplit = .two }
                             .disabled(stemBusy).opacity(stemBusy ? 0.5 : 1)
                         actionButton("⎙ Split → 4 Stems", wide: true) { pendingSplit = .four }
@@ -1070,6 +1084,29 @@ struct SampleModeView: View {
                     flash("Stretched to \(String(format: "%.2f", r.dur))s")
                 }
                 stretchRatio = 1.0
+            }
+        }
+    }
+    /// Apply the spectral processor (freeze/blur/shift) to the loaded sample, off-main, undoable. (FX+SPECTRAL)
+    private func applySpectral() {
+        guard project.sample != nil, !analysisBusy else { return }
+        guard specFreeze > 0 || specBlur > 0 || specShift != 0 else { flash("Set Freeze, Blur or Shift first"); return }
+        analysisBusy = true
+        let src = (data: engine.currentSampleData(), sr: engine.sampleRate)
+        let (fr, bl, sh, mx) = (specFreeze, specBlur, specShift, specMix)
+        Task.detached(priority: .userInitiated) {
+            let out = SpectralFX.process(src.data, sr: src.sr, freeze: fr, blur: bl, shift: sh, mix: mx)
+            await MainActor.run {
+                analysisBusy = false
+                guard !out.isEmpty else { flash("Couldn't process this sample"); return }
+                project.mutateSample("spectral") {
+                    guard var s = project.sample else { return }
+                    let r = engine.importBuffer(out)
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
+                    project.sample = s
+                    flash("Spectral applied")
+                }
             }
         }
     }
