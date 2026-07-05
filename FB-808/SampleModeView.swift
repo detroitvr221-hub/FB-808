@@ -38,6 +38,10 @@ struct SampleModeView: View {
     @State private var specBlur = 0.0
     @State private var specShift = 0.0
     @State private var specMix = 1.0
+    @State private var pitchSemis = 0.0
+    @State private var pitchMix = 1.0
+    @State private var convKind = "hall"
+    @State private var convMix = 0.4
     @State private var chopThreshold = 0.0      // transient sensitivity: higher → fewer, wider-spaced slices
     // Granular cloud params
     @State private var grainPos = 0.3
@@ -690,7 +694,32 @@ struct SampleModeView: View {
                     .disabled(analysisBusy)
                     .opacity(analysisBusy ? 0.75 : 1)
 
-                    PanelCard(title: "Spectral") {
+                    PanelCard(title: "Convolution Reverb") {
+                    HStack(spacing: 6) {
+                        ForEach(["room", "hall", "plate", "spring"], id: \.self) { k in
+                            Button { convKind = k } label: {
+                                Text(k.capitalized).font(FDFont.ui(11.5, .semibold))
+                                    .foregroundStyle(convKind == k ? .white : settings.inkDim)
+                                    .frame(maxWidth: .infinity).frame(height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(convKind == k ? settings.accent : settings.panel2))
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                    sliderRow("Mix", value: $convMix, range: 0...1, readout: "\(Int(convMix * 100))%")
+                    actionButton("⌘ Apply Reverb", wide: true) { applyConvolution() }
+                    Text("Real-space convolution reverb (procedural IRs) — richer than the algorithmic reverb. Baked into the sample.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+
+                PanelCard(title: "Pitch / Harmonizer") {
+                    sliderRow("Semitones", value: $pitchSemis, range: -24...24, readout: "\(pitchSemis >= 0 ? "+" : "")\(Int(pitchSemis)) st")
+                    sliderRow("Blend", value: $pitchMix, range: 0...1, readout: pitchMix > 0.99 ? "shift" : "harmony \(Int(pitchMix * 100))%")
+                    actionButton("♪ Apply Pitch", wide: true) { applyPitch() }
+                    Text("Shifts pitch while keeping the length (WSOLA). Blend < 100% keeps the dry underneath — a harmonizer (e.g. +7 at 50% adds a fifth).")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+
+                PanelCard(title: "Spectral") {
                     sliderRow("Freeze", value: $specFreeze, range: 0...1, readout: "\(Int(specFreeze * 100))%")
                     sliderRow("Blur", value: $specBlur, range: 0...1, readout: "\(Int(specBlur * 100))%")
                     sliderRow("Shift", value: $specShift, range: -40...40, readout: "\(Int(specShift)) bins")
@@ -1084,6 +1113,51 @@ struct SampleModeView: View {
                     flash("Stretched to \(String(format: "%.2f", r.dur))s")
                 }
                 stretchRatio = 1.0
+            }
+        }
+    }
+    /// Apply convolution reverb (procedural IR) to the loaded sample, off-main, undoable. (FX+CONV)
+    private func applyConvolution() {
+        guard project.sample != nil, !analysisBusy else { return }
+        analysisBusy = true
+        let src = (data: engine.currentSampleData(), sr: engine.sampleRate)
+        let (kind, mix) = (convKind, convMix)
+        Task.detached(priority: .userInitiated) {
+            let ir = ConvolutionFX.makeIR(kind, sr: src.sr)
+            let out = ConvolutionFX.process(src.data, sr: src.sr, ir: ir, mix: mix)
+            await MainActor.run {
+                analysisBusy = false
+                guard !out.isEmpty else { flash("Couldn't process this sample"); return }
+                project.mutateSample("convReverb") {
+                    guard var s = project.sample else { return }
+                    let r = engine.importBuffer(out)
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
+                    project.sample = s
+                    flash("\(kind.capitalized) reverb applied")
+                }
+            }
+        }
+    }
+    /// Pitch-shift / harmonize the loaded sample, off-main, undoable. (FX+PITCH)
+    private func applyPitch() {
+        guard project.sample != nil, !analysisBusy, abs(pitchSemis) > 0.01 else { if abs(pitchSemis) <= 0.01 { flash("Set a semitone amount first") }; return }
+        analysisBusy = true
+        let src = (data: engine.currentSampleData(), sr: engine.sampleRate)
+        let (semis, mix) = (pitchSemis, pitchMix)
+        Task.detached(priority: .userInitiated) {
+            let out = pitchShift(src.data, semitones: semis, sr: src.sr, mix: mix)
+            await MainActor.run {
+                analysisBusy = false
+                guard !out.isEmpty else { flash("Couldn't pitch this sample"); return }
+                project.mutateSample("pitch") {
+                    guard var s = project.sample else { return }
+                    let r = engine.importBuffer(out)
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
+                    project.sample = s
+                    flash("Pitched \(semis >= 0 ? "+" : "")\(Int(semis)) st")
+                }
             }
         }
     }
