@@ -627,6 +627,17 @@ struct MasterFXBar: View {
                     knob("Time", project.fxSettings.delayTimeMs, 60, 1000, 5, ms, info: Glossary.delayTime) { v in project.setMasterFX("delayTimeMs") { $0.delayTimeMs = v } }
                     knob("F.Back", project.fxSettings.delayFeedback, 0, 0.9, 0.01, pct, info: Glossary.delayFbk) { v in project.setMasterFX("delayFeedback") { $0.delayFeedback = v } }
                     VStack(spacing: 6) {
+                        Text("BOUNCE").font(FDFont.mono(8.5, .bold)).tracking(0.6).foregroundStyle(settings.inkFaint)
+                        Button { project.setMasterFX("pingpong") { $0.delayPingpong = !($0.delayPingpong ?? false) } } label: {
+                            Text("PING·PONG").font(FDFont.mono(8.5, .bold))
+                                .foregroundStyle((project.fxSettings.delayPingpong ?? false) ? .white : settings.inkDim)
+                                .padding(.horizontal, 7).frame(height: 26)
+                                .background(RoundedRectangle(cornerRadius: 7).fill((project.fxSettings.delayPingpong ?? false) ? settings.accent : settings.panel2))
+                        }.buttonStyle(.plain)
+                        .accessibilityLabel(Text("Ping-pong delay"))
+                        .accessibilityValue(Text((project.fxSettings.delayPingpong ?? false) ? "On" : "Off"))
+                    }
+                    VStack(spacing: 6) {
                         Text("SYNC").font(FDFont.mono(8.5, .bold)).tracking(0.6).foregroundStyle(settings.inkFaint)
                         syncChip("¼") { setDelayDiv(1.0) }
                         syncChip("⅛") { setDelayDiv(0.5) }
