@@ -42,6 +42,10 @@ struct SampleModeView: View {
     @State private var pitchMix = 1.0
     @State private var convKind = "hall"
     @State private var convMix = 0.4
+    @State private var shimMix = 0.5
+    @State private var shimAmt = 0.7
+    @State private var vocHz = 110.0
+    @State private var vocMix = 1.0
     @State private var chopThreshold = 0.0      // transient sensitivity: higher → fewer, wider-spaced slices
     // Granular cloud params
     @State private var grainPos = 0.3
@@ -694,7 +698,23 @@ struct SampleModeView: View {
                     .disabled(analysisBusy)
                     .opacity(analysisBusy ? 0.75 : 1)
 
-                    PanelCard(title: "Convolution Reverb") {
+                    PanelCard(title: "Shimmer") {
+                    sliderRow("Shimmer", value: $shimAmt, range: 0...1, readout: "\(Int(shimAmt * 100))%")
+                    sliderRow("Mix", value: $shimMix, range: 0...1, readout: "\(Int(shimMix * 100))%")
+                    actionButton("❊ Apply Shimmer", wide: true) { applyShimmer() }
+                    Text("Ethereal reverb with octave-up sparkle layered into the tail — ambient pads from any sound.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+
+                PanelCard(title: "Vocoder") {
+                    sliderRow("Carrier", value: $vocHz, range: 55...440, readout: "\(Int(vocHz)) Hz")
+                    sliderRow("Mix", value: $vocMix, range: 0...1, readout: "\(Int(vocMix * 100))%")
+                    actionButton("🗣 Apply Vocoder", wide: true) { applyVocoder() }
+                    Text("Shapes a synth carrier with this sample's spectrum — robot/talkbox voice. Lower carrier = deeper.")
+                        .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+                }
+
+                PanelCard(title: "Convolution Reverb") {
                     HStack(spacing: 6) {
                         ForEach(["room", "hall", "plate", "spring"], id: \.self) { k in
                             Button { convKind = k } label: {
@@ -1113,6 +1133,32 @@ struct SampleModeView: View {
                     flash("Stretched to \(String(format: "%.2f", r.dur))s")
                 }
                 stretchRatio = 1.0
+            }
+        }
+    }
+    /// Apply shimmer reverb to the loaded sample, off-main, undoable. (FX+SHIMMER)
+    private func applyShimmer() { let (m, a) = (shimMix, shimAmt); runSampleFX("shimmer") { ShimmerFX.process($0, sr: $1, mix: m, shimmer: a) } }
+    /// Vocode the loaded sample (carrier shaped by its spectrum), off-main, undoable. (FX+VOCODER)
+    private func applyVocoder() { let (hz, m) = (vocHz, vocMix); runSampleFX("vocoder") { VocoderFX.process($0, sr: $1, carrierHz: hz, mix: m) } }
+
+    /// Shared runner for the offline sample FX: grab the buffer, process off-main, commit undoably.
+    private func runSampleFX(_ name: String, _ proc: @escaping @Sendable ([Float], Double) -> [Float]) {
+        guard project.sample != nil, !analysisBusy else { return }
+        analysisBusy = true
+        let src = (data: engine.currentSampleData(), sr: engine.sampleRate)
+        Task.detached(priority: .userInitiated) {
+            let out = proc(src.data, src.sr)
+            await MainActor.run {
+                analysisBusy = false
+                guard !out.isEmpty else { flash("Couldn't process this sample"); return }
+                project.mutateSample(name) {
+                    guard var s = project.sample else { return }
+                    let r = engine.importBuffer(out)
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
+                    project.sample = s
+                    flash("\(name.capitalized) applied")
+                }
             }
         }
     }
