@@ -80,7 +80,7 @@ struct SampleModeView: View {
     private var sampleSig: String {
         guard let s = project.sample else { return "" }
         let tools = s.tools.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")
-        return "\(s.name)|\(String(format: "%.4f", s.dur))|\(s.gain)|\(tools)"   // reverseSlices dropped — it doesn't alter audio (P3)
+        return "\(s.name)|\(Int((s.dur * 10000).rounded()))|\(s.gain)|\(tools)"   // reverseSlices dropped — it doesn't alter audio (P3); dur as 0.1ms int (type-safe sig)
     }
     private func refreshGPUWave() {
         gpuSig = sampleSig
@@ -216,7 +216,7 @@ struct SampleModeView: View {
             refreshGPUWave()
         }
         // New or re-cut audio (import, crop, stretch) → show the whole thing again.
-        .onChange(of: "\(sample?.name ?? "")|\(String(format: "%.4f", sample?.dur ?? 0))") { _, _ in
+        .onChange(of: "\(sample?.name ?? "")|\(Int(((sample?.dur ?? 0) * 10000).rounded()))") { _, _ in
             waveZoom = 1; waveStart = 0
         }
     }
