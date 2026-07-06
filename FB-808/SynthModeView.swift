@@ -909,6 +909,8 @@ struct SynthRoll: View {
     @EnvironmentObject var engine: AudioEngine
     @EnvironmentObject var settings: AppSettings
     @State private var drawDrag: (pitch: Int, start: Int)?   // active draw; start = -1 means erasing
+    @State private var moveDrag: MoveState?                  // active grab-and-slide of an existing note
+    private struct MoveState { let pitch: Int; let origStart: Int; var curStart: Int; let dur: Int; let grabCell: Int; var moved: Bool }
 
     private var ladder: [Int] {
         Music.scaleLadder(root: 60 + project.melodyKey + 12 * project.melodyOctave, scaleID: project.melodyScale).reversed().map { $0 }
@@ -965,7 +967,7 @@ struct SynthRoll: View {
                                 .contentShape(Rectangle())
                                 .gesture(DragGesture(minimumDistance: 0)
                                     .onChanged { v in rowDrag(pitch, v.location.x, g.size.width) }
-                                    .onEnded { _ in drawDrag = nil })
+                                    .onEnded { _ in endRowDrag() })
                             }
                             .frame(height: 16)
                         }
@@ -980,14 +982,16 @@ struct SynthRoll: View {
         .fdCard(16, fill: settings.panel)
     }
 
-    /// Click-drag in a pitch row: tap an empty cell to draw a 1-step note, drag right to lengthen,
-    /// tap an existing note to erase it. (Per-note length — FL-style draw.)
+    /// Click-drag in a pitch row: tap an empty cell to draw a 1-step note, drag right to lengthen;
+    /// grab an existing note and slide it left/right to reposition it; tap a note (no slide) to erase it.
     private func rowDrag(_ pitch: Int, _ x: CGFloat, _ width: CGFloat) {
         let cell = max(0, min(15, Int(x / max(1.0, width / 16.0))))
-        if drawDrag == nil {
+        if drawDrag == nil && moveDrag == nil {
             engine.start()
-            if project.activeNotes.contains(where: { $0.pitch == pitch && cell >= $0.step && cell < $0.step + $0.dur }) {
-                project.eraseActiveNote(pitch: pitch, step: cell); drawDrag = (pitch, -1)
+            if let n = project.activeNotes.first(where: { $0.pitch == pitch && cell >= $0.step && cell < $0.step + $0.dur }) {
+                // Grab an existing note → slide mode. A plain tap (no slide) still erases, handled on end.
+                moveDrag = MoveState(pitch: pitch, origStart: n.step, curStart: n.step, dur: n.dur, grabCell: cell, moved: false)
+                project.previewNote(midi: pitch)
             } else {
                 drawDrag = (pitch, cell)
                 project.drawActiveNote(pitch: pitch, start: cell, len: 1)
@@ -995,7 +999,23 @@ struct SynthRoll: View {
             }
         } else if let drag = drawDrag, drag.start >= 0 {
             project.drawActiveNote(pitch: drag.pitch, start: drag.start, len: max(1, cell - drag.start + 1))
+        } else if var mv = moveDrag {
+            let newStart = max(0, min(16 - mv.dur, mv.origStart + (cell - mv.grabCell)))
+            if newStart != mv.curStart {
+                project.moveActiveNote(pitch: mv.pitch, from: mv.curStart, to: newStart)
+                mv.curStart = newStart; mv.moved = true
+                moveDrag = mv
+            }
         }
+    }
+
+    /// End a row drag: clear draw state, and if an existing note was tapped without sliding, erase it.
+    private func endRowDrag() {
+        if let mv = moveDrag, !mv.moved {
+            project.eraseActiveNote(pitch: mv.pitch, step: mv.curStart)
+        }
+        drawDrag = nil
+        moveDrag = nil
     }
 
     private func velocityLane(_ color: Color) -> some View {

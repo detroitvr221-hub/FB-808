@@ -72,6 +72,20 @@ extension Project {
         checkpoint("erasenote", coalesce: false)
         mutateActiveNotes { n in n.removeAll { $0.pitch == pitch && step >= $0.step && step < $0.step + $0.dur } }
     }
+    /// Slide the note at (pitch, `from`) to a new start `to`, keeping its length + velocity — the roll's
+    /// drag-to-move. Clamps to the bar and clears whatever sits at the destination span. Coalesced into
+    /// one undo across a drag.
+    func moveActiveNote(pitch: Int, from: Int, to: Int) {
+        checkpoint("movenote")
+        mutateActiveNotes { n in
+            guard let idx = n.firstIndex(where: { $0.pitch == pitch && from >= $0.step && from < $0.step + $0.dur }) else { return }
+            let note = n.remove(at: idx)
+            let start = max(0, min(16 - note.dur, to))
+            let lo = start, hi = start + note.dur
+            n.removeAll { $0.step < hi && $0.step + $0.dur > lo }   // clear the destination span
+            n.append(MelodyNote(step: start, pitch: pitch, dur: note.dur, vel: note.vel))
+        }
+    }
     /// Set the velocity of the note covering `step` (the piano-roll velocity lane).
     func setActiveNoteVel(step: Int, _ vel: Double) {
         checkpoint("notevel")
