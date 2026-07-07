@@ -50,11 +50,23 @@ enum KitStore {
         return try JSONDecoder().decode(Manifest.self, from: data).samples
     }
 
-    /// Download a sample WAV to a temp file (AVAudioFile decode needs a local URL). Returns nil on failure.
-    static func downloadToTemp(_ path: String) async -> URL? {
+    /// Persistent on-disk cache so a downloaded sample is never re-fetched.
+    private static var cacheDir: URL {
+        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("KitFiles", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+    static func cachedURL(for path: String) -> URL {
+        cacheDir.appendingPathComponent(path.replacingOccurrences(of: "/", with: "_"))
+    }
+    static func isCached(_ path: String) -> Bool { FileManager.default.fileExists(atPath: cachedURL(for: path).path) }
+
+    /// Return a local file URL for a storage object, downloading + caching it on first use. Returns nil on failure.
+    static func localFile(_ path: String) async -> URL? {
+        let dest = cachedURL(for: path)
+        if FileManager.default.fileExists(atPath: dest.path) { return dest }
         do {
             let (tmp, _) = try await URLSession.shared.download(from: publicURL(path))
-            let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tmp, to: dest)
             return dest

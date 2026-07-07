@@ -17,7 +17,8 @@ struct KitBrowserView: View {
     @State private var selected: KitStore.RemoteKit?
     @State private var samples: [KitStore.KitSample] = []
     @State private var loadingSamples = false
-    @State private var busy: String?        // path (or "auto") currently downloading
+    @State private var busy: String?        // path (or "auto") currently downloading; toggling it re-renders rows
+    @State private var autoProgress: Double = 0
     @State private var toast: String?
 
     private var th: Theme { settings.theme }
@@ -97,11 +98,17 @@ struct KitBrowserView: View {
                     Spacer(minLength: 0)
                 }
                 Button { autoMap(kit) } label: {
-                    HStack(spacing: 8) {
-                        if busy == "auto" { ProgressView().tint(.white) } else { Image(systemName: "square.grid.3x3.fill") }
-                        Text(busy == "auto" ? "Loading…" : "Auto-map to Pads").font(FDFont.ui(14, .semibold))
+                    ZStack(alignment: .leading) {
+                        if busy == "auto" {   // fill the button as each category loads
+                            GeometryReader { g in RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.25)).frame(width: g.size.width * autoProgress) }
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.grid.3x3.fill")
+                            Text(busy == "auto" ? "Loading… \(Int(autoProgress * 100))%" : "Auto-map to Pads").font(FDFont.ui(14, .semibold))
+                        }
+                        .foregroundStyle(.white).frame(maxWidth: .infinity)
                     }
-                    .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 46)
+                    .frame(height: 46)
                     .background(RoundedRectangle(cornerRadius: 12).fill(settings.accent.ctaGradient()))
                 }.buttonStyle(.plain).disabled(busy != nil)
 
@@ -120,19 +127,28 @@ struct KitBrowserView: View {
         }
     }
 
-    private func sampleRow(_ s: KitStore.KitSample) -> some View {
-        HStack(spacing: 10) {
-            Button { preview(s) } label: {
-                Image(systemName: busy == s.path ? "hourglass" : "play.circle.fill").font(.system(size: 20)).foregroundStyle(settings.accent)
-            }.buttonStyle(.plain).disabled(busy != nil)
+    @ViewBuilder private func sampleRow(_ s: KitStore.KitSample) -> some View {
+        let isMIDI = s.category == "MIDI"
+        HStack(spacing: 9) {
+            if isMIDI {
+                Image(systemName: "pianokeys").font(.system(size: 16)).foregroundStyle(settings.accent).frame(width: 22)
+            } else {
+                Button { preview(s) } label: {
+                    Image(systemName: busy == s.path ? "hourglass" : "play.circle.fill").font(.system(size: 20)).foregroundStyle(settings.accent)
+                }.buttonStyle(.plain).disabled(busy != nil)
+            }
             Text(prettyName(s.name)).font(FDFont.ui(12.5)).foregroundStyle(settings.ink).lineLimit(1)
+            if KitStore.isCached(s.path) {   // downloaded indicator (re-evaluated when `busy` toggles)
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 10)).foregroundStyle(settings.theme.good)
+            }
             Spacer(minLength: 6)
-            Menu {
-                ForEach(Kit.pads, id: \.id) { pad in Button(pad.label) { assign(s, to: pad.id) } }
-            } label: {
-                Text("→ Pad").font(FDFont.mono(10, .bold)).foregroundStyle(settings.inkDim)
-                    .padding(.horizontal, 9).frame(height: 28).fdCard(7, fill: settings.panel2)
-            }.disabled(busy != nil)
+            if isMIDI {
+                Button { loadMIDI(s) } label: { chipLabel("→ Roll") }.buttonStyle(.plain).disabled(busy != nil)
+            } else {
+                Menu {
+                    ForEach(Kit.pads, id: \.id) { pad in Button(pad.label) { assign(s, to: pad.id) } }
+                } label: { chipLabel("→ Pad") }.disabled(busy != nil)
+            }
         }
         .padding(.vertical, 5).padding(.horizontal, 10)
         .fdCard(9, fill: settings.panel)
@@ -153,6 +169,10 @@ struct KitBrowserView: View {
     private func spinner(_ t: String) -> some View {
         VStack(spacing: 10) { ProgressView().tint(settings.accent); Text(t).font(FDFont.ui(12)).foregroundStyle(settings.inkFaint) }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    private func chipLabel(_ t: String) -> some View {
+        Text(t).font(FDFont.mono(10, .bold)).foregroundStyle(settings.inkDim)
+            .padding(.horizontal, 9).frame(height: 28).fdCard(7, fill: settings.panel2)
     }
     private func message(_ t: String) -> some View {
         Text(t).font(FDFont.ui(13)).foregroundStyle(settings.inkFaint).multilineTextAlignment(.center)
@@ -183,7 +203,7 @@ struct KitBrowserView: View {
         busy = s.path
         Task { @MainActor in
             defer { busy = nil }
-            guard let url = await KitStore.downloadToTemp(s.path), let data = await engine.decodeAudioFileAsync(url: url) else { flash("Download failed"); return }
+            guard let url = await KitStore.localFile(s.path), let data = await engine.decodeAudioFileAsync(url: url) else { flash("Download failed"); return }
             engine.playReviewClip(data)
         }
     }
@@ -191,25 +211,39 @@ struct KitBrowserView: View {
         busy = s.path
         Task { @MainActor in
             defer { busy = nil }
-            guard let url = await KitStore.downloadToTemp(s.path), let data = await engine.decodeAudioFileAsync(url: url) else { flash("Download failed"); return }
+            guard let url = await KitStore.localFile(s.path), let data = await engine.decodeAudioFileAsync(url: url) else { flash("Download failed"); return }
             project.setPadSample(padID, data: data, name: prettyName(s.name), bank: nil)
             flash("Loaded → \(Kit.padByID[padID]?.label ?? padID)")
         }
     }
     private func autoMap(_ kit: KitStore.RemoteKit) {
-        busy = "auto"
+        busy = "auto"; autoProgress = 0
         Task { @MainActor in
             defer { busy = nil }
+            let cats = KitStore.categoryToPad.filter { cat, _ in samples.contains { $0.category == cat } }
             var items: [(id: String, data: [Float], name: String)] = []
-            for (cat, padID) in KitStore.categoryToPad {
-                guard let s = samples.first(where: { $0.category == cat }),
-                      let url = await KitStore.downloadToTemp(s.path),
-                      let data = await engine.decodeAudioFileAsync(url: url) else { continue }
-                items.append((padID, data, prettyName(s.name)))
+            var done = 0
+            for (cat, padID) in cats {
+                if let s = samples.first(where: { $0.category == cat }),
+                   let url = await KitStore.localFile(s.path),
+                   let data = await engine.decodeAudioFileAsync(url: url) {
+                    items.append((padID, data, prettyName(s.name)))
+                }
+                done += 1; withAnimation { autoProgress = Double(done) / Double(max(1, cats.count)) }
             }
             guard !items.isEmpty else { flash("Nothing to load"); return }
             project.setPadSamples(items, bank: nil)
             flash("Loaded \(items.count) sounds onto the pads")
+        }
+    }
+    private func loadMIDI(_ s: KitStore.KitSample) {
+        busy = s.path
+        Task { @MainActor in
+            defer { busy = nil }
+            guard let url = await KitStore.localFile(s.path),
+                  let notes = MIDIImport.parse(url, barSteps: project.barSteps) else { flash("Couldn't read that MIDI"); return }
+            project.replaceActiveNotes(notes)
+            flash("Loaded \(notes.count) notes into the roll")
         }
     }
     private func flash(_ t: String) {
@@ -220,7 +254,7 @@ struct KitBrowserView: View {
     // MARK: helpers
 
     private var categoriesInOrder: [String] {
-        ["Kicks", "808", "Snares", "Claps", "Hats", "O-Hat", "Perc", "Chants", "SFX", "Loops"]
+        ["Kicks", "808", "Snares", "Claps", "Hats", "O-Hat", "Perc", "Chants", "SFX", "Loops", "MIDI"]
             .filter { c in samples.contains { $0.category == c } }
     }
     private func mb(_ bytes: Int?) -> String { bytes.map { String(format: "%.1f MB", Double($0) / 1_048_576) } ?? "—" }
