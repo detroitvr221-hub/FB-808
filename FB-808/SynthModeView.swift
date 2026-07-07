@@ -13,6 +13,7 @@ struct SynthModeView: View {
     @EnvironmentObject var engine: AudioEngine
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var progress: ProgressStore
+    @EnvironmentObject var transport: Transport
 
     @State private var playMode = "keys"     // "keys" | "roll"
     @State private var kbOct = 4
@@ -37,7 +38,14 @@ struct SynthModeView: View {
     }
     private func keyDown(_ midi: Int) {
         engine.start()
-        if !lit.contains(midi) { lit.insert(midi); project.synthNoteOn("k\(midi)", midi: midi) }
+        guard !lit.contains(midi) else { return }
+        lit.insert(midi); project.synthNoteOn("k\(midi)", midi: midi)
+        // MIDI record: when armed + playing, capture the hit into the active part at the nearest grid step.
+        if project.midiArmed && transport.playing {
+            let n = Double(max(1, project.barSteps))
+            let step = Int((transport.recordFraction() * n).rounded()) % Int(n)
+            project.captureNote(pitch: midi, step: step)
+        }
     }
     private func keyUp(_ midi: Int) {
         if lit.contains(midi) { lit.remove(midi); project.synthNoteOff("k\(midi)") }
@@ -516,6 +524,20 @@ struct SynthModeView: View {
                 SegTab(label: "Piano Roll", selected: playMode == "roll", icon: "square.grid.3x2.fill", font: FDFont.ui(13.5, .semibold), iconSize: 13, height: 36) { playMode = "roll" }
                 SegTab(label: "Free", selected: playMode == "free", icon: "scribble.variable", font: FDFont.ui(13.5, .semibold), iconSize: 13, height: 36) { playMode = "free" }
                 Spacer()
+                Button {
+                    engine.start()
+                    project.midiArmed.toggle()
+                    if project.midiArmed && !transport.playing { transport.start() }   // arm = start recording now
+                } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(project.midiArmed ? Color(hex: "#FF3B30") : settings.inkFaint).frame(width: 9, height: 9)
+                        Text("Rec").font(FDFont.ui(13, .semibold)).foregroundStyle(project.midiArmed ? .white : settings.inkDim)
+                    }
+                    .padding(.horizontal, 12).frame(height: 36)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(project.midiArmed ? Color(hex: "#FF3B30").opacity(0.22) : settings.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(project.midiArmed ? Color(hex: "#FF3B30") : settings.line, lineWidth: 1))
+                }.buttonStyle(.plain)
+                .accessibilityLabel(Text("MIDI record")).accessibilityValue(Text(project.midiArmed ? "Armed" : "Off"))
                 if playMode == "roll" { rollToolbar }
             }
             switch playMode {

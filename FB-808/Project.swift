@@ -256,6 +256,7 @@ final class Project: ObservableObject {
     @Published var levelsParam = "velocity"
     @Published var muteMode = false        // pad-performance Mute mode: tap pads to mute/unmute live
     @Published var focusMode = false       // compose Focus: live playback plays ONLY the active part (monitor one sound while writing it)
+    @Published var midiArmed = false       // compose MIDI record-arm: live key/pad hits capture into the active part, snapped to the grid
 
     // sequencer
     @Published var lanes: [String: [Double]]

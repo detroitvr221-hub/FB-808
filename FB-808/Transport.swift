@@ -24,7 +24,7 @@ final class Transport: ObservableObject {
     private let lookahead = 0.025      // s between scheduler ticks
     private let ahead = 0.12           // s scheduled in advance
     private var timer: DispatchSourceTimer?
-    private var playing = false
+    private(set) var playing = false
     private var nextStepTime = 0.0
     private var step16 = 0
     private var barCount = 0          // bar being SCHEDULED (leads real-time by the lookahead); project.bar is the VISUAL bar

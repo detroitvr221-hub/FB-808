@@ -86,6 +86,16 @@ extension Project {
             n.append(MelodyNote(step: start, pitch: pitch, dur: note.dur, vel: note.vel))
         }
     }
+    /// MIDI record capture: overdub a live-played note into the active part at `step`, snapped to the grid.
+    /// Replaces any note already sounding at that pitch+step. Coalesced so a whole take is a few undos.
+    func captureNote(pitch: Int, step: Int, len: Int = 1) {
+        let s = max(0, min(15, step))
+        checkpoint("reccapture")
+        mutateActiveNotes { n in
+            n.removeAll { $0.pitch == pitch && s >= $0.step && s < $0.step + $0.dur }
+            n.append(MelodyNote(step: s, pitch: pitch, dur: max(1, len), vel: s % 4 == 0 ? 0.9 : 0.8))
+        }
+    }
     /// Clear the notes of the part the roll is currently editing (one-tap "clear this"). Undoable.
     func clearActiveNotes() {
         checkpoint("clearpart", coalesce: false)
