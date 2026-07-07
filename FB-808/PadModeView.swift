@@ -22,6 +22,7 @@ struct PadModeView: View {
     @State private var editMode = false
     @State private var editPadID: String?
     @State private var showSaveKit = false
+    @State private var showKits = false
     @State private var newKitName = ""
     @State private var toast: String?
     @State private var showMPCBridge = false
@@ -58,6 +59,7 @@ struct PadModeView: View {
         }
         .animation(.easeOut(duration: 0.2), value: toast)
         .sheet(isPresented: $showMPCBridge) { MPCBridgeView(onClose: { showMPCBridge = false }) }
+        .sheet(isPresented: $showKits) { KitBrowserView() }
         .onDisappear {
             repeatTimers.values.forEach { $0.invalidate() }
             repeatTimers.removeAll()
@@ -140,6 +142,19 @@ struct PadModeView: View {
                             bankButton(b)
                         }
                     }
+                }
+                PanelCard(title: "Sound Kits") {
+                    Button { showKits = true } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.down.circle.fill").font(.system(size: 15))
+                            Text("Browse & Download Kits").font(FDFont.ui(13, .semibold))
+                            Spacer()
+                        }
+                        .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 42)
+                        .background(RoundedRectangle(cornerRadius: 11).fill(settings.accent.ctaGradient()))
+                    }.buttonStyle(.plain)
+                    Text("Download sound kits and load them straight onto your pads.")
+                        .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                 }
                 if bankIsEmpty {   // C/D with nothing assigned yet — guide the user instead of a silent dead-end
                     PanelCard(title: project.bank == "C" ? "Empty Slice Bank" : "Empty Synth Bank") {
