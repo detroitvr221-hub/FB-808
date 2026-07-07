@@ -354,15 +354,29 @@ struct SynthModeView: View {
             VStack(spacing: 12) {
                 playAssistCard
                 PanelCard(title: "Instrument Layers") {
+                    HStack(spacing: 6) {
+                        miniTog("◎ Focus", on: project.focusMode) { engine.start(); project.focusMode.toggle() }
+                        Menu {
+                            Button("Clear this part", role: .destructive) { project.clearActiveNotes() }
+                            Button("Clear all melodies") { project.clearAllParts() }
+                            Button("Clear everything (drums + parts)", role: .destructive) { project.clearEverything() }
+                        } label: {
+                            Text("Clear ▾").font(FDFont.mono(10, .bold)).tracking(0.5).foregroundStyle(settings.inkFaint)
+                                .frame(maxWidth: .infinity).frame(height: 30)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(settings.panel2))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(settings.line, lineWidth: 1))
+                        } primaryAction: { project.clearActiveNotes() }
+                    }
                     VStack(spacing: 5) {
                         ForEach(project.partList, id: \.id) { p in partRow(p) }
                     }
                     HStack(spacing: 6) {
+                        layerGenBtn("New") { engine.start(); project.addEmptyPart() }
                         layerGenBtn("Bass") { engine.start(); project.genBassLayer() }
                         layerGenBtn("Chords") { engine.start(); project.genChordLayer() }
                         layerGenBtn("Arp") { engine.start(); project.genArpLayer() }
                     }
-                    Text("Each layer is its own instrument — tap to edit its notes & knobs; the others show as ghosts in the roll.")
+                    Text("**Focus** plays only the layer you're editing — build one sound at a time, then layer the rest. Others show as ghosts. **Clear** empties this part (long-press for wider scopes); **New** adds a blank layer.")
                         .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
                 }
                 PanelCard(title: "Save & Map") {

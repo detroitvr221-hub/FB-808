@@ -255,6 +255,7 @@ final class Project: ObservableObject {
     @Published var sixteenLevels = false
     @Published var levelsParam = "velocity"
     @Published var muteMode = false        // pad-performance Mute mode: tap pads to mute/unmute live
+    @Published var focusMode = false       // compose Focus: live playback plays ONLY the active part (monitor one sound while writing it)
 
     // sequencer
     @Published var lanes: [String: [Double]]

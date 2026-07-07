@@ -219,6 +219,29 @@ final class Transport: ObservableObject {
             }
         }
 
+        // Focus (compose monitor): play ONLY the part being edited so you can hear one sound in isolation
+        // while writing it. The metronome above still fires for timing; drums, tracks, clips + other parts
+        // are skipped. This is a live-monitor toggle, independent of the mixer's persistent solo/mute.
+        if p.focusMode {
+            let mvol = (p.mixer["melody"] ?? MixChannel(vol: 0.85)).vol
+            if p.activePart == "lead" {
+                let mel = p.songMode ? p.melodyForBar(barCount) : p.melody
+                for note in mel where note.step == s {
+                    engine.triggerSynth(p.synthPatch, midi: note.pitch, dur: Double(note.dur) * secPerStep(),
+                                        vel: note.vel * mvol * 1.25 * p.humVel(), when: time + p.humTime())
+                }
+            } else {
+                let parts = p.songMode ? p.partsForBar(barCount) : p.parts
+                if let part = parts.first(where: { $0.id == p.activePart }) {
+                    for note in part.notes where note.step == s {
+                        engine.triggerSynth(part.patch, midi: note.pitch, dur: Double(note.dur) * secPerStep(),
+                                            vel: note.vel * mvol * 1.25, when: time)
+                    }
+                }
+            }
+            return
+        }
+
         let solo = p.mixer.values.contains { $0.solo }
         let rowSolo = p.rowSolo.values.contains(true)
         let trackSolo = p.trackSolo.values.contains(true)

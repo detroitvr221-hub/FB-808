@@ -86,6 +86,26 @@ extension Project {
             n.append(MelodyNote(step: start, pitch: pitch, dur: note.dur, vel: note.vel))
         }
     }
+    /// Clear the notes of the part the roll is currently editing (one-tap "clear this"). Undoable.
+    func clearActiveNotes() {
+        checkpoint("clearpart", coalesce: false)
+        mutateActiveNotes { $0 = [] }
+    }
+    /// Clear every melodic part's notes (all instrument parts + the lead melody), keeping drums + sounds.
+    func clearAllParts() {
+        checkpoint("clearparts", coalesce: false)
+        melody = []
+        for i in parts.indices { parts[i].notes = [] }
+    }
+    /// Fresh canvas: empty the drum pattern AND every melodic part, keeping the loaded kit / sounds / tempo.
+    func clearEverything() {
+        checkpoint("clearall", coalesce: false)
+        for k in Array(lanes.keys) { lanes[k] = Kit.emptyLane() }
+        stepMeta = [:]
+        melody = []
+        for i in parts.indices { parts[i].notes = [] }
+    }
+
     /// Set the velocity of the note covering `step` (the piano-roll velocity lane).
     func setActiveNoteVel(step: Int, _ vel: Double) {
         checkpoint("notevel")
@@ -135,6 +155,17 @@ extension Project {
         parts.removeAll { $0.id == id }
         if activePart == id { activePart = "lead" }
     }
+    /// Add a NEW empty layer (its own sound + roll) and select it — the "build another part from scratch"
+    /// flow. Inherits the current edit sound as a starting point; pick a new sound for it from the browser.
+    @discardableResult
+    func addEmptyPart(name: String? = nil) -> String {
+        checkpoint("addpart", coalesce: false)
+        let id = "part-\(UUID().uuidString.prefix(6))"
+        parts.append(InstrumentPart(id: id, name: name ?? "Layer \(parts.count + 1)", patch: editPatch, notes: []))
+        activePart = id
+        return id
+    }
+
     /// Create or refresh a named part with a preset patch + notes, and select it.
     private func setPart(_ id: String, _ name: String, patch patchName: String, notes: [MelodyNote]) {
         checkpoint("gen:\(id)", coalesce: false)
