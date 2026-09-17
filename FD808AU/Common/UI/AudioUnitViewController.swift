@@ -20,6 +20,25 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     
     private var observation: NSKeyValueObservation?
 
+    /// The audio unit the hosted view was built for, and the observable tree backing it. Both are
+    /// kept so a repeated `configureSwiftUIView` call is a no-op and the previous tree's AUParameter
+    /// observers can be revoked when the view is replaced.
+    private var configuredAudioUnit: AUAudioUnit?
+    private var observableTree: ObservableAUParameterGroup?
+
+    /// What the editor asks the host for, and the smallest size the rows stay usable at (below it the
+    /// content scrolls, so a short/compact host window can still reach the keyboard).
+    static let preferredEditorSize = FD808AULayout.preferredContentSize
+    static let minimumEditorSize = FD808AULayout.minimumContentSize
+
+    /// Pure decision behind `configureSwiftUIView`: build the hosted view once per audio unit. The AU
+    /// factory configures the view from its `defer` and `viewDidLoad` configures it again, so without
+    /// this the tree (and every AUParameter observer it registers) is built twice per instantiation.
+    static func shouldConfigure(existing: AUAudioUnit?, incoming: AUAudioUnit) -> Bool {
+        guard let existing else { return true }
+        return existing !== incoming
+    }
+
 	/* iOS View lifcycle
 	public override func viewWillAppear(_ animated: Bool) {
 		super.viewWillAppear(animated)
@@ -49,11 +68,18 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 	*/
 
 	deinit {
+        // AUParameter observers are registered with objects owned by the host; revoke them so the
+        // observer closures (and the view state they capture) do not outlive the editor. `tearDown`
+        // is main-actor isolated, so hand the tree over rather than calling it from `deinit`.
+        if let tree = observableTree {
+            Task { @MainActor in tree.tearDown() }
+        }
 	}
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        
+        preferredContentSize = Self.preferredEditorSize
+
         // Accessing the `audioUnit` parameter prompts the AU to be created via createAudioUnit(with:)
         guard let audioUnit = self.audioUnit else {
             return
@@ -98,14 +124,26 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 	}
     
     private func configureSwiftUIView(audioUnit: AUAudioUnit) {
+        // Idempotent: `viewDidLoad` and `createAudioUnit`'s `defer` both call this for a normal
+        // instantiation, and building the tree twice registers every AUParameter observer twice
+        // (each extra closure is dispatched on every host-side parameter change).
+        guard Self.shouldConfigure(existing: configuredAudioUnit, incoming: audioUnit) else { return }
+
         if let host = hostingController {
             host.removeFromParent()
             host.view.removeFromSuperview()
         }
+        // Revoke the replaced tree's AUParameter observers instead of leaking them for the life of
+        // the audio unit.
+        observableTree?.tearDown()
+        observableTree = nil
+        hostingController = nil
+        configuredAudioUnit = audioUnit
         
         guard let observableParameterTree = audioUnit.observableParameterTree else {
             return
         }
+        observableTree = observableParameterTree
         let content = FD808AUMainView(parameterTree: observableParameterTree, audioUnit: audioUnit as? FD808AUAudioUnit)
         let host = HostingController(rootView: content)
         self.addChild(host)
@@ -119,6 +157,14 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         host.view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor).isActive = true
         host.view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor).isActive = true
         host.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor).isActive = true
+        // Optional min-size floor: the host is free to give a smaller window (the content scrolls),
+        // but it should not have to guess what the editor needs.
+        let minWidth = host.view.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumEditorSize.width)
+        let minHeight = host.view.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumEditorSize.height)
+        minWidth.priority = .defaultHigh
+        minHeight.priority = .defaultHigh
+        minWidth.isActive = true
+        minHeight.isActive = true
         self.view.bringSubviewToFront(host.view)
     }
     

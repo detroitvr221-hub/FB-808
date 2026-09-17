@@ -3,3 +3,4 @@
 //  extension; Link belongs to the host, not the plugin.
 
 #import "ABLLink.h"
+#import "ABLLinkSettingsViewController.h"   // LinkKit's own Link settings panel (A17, #20)
