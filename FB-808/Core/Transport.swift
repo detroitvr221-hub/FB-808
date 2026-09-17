@@ -63,8 +63,31 @@ final class Transport: ObservableObject {
     private var cachedOwnedRows = Set<String>()
     private var cachedOwnedLeadMelody = false
     private var cachedOwnedPartIDs = Set<String>()
+    /// Lanes/step-meta for the classic (seeded-track) path once per-clip pattern pins are folded in.
+    /// Identical to the bar's arranged pattern unless some clip pins a different one, and rebuilt on the
+    /// same per-bar cadence as the rest of this cache — never per step.
+    private var cachedLegacyLanes: [String: [Double]] = [:]
+    private var cachedLegacyMeta: [String: [Int: StepMeta]] = [:]
 
-    private func refreshStepCache(bar: Int, curLanes: [String: [Double]]) {
+    /// Fold per-track clip pattern pins into the bar's lanes. Walks the UNION of the arranged pattern's
+    /// pads and the pinned pattern's pads: a pin can both add hits on pads the arranged pattern leaves
+    /// empty and silence pads it fills, so replacing key-by-key from the base alone would miss half of it.
+    nonisolated static func foldClipPins(base: [String: [Double]],
+                                         overrides: [String: Int],
+                                         lanesOfSeq: (Int) -> [String: [Double]],
+                                         trackOf: (String) -> String) -> [String: [Double]] {
+        guard !overrides.isEmpty else { return base }
+        var out = base
+        for (tk, si) in overrides {
+            let src = lanesOfSeq(si)
+            for pad in Set(base.keys).union(src.keys) where trackOf(pad) == tk {
+                out[pad] = src[pad] ?? Kit.emptyLane()
+            }
+        }
+        return out
+    }
+
+    private func refreshStepCache(bar: Int, curLanes: [String: [Double]], curMeta: [String: [Int: StepMeta]], song: Bool) {
         let p = project
         stepCacheBar = bar
         stepCacheTracks = p.tracks.count
@@ -74,6 +97,17 @@ final class Transport: ObservableObject {
         cachedOwnedRows = []
         cachedOwnedLeadMelody = false
         cachedOwnedPartIDs = []
+        let pins = song ? p.clipSeqOverrides(atBar: bar) : [:]
+        cachedLegacyLanes = Self.foldClipPins(base: curLanes, overrides: pins,
+                                              lanesOfSeq: { p.lanesOfSeq($0) }, trackOf: { Kit.trackOf($0) })
+        if pins.isEmpty { cachedLegacyMeta = curMeta } else {
+            var meta = curMeta
+            for (tk, si) in pins {
+                let src = p.stepMetaOfSeq(si)
+                for pad in Set(curMeta.keys).union(src.keys) where Kit.trackOf(pad) == tk { meta[pad] = src[pad] }
+            }
+            cachedLegacyMeta = meta
+        }
         // A track that reproduces live material from its own content owns it: a live link, a frozen copy
         // (link cleared but the copy carried over), or a baked-to-audio track whose clip stands in for the
         // synthesis. Suppressing them here is what keeps a sent/promoted/frozen pattern playing ONCE. (#15)
@@ -485,13 +519,16 @@ final class Transport: ObservableObject {
         // nothing; a frozen copy owns the source it captured, and a baked-to-audio track owns the source
         // its clip replaced. (#15)
         if s == 0 || stepCacheBar != bar || stepCacheTracks != p.tracks.count || stepCacheRevision != p.editRevision {
-            refreshStepCache(bar: bar, curLanes: curLanes)
+            refreshStepCache(bar: bar, curLanes: curLanes, curMeta: curMeta, song: song)
         }
         let ownedRows = cachedOwnedRows
         let ownedLeadMelody = cachedOwnedLeadMelody
         let ownedPartIDs = cachedOwnedPartIDs
+        // Clip pattern pins already folded in (per bar, not per step).
+        let playLanes = cachedLegacyLanes
+        let playMeta = cachedLegacyMeta
 
-        for (padID, lane) in curLanes {
+        for (padID, lane) in playLanes {
             guard s < lane.count else { continue }
             let vel = lane[s]
             if vel == 0 { continue }
@@ -508,7 +545,7 @@ final class Transport: ObservableObject {
             if m.mute { continue }
             if solo && !m.solo { continue }
             // Per-step probability + conditional trigs (A9)
-            let sm = curMeta[padID]?[s]
+            let sm = playMeta[padID]?[s]
             if let sm {
                 if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: trigBar) { continue }
                 if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
@@ -521,13 +558,15 @@ final class Transport: ObservableObject {
         }
 
         // synth / melody track (played by the knob-driven patch) — gated by the "vox" arrangement track
-        if !p.melodyMuted, !ownedLeadMelody, !curMelody.isEmpty, p.trackMute["vox"] != true,
+        // The vox clip can pin its own pattern, so the lead resolves per-track rather than per-bar.
+        let voxMelody = song ? p.melodyForTrack("vox", atBar: bar) : curMelody
+        if !p.melodyMuted, !ownedLeadMelody, !voxMelody.isEmpty, p.trackMute["vox"] != true,
            !(trackSolo && !(p.trackSolo["vox"] ?? false)),
            !(song && !p.trackPlaysInSong("vox", atBar: bar)) {
             let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
             if !mmel.mute && !(solo && !mmel.solo) {
                 let patch = p.synthPatch
-                for note in curMelody where note.step == s {
+                for note in voxMelody where note.step == s {
                     let durSec = Double(note.dur) * secPerStep()
                     let v = note.vel * mmel.vol * 1.25 * p.humVel()
                     engine.triggerSynth(patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime())
@@ -537,7 +576,7 @@ final class Transport: ObservableObject {
 
         // extra instrument parts (Tier 2) — own gate: per-sequence in Song Mode, NOT tied to the
         // vox clip or melody mute, but still honoring the vox track mute/solo and the melody channel.
-        let curParts = song ? p.partsForBar(bar) : p.parts
+        let curParts = song ? p.partsForTrack("vox", atBar: bar) : p.parts
         if !curParts.isEmpty, p.trackMute["vox"] != true,
            !(trackSolo && !(p.trackSolo["vox"] ?? false)) {
             let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)

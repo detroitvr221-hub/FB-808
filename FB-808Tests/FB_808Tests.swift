@@ -1770,4 +1770,126 @@ struct FB_808Tests {
         // Wide and short never stacks: the stage clears its minimum.
         #expect(!StageSplit<EmptyView, EmptyView>.isStacked(width: 1400, height: 900))
     }
+
+    // MARK: - Clip-level pattern pins (SEQUENCE_TRACKS_AUDIT findings 1–4)
+
+    /// A clip with no pattern of its own follows the section, exactly as before this feature existed —
+    /// this is the guard that every pre-existing project is unaffected.
+    @Test @MainActor func clipWithoutAPatternFollowsTheSection() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        p.arrangement = [ArrItem(id: "s0", section: "verse", start: 0, len: 4, seq: 2)]
+        p.clips["drums"] = [Clip(s: 0, l: 4, color: .red)]
+        #expect(p.sequenceIndex(track: "drums", atBar: 0) == 2)
+        #expect(p.clipSeq(track: "drums", atBar: 0) == nil)
+        #expect(p.clipSeqOverrides(atBar: 0).isEmpty)
+    }
+
+    /// The feature itself: two tracks, same bars, different patterns.
+    @Test @MainActor func aPinnedClipOverridesTheSectionForItsTrackOnly() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        p.arrangement = [ArrItem(id: "s0", section: "verse", start: 0, len: 4, seq: 0)]
+        p.clips["drums"] = [Clip(s: 0, l: 4, color: .red, seq: 1)]
+        p.clips["bass"] = [Clip(s: 0, l: 4, color: .blue)]
+        #expect(p.sequenceIndex(track: "drums", atBar: 0) == 1)   // pinned to B
+        #expect(p.sequenceIndex(track: "bass", atBar: 0) == 0)    // still the section's A
+        #expect(p.sequenceIndexForBar(0) == 0)                    // the section itself is untouched
+        #expect(p.clipSeqOverrides(atBar: 0) == ["drums": 1])
+    }
+
+    /// A muted clip is not playing, so it cannot pin anything; nor can a clip that does not cover the bar.
+    @Test @MainActor func mutedAndNonCoveringClipsDoNotPin() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        p.arrangement = [ArrItem(id: "s0", section: "verse", start: 0, len: 8, seq: 0)]
+        p.clips["drums"] = [Clip(s: 0, l: 2, color: .red, muted: true, seq: 1)]
+        #expect(p.clipSeq(track: "drums", atBar: 0) == nil)
+        p.clips["drums"] = [Clip(s: 4, l: 2, color: .red, seq: 1)]
+        #expect(p.clipSeq(track: "drums", atBar: 0) == nil)       // clip starts at bar 4
+        #expect(p.clipSeq(track: "drums", atBar: 4) == 1)
+    }
+
+    /// Loop Mode loops the buffer being edited, so a clip pin must not colour what it plays.
+    @Test @MainActor func loopModeIgnoresClipPins() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = false
+        p.clips["drums"] = [Clip(s: 0, l: 4, color: .red, seq: 1)]
+        // A pinned clip changes nothing in Loop Mode: the track resolves exactly as the bar does.
+        #expect(p.sequenceIndex(track: "drums", atBar: 0) == p.sequenceIndexForBar(0))
+        #expect(p.clipSeqOverrides(atBar: 0).isEmpty)
+        // With no arrangement at all, Loop Mode follows the pattern tab being edited.
+        p.arrangement = []
+        p.activeSeq = 2
+        #expect(p.sequenceIndex(track: "drums", atBar: 0) == 2)
+    }
+
+    /// Finding 3: an uncovered bar used to inherit `activeSeq` — the Sequence screen's VIEW selection —
+    /// so merely opening another pattern tab changed what the song played.
+    @Test @MainActor func uncoveredBarsDoNotFollowTheOpenPatternTab() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        p.arrangement = [ArrItem(id: "s0", section: "verse", start: 0, len: 2, seq: 1)]
+        #expect(p.sequenceIndexForBar(0) == 1)      // covered
+        #expect(p.sectionCovers(0))
+        #expect(!p.sectionCovers(5))
+        p.activeSeq = 3
+        #expect(p.sequenceIndexForBar(5) == 0)      // uncovered → stable slot, NOT activeSeq
+        p.songMode = false
+        #expect(p.sequenceIndexForBar(5) == 3)      // Loop Mode still follows the edit buffer
+    }
+
+    /// Out-of-range indices must never be stored — a clip cannot reference a slot that does not exist.
+    @Test @MainActor func setClipSeqRejectsOutOfRangeSlots() {
+        let p = Project(engine: AudioEngine())
+        let c = Clip(s: 0, l: 2, color: .red)
+        p.clips["drums"] = [c]
+        p.setClipSeq(track: "drums", id: c.id, 99)
+        #expect(p.clips["drums"]?.first?.seq == nil)
+        p.setClipSeq(track: "drums", id: c.id, 1)
+        #expect(p.clips["drums"]?.first?.seq == 1)
+        p.setClipSeq(track: "drums", id: c.id, nil)
+        #expect(p.clips["drums"]?.first?.seq == nil)
+    }
+
+    /// Folding a pin must walk the UNION of both patterns: a pin both ADDS hits on pads the section's
+    /// pattern leaves empty and SILENCES pads it fills. Replacing key-by-key from the base misses half.
+    @Test func foldClipPinsWalksTheUnionOfBothPatterns() {
+        let base: [String: [Double]] = ["kick": [1, 0, 0, 0], "hat": [1, 1, 1, 1]]
+        let pinned: [String: [Double]] = ["snare": [0, 0, 1, 0]]          // no kick, no hat
+        let out = Transport.foldClipPins(base: base, overrides: ["drums": 1],
+                                         lanesOfSeq: { _ in pinned },
+                                         trackOf: { $0 == "hat" ? "hats" : "drums" })
+        #expect(out["snare"] == [0, 0, 1, 0])                             // added from the pin
+        #expect(out["kick"]?.allSatisfy { $0 == 0 } == true)              // silenced: pin has no kick
+        #expect(out["hat"] == [1, 1, 1, 1])                               // other track untouched
+        // No overrides → the base is returned unchanged (the common, hot path).
+        #expect(Transport.foldClipPins(base: base, overrides: [:], lanesOfSeq: { _ in pinned },
+                                       trackOf: { _ in "drums" })["kick"] == [1, 0, 0, 0])
+    }
+
+    /// Finding 4: Build Song must not introduce a stock pattern the user never wrote. Slot B ships
+    /// seeded with a house pattern, so on a fresh project it does not count as authored.
+    @Test @MainActor func seededPatternsAreNotCountedAsUserAuthored() {
+        let p = Project(engine: AudioEngine())
+        #expect(!p.isUserAuthored(seq: 1))
+        #expect(!p.isUserAuthored(seq: 3))            // D ships empty
+        p.activeSeq = 1
+        p.lanes = ["kick": [1, 1, 1, 1]]              // the user writes something into B
+        #expect(p.isUserAuthored(seq: 1))
+    }
+
+    /// The pin has to survive save/load, and every pre-existing save (which has no `seq` key at all)
+    /// must decode as "follow the section".
+    @Test @MainActor func clipPatternSurvivesRoundTripAndLegacySavesDecodeAsFollow() throws {
+        let enc = JSONEncoder(), dec = JSONDecoder()
+        let pinned = Clip(s: 2, l: 4, color: .red, seq: 2)
+        let back = try dec.decode(Clip.self, from: try enc.encode(pinned))
+        #expect(back.seq == 2)
+        #expect(back.s == 2 && back.l == 4)
+        let legacy = Data("""
+        {"id":"\(UUID().uuidString)","s":0,"l":2,"color":"#ff0000","muted":false}
+        """.utf8)
+        #expect(try dec.decode(Clip.self, from: legacy).seq == nil)
+    }
 }

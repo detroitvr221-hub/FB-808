@@ -15,6 +15,11 @@ private let LABEL_W: CGFloat = 148
 private let LEGACY_TRACK_IDS: Set<String> = ["drums", "hats", "bass", "perc", "vox", "audio"]
 
 struct TrackModeView: View {
+    /// Jump to the Sequence tab. RootView owns the tab selection, so arranging can hand the user
+    /// straight to the pattern they just tapped instead of making them find it
+    /// (SEQUENCE_TRACKS_AUDIT finding 5). Optional so previews and tests can construct the view bare.
+    var openSequenceTab: (() -> Void)? = nil
+
     @EnvironmentObject var project: Project
     @EnvironmentObject var engine: AudioEngine
     @EnvironmentObject var settings: AppSettings
@@ -330,6 +335,19 @@ struct TrackModeView: View {
                 .frame(width: LABEL_W, alignment: .leading).padding(.horizontal, 12)
             GeometryReader { g in
                 ZStack(alignment: .topLeading) {
+                    // Bars no section covers. They still play (pattern A), but nothing used to say so —
+                    // the gap is now visible instead of silently inheriting (finding 3).
+                    ForEach(uncoveredRuns(), id: \.start) { run in
+                        let barW: CGFloat = g.size.width / CGFloat(Swift.max(1, BARS))
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                            .foregroundStyle(settings.inkFaint.opacity(0.5))
+                            .frame(width: Swift.max(0, CGFloat(run.len) * barW - 2), height: 28)
+                            .offset(x: CGFloat(run.start) * barW, y: 5)
+                            .accessibilityElement()
+                            .accessibilityLabel(Text("Bars \(run.start + 1) to \(run.start + run.len) have no section"))
+                            .accessibilityValue(Text("playing pattern \(seqName(0))"))
+                    }
                     ForEach(project.arrangement) { a in
                         if let sec = Kit.section(a.section) {
                             // Pre-computed with explicit types: the inline arithmetic pushed this body past the
@@ -338,24 +356,31 @@ struct TrackModeView: View {
                             let secW: CGFloat = Swift.max(0, CGFloat(a.len) * barW - 2)
                             let secX: CGFloat = CGFloat(a.start) * barW
                             HStack(spacing: 5) {
+                                // Tapping the NAME opens that pattern for editing; only the badge cycles it.
+                                // A tap on a content label that silently rewrote the content was the wrong
+                                // default (SEQUENCE_TRACKS_AUDIT finding 5).
                                 Text(sec.name).font(FDFont.display(12, .bold)).foregroundStyle(.white).lineLimit(1)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { project.switchSequence(a.seq); openSequenceTab?() }
                                 Spacer(minLength: 0)
                                 Text(seqName(a.seq)).font(FDFont.mono(9, .bold)).foregroundStyle(.white)
                                     .padding(.horizontal, 5).padding(.vertical, 1)
                                     .background(Capsule().fill(.black.opacity(0.25)))
+                                    .frame(minWidth: 30, minHeight: 26)     // widen the tap target; glyph unchanged
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { cycleSeq(a.id) }
                             }
                             .padding(.horizontal, 8)
                             .frame(width: secW, height: 28)
                             .background(RoundedRectangle(cornerRadius: 7).fill(sec.color))
                             .offset(x: secX, y: 5)
-                            .contentShape(Rectangle())
-                            .onTapGesture { cycleSeq(a.id) }
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(Text("\(sec.name) section"))
                             .accessibilityValue(Text("pattern \(seqName(a.seq))"))
-                            .accessibilityHint(Text("Double-tap to change pattern"))
+                            .accessibilityHint(Text("Double-tap to edit this pattern"))
                             .accessibilityAddTraits(.isButton)
-                            .accessibilityAction { cycleSeq(a.id) }
+                            .accessibilityAction { project.switchSequence(a.seq); openSequenceTab?() }
+                            .accessibilityAction(named: Text("Next pattern")) { cycleSeq(a.id) }
                         }
                     }
                     if project.playing {
@@ -366,6 +391,21 @@ struct TrackModeView: View {
             .frame(height: 38)
         }
         .overlay(Rectangle().fill(settings.line).frame(height: 1), alignment: .bottom)
+    }
+
+    /// Contiguous runs of bars that no section covers, so the ruler can mark them in one shape each
+    /// rather than one per bar. Only meaningful in Song Mode (Loop Mode ignores the arrangement).
+    private func uncoveredRuns() -> [(start: Int, len: Int)] {
+        guard project.songMode, !project.arrangement.isEmpty else { return [] }
+        var runs: [(start: Int, len: Int)] = []
+        var bar = 0
+        while bar < BARS {
+            guard !project.sectionCovers(bar) else { bar += 1; continue }
+            let start = bar
+            while bar < BARS && !project.sectionCovers(bar) { bar += 1 }
+            runs.append((start, bar - start))
+        }
+        return runs
     }
 
     private var lanes: some View {
@@ -739,6 +779,7 @@ struct TrackModeView: View {
                 Text("\(len) bar\(len == 1 ? "" : "s")").font(FDFont.mono(12, .bold)).foregroundStyle(settings.ink).frame(minWidth: 52)
                 Button { project.setClipLength(track: t.id, id: c.id, len + 1) } label: { offsetStep("+") }
             }
+            clipPatternRow(t, c, pinned: cur?.seq)
             Button { project.toggleClipMute(track: t.id, id: c.id) } label: {
                 HStack(spacing: 7) {
                     Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.system(size: 12))
@@ -763,6 +804,55 @@ struct TrackModeView: View {
         .padding(16).frame(width: 250)
         .background(settings.panel)
         .presentationCompactAdaptation(.popover)
+    }
+
+    /// Which pattern this clip plays. "Follow" (the default) takes the section's pattern, so a project
+    /// that never touches this behaves exactly as before; picking a letter pins THIS track to THAT
+    /// pattern over the clip's bars, which is how one track runs B while another stays on A.
+    @ViewBuilder
+    private func clipPatternRow(_ t: Track, _ c: Clip, pinned: Int?) -> some View {
+        let sectionSeq = project.sequenceIndexForBar(c.s)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Pattern").font(FDFont.ui(12.5, .semibold)).foregroundStyle(settings.inkDim)
+                Spacer()
+                Button { project.switchSequence(pinned ?? sectionSeq); openSequenceTab?() } label: {
+                    Text("Edit →").font(FDFont.mono(10, .bold)).foregroundStyle(settings.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Edit pattern \(seqName(pinned ?? sectionSeq)) in the Sequence tab"))
+            }
+            HStack(spacing: 5) {
+                patternChip(label: "Follow", on: pinned == nil,
+                            a11y: "Follow the section, currently pattern \(seqName(sectionSeq))") {
+                    project.setClipSeq(track: t.id, id: c.id, nil)
+                }
+                ForEach(Array(project.sequences.enumerated()), id: \.offset) { (i, slot) in
+                    patternChip(label: slot.name, on: pinned == i, a11y: "Pattern \(slot.name)") {
+                        project.setClipSeq(track: t.id, id: c.id, i)
+                    }
+                }
+            }
+            Text(pinned == nil
+                 ? "Follows the section here — pattern \(seqName(sectionSeq))."
+                 : "This clip plays \(seqName(pinned!)) no matter which pattern the section uses.")
+                .font(FDFont.ui(10.5)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func patternChip(label: String, on: Bool, a11y: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label).font(FDFont.mono(11, .bold))
+                .foregroundStyle(on ? .white : settings.inkDim)
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)   // "Follow" must not wrap to "Follo/w"
+                .frame(minWidth: 26).frame(height: 30).padding(.horizontal, 8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(on ? settings.accent : settings.panel2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? .clear : settings.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(a11y))
+        .accessibilityValue(Text(on ? "Selected" : "Not selected"))
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     private func seqName(_ i: Int) -> String { project.sequences.indices.contains(i) ? project.sequences[i].name : "A" }
@@ -906,7 +996,11 @@ struct TrackModeView: View {
     /// Each section only plays the tracks listed, so the arrangement actually breathes.
     private func buildSong() {
         project.checkpoint("buildsong", coalesce: false)
-        let hookSeq = max(0, min(1, project.sequences.count - 1))
+        // The hook lifts to pattern B only when the user actually wrote one. B ships seeded with a stock
+        // house pattern, and `generateBeat` only ever fills the ACTIVE buffer, so the old unconditional
+        // `min(1, …)` dropped a four-on-the-floor house bar into the middle of (say) a trap beat the user
+        // had never heard (SEQUENCE_TRACKS_AUDIT finding 4). Untouched B → keep the user's own pattern.
+        let hookSeq = project.sequences.count > 1 && project.isUserAuthored(seq: 1) ? 1 : 0
         let structure: [(sec: String, len: Int, seq: Int, tracks: [String])] = [
             ("intro", 2, 0,       ["drums", "hats"]),
             ("verse", 4, 0,       ["drums", "hats", "bass", "vox"]),

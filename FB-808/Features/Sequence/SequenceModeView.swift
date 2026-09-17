@@ -88,6 +88,23 @@ struct SequenceModeView: View {
         } message: { Text("Erases every step on all rows of this sequence. You can undo it afterwards.") }
     }
 
+    // MARK: song context (findings 6, 7)
+
+    /// The pattern actually SOUNDING right now, or nil when that is simply the one on screen. Loop Mode
+    /// always plays the edit buffer, so it never reports a mismatch.
+    private var soundingSeq: Int? {
+        guard project.songMode, project.playing else { return nil }
+        let i = project.sequenceIndexForBar(project.bar)
+        return i == project.activeSeq ? nil : i
+    }
+    private func seqName(_ i: Int) -> String { project.sequences.indices.contains(i) ? project.sequences[i].name : "?" }
+    /// Sections built on the pattern being edited — so it is obvious that a change here lands in several
+    /// places in the song, which the one-bar view gave no hint of.
+    private var sectionsUsingThisPattern: [String] {
+        guard project.songMode else { return [] }
+        return project.arrangement.filter { $0.seq == project.activeSeq }.compactMap { Kit.section($0.section)?.name }
+    }
+
     private var sequenceHeader: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
@@ -96,13 +113,33 @@ struct SequenceModeView: View {
                     Text("1 BAR").font(FDFont.mono(9, .bold)).tracking(1.1).foregroundStyle(settings.accent)
                     Text("\(project.barSteps) STEPS").font(FDFont.mono(9, .bold)).tracking(1.1).foregroundStyle(settings.inkFaint)
                     Text(sigLabel).font(FDFont.mono(9, .bold)).tracking(1.1).foregroundStyle(settings.inkFaint)
+                    Text(project.songMode ? "SONG" : "LOOP").font(FDFont.mono(9, .bold)).tracking(1.1)
+                        .foregroundStyle(project.songMode ? settings.accent : settings.inkFaint)
+                        .accessibilityLabel(Text(project.songMode ? "Song Mode" : "Loop Mode"))
                 }
-                Text("Draw steps, shape velocity, and keep the groove readable at a glance.")
-                    .font(FDFont.ui(11.5, .semibold)).foregroundStyle(settings.inkFaint)
-                    .lineLimit(1)
+                songContextLine
             }
             Spacer(minLength: 12)
             selectedRowBadge
+        }
+    }
+
+    /// One honest line under the title: what is playing if it isn't this, or where this pattern is used.
+    @ViewBuilder private var songContextLine: some View {
+        if let s = soundingSeq {
+            HStack(spacing: 5) {
+                Image(systemName: "waveform").font(.system(size: 9, weight: .bold))
+                Text("Pattern \(seqName(s)) is playing — you're editing \(seqName(project.activeSeq))")
+                    .font(FDFont.ui(11.5, .semibold)).lineLimit(1)
+            }
+            .foregroundStyle(settings.theme.miss)
+            .accessibilityLabel(Text("Pattern \(seqName(s)) is playing. You are editing pattern \(seqName(project.activeSeq))."))
+        } else if !sectionsUsingThisPattern.isEmpty {
+            Text("Pattern \(seqName(project.activeSeq)) · used by \(sectionsUsingThisPattern.joined(separator: ", "))")
+                .font(FDFont.ui(11.5, .semibold)).foregroundStyle(settings.inkFaint).lineLimit(1)
+        } else {
+            Text("Draw steps, shape velocity, and keep the groove readable at a glance.")
+                .font(FDFont.ui(11.5, .semibold)).foregroundStyle(settings.inkFaint).lineLimit(1)
         }
     }
 
@@ -480,7 +517,10 @@ struct SequenceModeView: View {
     private func cell(pad: PadDef, i: Int, vel: Double) -> some View {
         let on = vel > 0
         let beat = i % 4 == 0
-        let ph = project.step == i && project.playing
+        // Only light the step cursor when this grid is the pattern being heard. Sweeping it across a
+        // pattern that isn't sounding read as confirmation that you were editing what you were hearing
+        // (SEQUENCE_TRACKS_AUDIT finding 7).
+        let ph = project.step == i && project.playing && soundingSeq == nil
         return RoundedRectangle(cornerRadius: 6)
             .fill(on ? pad.color : (beat ? settings.panel2.darker(0.03) : settings.panel2.darker(0.18)))
             .overlay(alignment: .top) {

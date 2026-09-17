@@ -440,13 +440,15 @@ extension Project {
 
     /// Resolve a drum link to the live lanes it points at (filtered to its rows). Returns nil for
     /// non-drum kinds. Call ONCE PER BAR (not per step) — the additive scheduler hoists this.
-    func resolvedLanes(_ link: LinkRef, atBar bar: Int) -> [String: [Double]]? {
+    func resolvedLanes(_ link: LinkRef, atBar bar: Int, pinnedSeq: Int? = nil) -> [String: [Double]]? {
         switch link.kind {
         case .lanes:
             // In Song Mode resolve through the bar's arranged sequence so a linked track mirrors the same
             // per-bar pattern the seeded drums play (lanesForBar returns the live buffer for active-seq bars,
             // so single-sequence / non-song projects are unaffected). (#review)
-            let src = songMode ? lanesForBar(bar) : lanes
+            // `pinnedSeq` is the track's own clip pattern when it sets one, so a linked track follows the
+            // clip rather than the section (SEQUENCE_TRACKS_AUDIT finding 1).
+            let src = songMode ? lanesOfSeq(pinnedSeq ?? sequenceIndexForBar(bar)) : lanes
             guard let rows = link.rows else { return src }
             return src.filter { rows.contains($0.key) }
         case .sequenceLanes:
@@ -458,13 +460,14 @@ extension Project {
         }
     }
     /// Resolve a melody/part link to the live notes + patch it points at. Returns nil for non-synth kinds.
-    func resolvedNotes(_ link: LinkRef, atBar bar: Int) -> (notes: [MelodyNote], patch: SynthPatch)? {
+    func resolvedNotes(_ link: LinkRef, atBar bar: Int, pinnedSeq: Int? = nil) -> (notes: [MelodyNote], patch: SynthPatch)? {
+        let arranged = pinnedSeq ?? sequenceIndexForBar(bar)
         switch link.kind {
         case .melody:
-            return (songMode ? melodyForBar(bar) : melody, synthPatch)
+            return (songMode ? melodyOfSeq(arranged) : melody, synthPatch)
         case .part:
-            if link.partID == nil || link.partID == "lead" { return (songMode ? melodyForBar(bar) : melody, synthPatch) }
-            let pool = songMode ? partsForBar(bar) : parts
+            if link.partID == nil || link.partID == "lead" { return (songMode ? melodyOfSeq(arranged) : melody, synthPatch) }
+            let pool = songMode ? partsOfSeq(arranged) : parts
             guard let p = pool.first(where: { $0.id == link.partID }) else { return nil }
             return (p.notes, p.patch)
         case .sequenceMelody:
@@ -475,11 +478,15 @@ extension Project {
     }
     /// Effective lanes for an additively-played drum track (link-resolved if linked, else the frozen copy).
     func trackLanes(_ track: Track, atBar bar: Int) -> [String: [Double]]? {
-        track.isLinked ? (track.source.link.flatMap { resolvedLanes($0, atBar: bar) }) : track.source.lanes
+        let pinned = clipSeq(track: track.id, atBar: bar)
+        return track.isLinked ? (track.source.link.flatMap { resolvedLanes($0, atBar: bar, pinnedSeq: pinned) }) : track.source.lanes
     }
     /// Effective notes+patch for an additively-played synth track (link-resolved if linked, else frozen).
     func trackNotes(_ track: Track, atBar bar: Int) -> (notes: [MelodyNote], patch: SynthPatch)? {
-        if track.isLinked { return track.source.link.flatMap { resolvedNotes($0, atBar: bar) } }
+        if track.isLinked {
+            let pinned = clipSeq(track: track.id, atBar: bar)
+            return track.source.link.flatMap { resolvedNotes($0, atBar: bar, pinnedSeq: pinned) }
+        }
         if let n = track.source.notes, let p = track.source.patch { return (n, p) }
         return nil
     }
@@ -489,7 +496,11 @@ extension Project {
     func trackStepMeta(_ track: Track, _ pad: String, _ step: Int, atBar bar: Int) -> StepMeta? {
         guard track.isLinked, let link = track.source.link else { return nil }
         switch link.kind {
-        case .lanes:         return (songMode ? stepMetaForBar(bar) : stepMeta)[pad]?[step]
+        case .lanes:
+            // Same pattern the lanes came from, so a pinned clip's probability/conditions/p-locks match
+            // the notes it is actually playing.
+            let i = clipSeq(track: track.id, atBar: bar) ?? sequenceIndexForBar(bar)
+            return (songMode ? stepMetaOfSeq(i) : stepMeta)[pad]?[step]
         case .sequenceLanes: return link.seqIndex.flatMap { sequences.indices.contains($0) ? sequences[$0].stepMeta[pad]?[step] : nil }
         default:             return nil
         }

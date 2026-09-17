@@ -846,7 +846,7 @@ struct RootView: View {
             case "sequence": SequenceModeView()
             case "synth": SynthModeView()
             case "sample": SampleModeView(openTab: { tab = $0 })
-            case "tracks": TrackModeView()
+            case "tracks": TrackModeView(openSequenceTab: { tab = "sequence" })
             case "mixer": MixerModeView()
             case "theory": TheoryModeView(openTab: { tab = $0 })
             case "learn": LearnModeView(engine: engine, fx: fx, onXP: { progress.addXP($0) }, openTab: { tab = $0 })

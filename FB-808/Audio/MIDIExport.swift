@@ -90,10 +90,17 @@ extension Project {
         }
 
         for bar in 0..<totalBars {
-            let curLanes = songMode ? lanesForBar(bar) : lanes
-            let curMelody = songMode ? melodyForBar(bar) : melody
-            let curParts = songMode ? partsForBar(bar) : parts
-            let curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            // Same clip-pin fold as playback and the audio bounce, so all three agree.
+            let pins = songMode ? clipSeqOverrides(atBar: bar) : [:]
+            let curLanes = Transport.foldClipPins(base: songMode ? lanesForBar(bar) : lanes, overrides: pins,
+                                                  lanesOfSeq: { self.lanesOfSeq($0) }, trackOf: { Kit.trackOf($0) })
+            let curMelody = songMode ? melodyForTrack("vox", atBar: bar) : melody
+            let curParts = songMode ? partsForTrack("vox", atBar: bar) : parts
+            var curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            for (tk, si) in pins {
+                let src = stepMetaOfSeq(si)
+                for pad in Set(curMeta.keys).union(src.keys) where Kit.trackOf(pad) == tk { curMeta[pad] = src[pad] }
+            }
             // Sources a track reproduces from its own content are suppressed here and emitted from the track
             // below, so a sent / promoted / frozen pattern lands in the .mid ONCE — matching live playback
             // and the WAV bounce instead of duplicating every note. (#15)

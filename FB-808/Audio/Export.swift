@@ -86,10 +86,19 @@ extension Project {
         var synths: [ExportSynth] = []
 
         for bar in 0..<totalBars where !masterMuted {
-            let curLanes = songMode ? lanesForBar(bar) : lanes
-            let curMelody = songMode ? melodyForBar(bar) : melody
-            let curParts = songMode ? partsForBar(bar) : parts
-            let curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            // Clip pattern pins are folded in exactly as Transport.refreshStepCache does, and the lead /
+            // parts resolve per-track, so a pinned clip bounces the pattern it plays (SEQUENCE_TRACKS_AUDIT
+            // finding 1 — live-vs-bounce parity is non-negotiable here).
+            let pins = songMode ? clipSeqOverrides(atBar: bar) : [:]
+            let curLanes = Transport.foldClipPins(base: songMode ? lanesForBar(bar) : lanes, overrides: pins,
+                                                  lanesOfSeq: { self.lanesOfSeq($0) }, trackOf: { Kit.trackOf($0) })
+            let curMelody = songMode ? melodyForTrack("vox", atBar: bar) : melody
+            let curParts = songMode ? partsForTrack("vox", atBar: bar) : parts
+            var curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            for (tk, si) in pins {
+                let src = stepMetaOfSeq(si)
+                for pad in Set(curMeta.keys).union(src.keys) where Kit.trackOf(pad) == tk { curMeta[pad] = src[pad] }
+            }
             // Sources a track owns — suppressed in the classic paths so a sent/promoted pattern bounces ONCE
             // (via its track), matching live playback. A frozen copy owns the source it captured and a
             // baked-to-audio track owns the source its clip replaced, so neither doubles. (#15)

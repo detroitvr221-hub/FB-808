@@ -83,8 +83,15 @@ struct Clip: Identifiable, Codable {
     var l: Int          // length bars
     var color: Color
     var muted = false   // per-clip mute (skipped in Song Mode playback/export)
-    enum CodingKeys: String, CodingKey { case id, s, l, color, muted }   // legacy files may omit id; color persists as hex
-    init(s: Int, l: Int, color: Color, muted: Bool = false) { self.s = s; self.l = l; self.color = color; self.muted = muted }
+    /// Which pattern THIS clip plays, independent of the section under it. `nil` (the default, and what
+    /// every pre-existing project decodes to) means "follow the section", i.e. the old global behaviour.
+    /// Set, it lets one track run pattern B while another stays on A over the same bars — the thing the
+    /// section-only model could not express (SEQUENCE_TRACKS_AUDIT finding 1).
+    var seq: Int? = nil
+    enum CodingKeys: String, CodingKey { case id, s, l, color, muted, seq }   // legacy files may omit id; color persists as hex
+    init(s: Int, l: Int, color: Color, muted: Bool = false, seq: Int? = nil) {
+        self.s = s; self.l = l; self.color = color; self.muted = muted; self.seq = seq
+    }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
@@ -92,6 +99,7 @@ struct Clip: Identifiable, Codable {
         l = try c.decode(Int.self, forKey: .l)
         color = Color(hex: try c.decode(String.self, forKey: .color))
         muted = (try? c.decodeIfPresent(Bool.self, forKey: .muted)) ?? false
+        seq = try? c.decodeIfPresent(Int.self, forKey: .seq)   // absent in v1–v3 saves → follow the section
     }
     func encode(to e: Encoder) throws {
         var c = e.container(keyedBy: CodingKeys.self)
@@ -100,6 +108,7 @@ struct Clip: Identifiable, Codable {
         try c.encode(l, forKey: .l)
         try c.encode(color.toHex(), forKey: .color)
         try c.encode(muted, forKey: .muted)
+        try c.encodeIfPresent(seq, forKey: .seq)
     }
 }
 
@@ -658,10 +667,7 @@ final class Project: ObservableObject {
         stepMeta[pad]?[step] = nil
         if stepMeta[pad]?.isEmpty == true { stepMeta[pad] = nil }
     }
-    func stepMetaForBar(_ bar: Int) -> [String: [Int: StepMeta]] {
-        let i = sequenceIndexForBar(bar)
-        return (i == activeSeq || !sequences.indices.contains(i)) ? stepMeta : sequences[i].stepMeta
-    }
+    func stepMetaForBar(_ bar: Int) -> [String: [Int: StepMeta]] { stepMetaOfSeq(sequenceIndexForBar(bar)) }
     /// Evaluate an Elektron-style trig condition against the loop/bar counter.
     static func condPass(_ cond: String, bar: Int) -> Bool {
         switch cond {
@@ -1007,6 +1013,15 @@ final class Project: ObservableObject {
         checkpoint("clipmute", coalesce: false)
         clips[track]?[i].muted.toggle()
     }
+    /// Pin this clip to a pattern, or pass nil to follow the section again. Out-of-range indices are
+    /// dropped rather than stored, so a clip can never reference a slot that does not exist.
+    func setClipSeq(track: String, id: UUID, _ seq: Int?) {
+        guard let i = clips[track]?.firstIndex(where: { $0.id == id }) else { return }
+        let v = seq.flatMap { sequences.indices.contains($0) ? $0 : nil }
+        guard clips[track]?[i].seq != v else { return }   // no-op → no checkpoint, no redo loss (#MIX-UNDO)
+        checkpoint("clipseq", coalesce: false)
+        clips[track]?[i].seq = v
+    }
     func setClipLength(track: String, id: UUID, _ l: Int) {
         guard var arr = clips[track], let i = arr.firstIndex(where: { $0.id == id }) else { return }
         checkpoint("cliplen", coalesce: false)
@@ -1089,22 +1104,103 @@ final class Project: ObservableObject {
         if !(activePart == "lead" || parts.contains { $0.id == activePart }) { activePart = "lead" }
         emit(.switchSequence(index: i))
     }
+    /// The stock content a sequence slot ships with, so "has the user written this one?" is answerable.
+    /// Slots A–C are seeded from named Kit patterns and D starts empty (see `init`).
+    nonisolated static func seededLanes(forSeq i: Int) -> [String: [Double]] {
+        switch i {
+        case 0: return Kit.lanesFromSteps(Kit.pattern("boombap")?.steps ?? [])
+        case 1: return Kit.lanesFromSteps(Kit.pattern("house")?.steps ?? [])
+        case 2: return Kit.lanesFromSteps(Kit.pattern("trap")?.steps ?? [])
+        default: return [:]
+        }
+    }
+    /// True when a slot holds something other than the pattern it shipped with — i.e. the user put it
+    /// there. Used so auto-arranging never introduces stock content the user has not heard.
+    func isUserAuthored(seq i: Int) -> Bool {
+        guard sequences.indices.contains(i) else { return false }
+        let cur = lanesOfSeq(i).filter { $0.value.contains { $0 != 0 } }       // ignore all-zero lanes
+        let seed = Project.seededLanes(forSeq: i).filter { $0.value.contains { $0 != 0 } }
+        if cur != seed { return true }
+        return !melodyOfSeq(i).isEmpty || !partsOfSeq(i).isEmpty              // melody/parts count as authored
+    }
+
+    /// Bars a section covers. Bars outside every section have no arranged pattern — see `sequenceIndexForBar`.
+    func sectionCovers(_ bar: Int) -> Bool {
+        arrangement.contains { bar >= $0.start && bar < $0.start + $0.len }
+    }
     func sequenceIndexForBar(_ bar: Int) -> Int {
-        arrangement.first { bar >= $0.start && bar < $0.start + $0.len }?.seq ?? activeSeq
+        if let s = arrangement.first(where: { bar >= $0.start && bar < $0.start + $0.len })?.seq { return s }
+        // No section covers this bar. Falling back to `activeSeq` here made playback depend on which
+        // pattern TAB was last opened on the Sequence screen — peeking at B silently changed the song
+        // (SEQUENCE_TRACKS_AUDIT finding 3). In Song Mode an uncovered bar resolves to a stable slot;
+        // Loop Mode has no arrangement at all and must keep following the buffer being edited.
+        return songMode ? 0 : activeSeq
     }
+
+    // MARK: pattern lookup by slot
+
+    /// Content of a sequence slot. The ACTIVE slot reads the live edit buffer (`lanes`/`melody`/…),
+    /// because that is where in-progress edits live until `switchSequence` flushes them back.
+    func lanesOfSeq(_ i: Int) -> [String: [Double]] {
+        (i == activeSeq || !sequences.indices.contains(i)) ? lanes : sequences[i].lanes
+    }
+    func melodyOfSeq(_ i: Int) -> [MelodyNote] {
+        (i == activeSeq || !sequences.indices.contains(i)) ? melody : sequences[i].melody
+    }
+    func partsOfSeq(_ i: Int) -> [InstrumentPart] {
+        (i == activeSeq || !sequences.indices.contains(i)) ? parts : sequences[i].parts
+    }
+    func stepMetaOfSeq(_ i: Int) -> [String: [Int: StepMeta]] {
+        (i == activeSeq || !sequences.indices.contains(i)) ? stepMeta : sequences[i].stepMeta
+    }
+
+    /// The pattern a CLIP pins for its track at this bar, or nil when it follows the section.
+    /// Only unmuted clips count — a muted clip is not playing, so it cannot pin anything.
+    func clipSeq(track: String, atBar bar: Int) -> Int? {
+        guard let cs = clips[track] else { return nil }
+        guard let c = cs.first(where: { bar >= $0.s && bar < $0.s + $0.l && !$0.muted }) else { return nil }
+        guard let s = c.seq, sequences.indices.contains(s) else { return nil }
+        return s
+    }
+
+    /// The pattern a given TRACK plays at a bar: its clip's own pattern when it pins one, else the
+    /// section's. This is the one lookup playback, bounce and MIDI export all go through, so the three
+    /// can never disagree. Loop Mode ignores clips entirely (there is no arrangement to pin against).
+    func sequenceIndex(track: String, atBar bar: Int) -> Int {
+        if songMode, let pinned = clipSeq(track: track, atBar: bar) { return pinned }
+        return sequenceIndexForBar(bar)
+    }
+
     /// The drum lanes to play for a given bar (the active edit buffer for the active sequence).
-    func lanesForBar(_ bar: Int) -> [String: [Double]] {
-        let i = sequenceIndexForBar(bar)
-        return (i == activeSeq || !sequences.indices.contains(i)) ? lanes : sequences[i].lanes
-    }
-    func melodyForBar(_ bar: Int) -> [MelodyNote] {
-        let i = sequenceIndexForBar(bar)
-        return (i == activeSeq || !sequences.indices.contains(i)) ? melody : sequences[i].melody
-    }
+    func lanesForBar(_ bar: Int) -> [String: [Double]] { lanesOfSeq(sequenceIndexForBar(bar)) }
+    func melodyForBar(_ bar: Int) -> [MelodyNote] { melodyOfSeq(sequenceIndexForBar(bar)) }
     /// The extra instrument parts to play for a given bar (per-sequence in Song Mode).
-    func partsForBar(_ bar: Int) -> [InstrumentPart] {
-        let i = sequenceIndexForBar(bar)
-        return (i == activeSeq || !sequences.indices.contains(i)) ? parts : sequences[i].parts
+    func partsForBar(_ bar: Int) -> [InstrumentPart] { partsOfSeq(sequenceIndexForBar(bar)) }
+
+    /// Per-track variants — identical to the `…ForBar` lookups unless a clip pins a pattern.
+    func lanesForTrack(_ track: String, atBar bar: Int) -> [String: [Double]] {
+        lanesOfSeq(sequenceIndex(track: track, atBar: bar))
+    }
+    func melodyForTrack(_ track: String, atBar bar: Int) -> [MelodyNote] {
+        melodyOfSeq(sequenceIndex(track: track, atBar: bar))
+    }
+    func partsForTrack(_ track: String, atBar bar: Int) -> [InstrumentPart] {
+        partsOfSeq(sequenceIndex(track: track, atBar: bar))
+    }
+    func stepMetaForTrack(_ track: String, atBar bar: Int) -> [String: [Int: StepMeta]] {
+        stepMetaOfSeq(sequenceIndex(track: track, atBar: bar))
+    }
+
+    /// Legacy tracks whose clip pins a pattern different from the section's, at this bar. Empty in the
+    /// common case, which is what lets the scheduler keep its single hoisted lanes dictionary.
+    func clipSeqOverrides(atBar bar: Int) -> [String: Int] {
+        guard songMode, !clips.isEmpty else { return [:] }
+        let base = sequenceIndexForBar(bar)
+        var out: [String: Int] = [:]
+        for tk in clips.keys {
+            if let s = clipSeq(track: tk, atBar: bar), s != base { out[tk] = s }
+        }
+        return out
     }
 
     /// Bank is a VIEW choice (it's still persisted with the project): switching to look at Bank C must not
