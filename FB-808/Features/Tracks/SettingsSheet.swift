@@ -28,7 +28,8 @@ struct SettingsSheet: View {
                     lookCard
                     workspaceCard
                     padsCard
-                    syncCard
+                    // Gated until Apple grants the multicast entitlement Link needs — see FDFeature.link.
+                    if FDFeature.link { syncCard }
                     audioCard
                     qualityCard
                     diagnosticsCard

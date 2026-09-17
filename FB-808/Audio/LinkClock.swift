@@ -35,7 +35,13 @@ final class LinkClock: ObservableObject {
 
     init(bpm: Double) {
         tempo = bpm
+        // While Link is gated (FDFeature.link == false) the Sync card is hidden, so nothing can turn
+        // Link off again — clear the persisted flag BEFORE ABLLinkNew, which caches it at construction.
+        // Otherwise a build that had Link switched on would keep driving the grid from an invisible
+        // setting, on a network the entitlement won't let it reach.
+        if !FDFeature.link { Self.setLinkEnabled(false) }
         link = ABLLinkNew(bpm)
+        enabled = Self.linkEnabled()
         installCallbacks()
     }
     deinit { if let link { ABLLinkDelete(link) } }
