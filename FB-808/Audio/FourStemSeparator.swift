@@ -32,7 +32,7 @@ nonisolated enum StemModelContract {
 nonisolated final class FourStemSeparator {
     struct Stem { let name: String; let audio: [Float] }   // mono (L/R averaged) at the engine sample rate
 
-    private static let log = Logger(subsystem: "com.FB-808", category: "stems")
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FD808", category: "stems")
 
     /// On-Demand Resources tag the 93 MB model is shipped under, so it isn't part of the initial app
     /// download — it's fetched from the App Store the first time the user runs 4-stem separation.

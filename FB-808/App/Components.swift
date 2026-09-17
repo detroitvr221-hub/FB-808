@@ -30,7 +30,9 @@ let FD_RECORD_QUANTS = ["1/8", "1/16"]
 /// the redo stack although nothing changed (#MIX-UNDO). A frame applies only once the finger has really
 /// moved; after that every frame applies, because a later frame can legitimately net back to the start.
 enum FDDrag {
-    static let slop: CGFloat = 4
+    // `nonisolated`: `moved` is called from gesture callbacks that are not main-actor isolated,
+    // and reading a main-actor constant from there is an error in the Swift 6 language mode.
+    nonisolated static let slop: CGFloat = 4
     nonisolated static func moved(_ t: CGSize) -> Bool {
         abs(t.width) > slop || abs(t.height) > slop
     }

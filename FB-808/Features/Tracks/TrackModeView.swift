@@ -339,10 +339,7 @@ struct TrackModeView: View {
                     // the gap is now visible instead of silently inheriting (finding 3).
                     ForEach(uncoveredRuns(), id: \.start) { run in
                         let barW: CGFloat = g.size.width / CGFloat(Swift.max(1, BARS))
-                        RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                            .foregroundStyle(settings.inkFaint.opacity(0.5))
-                            .frame(width: Swift.max(0, CGFloat(run.len) * barW - 2), height: 28)
+                        uncoveredMark(width: Swift.max(0, CGFloat(run.len) * barW - 2))
                             .offset(x: CGFloat(run.start) * barW, y: 5)
                             .accessibilityElement()
                             .accessibilityLabel(Text("Bars \(run.start + 1) to \(run.start + run.len) have no section"))
@@ -395,8 +392,27 @@ struct TrackModeView: View {
 
     /// Contiguous runs of bars that no section covers, so the ruler can mark them in one shape each
     /// rather than one per bar. Only meaningful in Song Mode (Loop Mode ignores the arrangement).
+    /// The dashed marker for a stretch of bars no section covers. Wide enough, it says why in words —
+    /// which is what makes the "no sections at all" case readable rather than just an empty dashed box.
+    private func uncoveredMark(width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 7)
+            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .foregroundStyle(settings.inkFaint.opacity(0.5))
+            .frame(width: width, height: 28)
+            .overlay {
+                if width >= 150 {
+                    Text("No section · plays \(seqName(0))")
+                        .font(FDFont.mono(9, .bold)).foregroundStyle(settings.inkFaint)
+                        .lineLimit(1).allowsHitTesting(false)
+                }
+            }
+    }
+
     private func uncoveredRuns() -> [(start: Int, len: Int)] {
-        guard project.songMode, !project.arrangement.isEmpty else { return [] }
+        // Deliberately NOT gated on a non-empty arrangement: with Song Mode on and no sections at all,
+        // EVERY bar is uncovered, which is exactly when saying so matters most. Skipping that case left
+        // the one arrangement with nothing to read as the one arrangement with no explanation.
+        guard project.songMode else { return [] }
         var runs: [(start: Int, len: Int)] = []
         var bar = 0
         while bar < BARS {

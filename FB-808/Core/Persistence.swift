@@ -653,7 +653,7 @@ final class ProjectStore: ObservableObject {
             let ok = Self.writePayload(payload, to: url, samples: samples, audio: audio, pretty: false)
             if !ok { fdLog.error("Recovery save failed; keeping previous recovery file") }
             // Report the outcome to the UI: a full disk silently killed the crash safety net (#PERSIST-RECOVERY).
-            Task { @MainActor in self?.noteRecoveryWrite(ok) }
+            Task { @MainActor [weak self] in self?.noteRecoveryWrite(ok) }
             completion?()
         }
     }

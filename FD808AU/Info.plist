@@ -10,13 +10,13 @@
 			<array>
 				<dict>
 					<key>description</key>
-					<string>FD808AU</string>
+					<string>FD-808 drum machine &amp; synth</string>
 					<key>factoryFunction</key>
 					<string>$(PRODUCT_MODULE_NAME).AudioUnitViewController</string>
 					<key>manufacturer</key>
 					<string>FdEt</string>
 					<key>name</key>
-					<string>aumu: FD808AU</string>
+					<string>BLKMKT: FD-808</string>
 					<key>sandboxSafe</key>
 					<true/>
 					<key>subtype</key>

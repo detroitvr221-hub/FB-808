@@ -25,6 +25,28 @@ struct KitBrowserView: View {
 
     private var th: Theme { settings.theme }
 
+    /// A failed catalog fetch is at least as likely to be the store being down as the user's Wi-Fi, so
+    /// the copy no longer asserts whose fault it is — and it offers the retry it was missing.
+    private var loadFailed: some View {
+        VStack(spacing: 12) {
+            Text("Couldn't load the kit store.")
+                .font(FDFont.ui(14, .semibold)).foregroundStyle(settings.inkDim)
+            Text("It may be offline, or this device may be off the network.")
+                .font(FDFont.ui(11.5)).foregroundStyle(settings.inkFaint)
+                .multilineTextAlignment(.center)
+            Button { Task { await loadCatalog() } } label: {
+                Text("Try again").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.accent)
+                    .padding(.horizontal, 18).frame(height: 36)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent.opacity(0.14)))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(settings.accent.opacity(0.4), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Try loading the kit store again"))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -32,7 +54,7 @@ struct KitBrowserView: View {
             Group {
                 if let kit = selected { detail(kit) }
                 else if loading { spinner("Loading kits…") }
-                else if loadError { message("Couldn't reach the kit store. Check your connection.") }
+                else if loadError { loadFailed }
                 else if kits.isEmpty { message("No kits available yet.") }
                 else { catalog }
             }

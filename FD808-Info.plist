@@ -42,5 +42,13 @@
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
+	<!-- Supabase endpoint, overridable at build time so the project ref / publishable key can rotate
+	     without an app release. SyncConfig reads these and falls back to its dev literals when the
+	     values are still the $(…) placeholders (RELEASE_AUDIT finding 1). Set FD_SUPABASE_PROJECT_REF /
+	     FD_SUPABASE_ANON_KEY as build settings (or in CI) to point a build at another project. -->
+	<key>FDSupabaseProjectRef</key>
+	<string>$(FD_SUPABASE_PROJECT_REF)</string>
+	<key>FDSupabaseAnonKey</key>
+	<string>$(FD_SUPABASE_ANON_KEY)</string>
 </dict>
 </plist>
