@@ -706,7 +706,7 @@ final class Project: ObservableObject {
         let wrapped = i == 0 && when0to1 > 0.5
         // Song Mode plays `lanesForBar(bar)`; a hit must land in the sequence that is SOUNDING at this bar,
         // not in the active edit buffer (SYSTEMS_GAP_AUDIT #transport-1).
-        if let target = recordTargetSequence(wrapToNextBar: wrapped) {
+        if let target = recordTargetSequence(track: Kit.trackOf(padID), wrapToNextBar: wrapped) {
             var lane = sequences[target].lanes[padID] ?? Kit.emptyLane()
             guard lane.indices.contains(i) else { return }
             checkpoint("record")
@@ -723,10 +723,13 @@ final class Project: ObservableObject {
     /// In Song Mode, the index of a NON-active sequence that owns the current arrangement bar (nil when the
     /// active edit buffer is the one playing, or in Loop Mode). `wrapToNextBar` targets the following bar
     /// for a hit that quantized past the bar line.
-    func recordTargetSequence(wrapToNextBar: Bool = false) -> Int? {
+    /// `track` resolves the pin its clip sets, so a hit lands in the pattern that track is actually
+    /// PLAYING here. Without it, recording onto a clip pinned to B wrote into the section's pattern and
+    /// the hit vanished from what you were playing along to (SEQUENCE_TRACKS_AUDIT re-audit, gap B).
+    func recordTargetSequence(track: String? = nil, wrapToNextBar: Bool = false) -> Int? {
         guard songMode else { return nil }
         let b = wrapToNextBar ? (bar + 1) % max(1, songBars) : bar
-        let i = sequenceIndexForBar(b)
+        let i = track.map { sequenceIndex(track: $0, atBar: b) } ?? sequenceIndexForBar(b)
         return (i != activeSeq && sequences.indices.contains(i)) ? i : nil
     }
 
@@ -741,7 +744,7 @@ final class Project: ObservableObject {
         guard let step = Self.quantizedStep(when0to1, barSteps: barSteps, quantize: quantize) else { return }
         // Song Mode: the sequence sounding at this bar (see recordHit). Converges to followers through the
         // heartbeat fullSync (the per-note op carries no sequence index).
-        if let target = recordTargetSequence(wrapToNextBar: step == 0 && when0to1 > 0.5) {
+        if let target = recordTargetSequence(track: "vox", wrapToNextBar: step == 0 && when0to1 > 0.5) {
             checkpoint("melody", coalesce: false)
             let (st, dur) = Self.boundedNote(step: step, len: rollLen, barSteps: barSteps)
             sequences[target].melody.removeAll { $0.step < st + dur && $0.step + $0.dur > st && $0.pitch == slot.midi }
@@ -1001,7 +1004,7 @@ final class Project: ObservableObject {
         guard var cs = clips[track], let c = cs.first(where: { $0.id == id }) else { return }
         checkpoint("clipdup", coalesce: false)
         let start = min(songBars - c.l, c.s + c.l)
-        cs.append(Clip(s: max(0, start), l: c.l, color: c.color, muted: c.muted))
+        cs.append(Clip(s: max(0, start), l: c.l, color: c.color, muted: c.muted, seq: c.seq))
         clips[track] = cs
     }
     func deleteClip(track: String, id: UUID) {
@@ -1040,7 +1043,7 @@ final class Project: ObservableObject {
     private func applyArrangeMap(_ f: (Int) -> Int) {
         for tk in Array(clips.keys) {   // snapshot keys — don't mutate the dict while enumerating it
             clips[tk] = (clips[tk] ?? []).compactMap { c in
-                remapBars(c.s, c.l, f).map { Clip(s: $0.0, l: $0.1, color: c.color, muted: c.muted) }
+                remapBars(c.s, c.l, f).map { Clip(s: $0.0, l: $0.1, color: c.color, muted: c.muted, seq: c.seq) }
             }
         }
         arrangement = arrangement.compactMap { a in
@@ -1068,7 +1071,7 @@ final class Project: ObservableObject {
         for (tk, cs) in clips {
             for c in cs {
                 let s = max(c.s, b0), e = min(c.s + c.l, b0 + L)
-                if e > s { clipCopies[tk, default: []].append(Clip(s: s + L, l: e - s, color: c.color, muted: c.muted)) }
+                if e > s { clipCopies[tk, default: []].append(Clip(s: s + L, l: e - s, color: c.color, muted: c.muted, seq: c.seq)) }
             }
         }
         var arrCopies: [ArrItem] = []
@@ -1078,7 +1081,7 @@ final class Project: ObservableObject {
         }
         applyArrangeMap { $0 < b0 + L ? $0 : $0 + L }   // open the gap, then drop the copies in
         for (tk, cs) in clipCopies {
-            clips[tk, default: []].append(contentsOf: cs.compactMap { c in c.s >= songBars ? nil : Clip(s: c.s, l: min(c.l, songBars - c.s), color: c.color, muted: c.muted) })
+            clips[tk, default: []].append(contentsOf: cs.compactMap { c in c.s >= songBars ? nil : Clip(s: c.s, l: min(c.l, songBars - c.s), color: c.color, muted: c.muted, seq: c.seq) })
         }
         arrangement.append(contentsOf: arrCopies.compactMap { $0.start >= songBars ? nil : ArrItem(id: $0.id, section: $0.section, start: $0.start, len: min($0.len, songBars - $0.start), seq: $0.seq) })
     }

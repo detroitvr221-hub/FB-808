@@ -80,12 +80,19 @@ extension Project {
 
         // Content the .mid emits for a track. A baked-to-audio ("Freeze to Audio") track has no captured
         // copy — only its rendering became a clip — so its notes still live in the linked source. (#15)
+        // These resolve a LINKED track's content for export, so they must honour the same clip pattern
+        // pin playback does — otherwise a pinned track exports the section's pattern and the MIDI file
+        // disagrees with what the app plays (re-audit, gap E).
         func midiLanes(_ track: Track, atBar bar: Int) -> [String: [Double]]? {
-            if let link = track.source.link, track.isLinked || track.frozenToAudio { return resolvedLanes(link, atBar: bar) }
+            if let link = track.source.link, track.isLinked || track.frozenToAudio {
+                return resolvedLanes(link, atBar: bar, pinnedSeq: clipSeq(track: track.id, atBar: bar))
+            }
             return track.source.lanes
         }
         func midiNotes(_ track: Track, atBar bar: Int) -> [MelodyNote]? {
-            if let link = track.source.link, track.isLinked || track.frozenToAudio { return resolvedNotes(link, atBar: bar)?.notes }
+            if let link = track.source.link, track.isLinked || track.frozenToAudio {
+                return resolvedNotes(link, atBar: bar, pinnedSeq: clipSeq(track: track.id, atBar: bar))?.notes
+            }
             return track.source.notes
         }
 

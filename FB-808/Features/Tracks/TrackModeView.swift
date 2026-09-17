@@ -701,6 +701,17 @@ struct TrackModeView: View {
         .frame(width: max(barPx, w - 1), height: 50)
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .opacity(c.muted ? 0.4 : 1)
+        .overlay(alignment: .topTrailing) {
+            // A pinned clip has to LOOK pinned — otherwise the pattern it plays is state you can only
+            // discover by opening each clip in turn (re-audit, gap C).
+            if let pin = c.seq {
+                Text(seqName(pin)).font(FDFont.mono(9, .bold)).foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Capsule().fill(.black.opacity(0.45)))
+                    .padding(.top, 3).padding(.trailing, 22)   // clear of the resize handle
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay(alignment: .trailing) {
             // drag the right edge to change the clip's length
             Color.white.opacity(0.001).frame(width: 20)
@@ -728,7 +739,7 @@ struct TrackModeView: View {
         .onTapGesture { editClip = c.id }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(t.name) clip"))
-        .accessibilityValue(Text("bar \(c.s + 1), \(c.l) bar\(c.l == 1 ? "" : "s")\(c.muted ? ", muted" : "")"))
+        .accessibilityValue(Text("bar \(c.s + 1), \(c.l) bar\(c.l == 1 ? "" : "s")\(c.seq.map { ", pattern \(seqName($0))" } ?? "")\(c.muted ? ", muted" : "")"))
         .accessibilityHint(Text("Adjust to move. Double-tap to edit."))
         .accessibilityAddTraits(.isButton)
         .accessibilityAdjustableAction { dir in

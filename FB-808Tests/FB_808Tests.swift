@@ -1892,4 +1892,60 @@ struct FB_808Tests {
         """.utf8)
         #expect(try dec.decode(Clip.self, from: legacy).seq == nil)
     }
+
+
+    // MARK: - Re-audit gaps (the pin must survive every edit that rebuilds a clip)
+
+    /// Duplicate, the range ops and the song-length trim all REBUILD clips rather than mutating them,
+    /// so each one had to be taught to carry `seq` — otherwise arranging silently dropped the pin.
+    @Test @MainActor func clipPatternSurvivesDuplicateAndTrim() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        let c = Clip(s: 0, l: 2, color: .red, seq: 1)
+        p.clips["drums"] = [c]
+        p.duplicateClip(track: "drums", id: c.id)
+        #expect(p.clips["drums"]?.count == 2)
+        #expect(p.clips["drums"]?.allSatisfy { $0.seq == 1 } == true)   // the copy kept the pin
+        // Shrinking the song trims clips by rebuilding them; the pin must ride along.
+        p.clips["drums"] = [Clip(s: 0, l: 16, color: .red, seq: 2)]
+        p.setSongBars(4)
+        #expect(p.clips["drums"]?.first?.seq == 2)
+    }
+
+    /// Gap B: a hit recorded over a pinned clip must land in the pattern that track is PLAYING, not in
+    /// the section's. Otherwise you play along to B, record, and the hit disappears into A.
+    @Test @MainActor func recordingTargetsThePatternTheClipIsPlaying() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        p.activeSeq = 0
+        p.arrangement = [ArrItem(id: "s0", section: "verse", start: 0, len: 4, seq: 0)]
+        p.bar = 0
+        // No pin → the section's pattern is the active buffer, so there is no separate target.
+        p.clips["drums"] = [Clip(s: 0, l: 4, color: .red)]
+        #expect(p.recordTargetSequence(track: "drums") == nil)
+        // Pinned to B → hits must be written into B.
+        p.clips["drums"] = [Clip(s: 0, l: 4, color: .red, seq: 1)]
+        #expect(p.recordTargetSequence(track: "drums") == 1)
+        // A track without a pin at the same bar still follows the section.
+        #expect(p.recordTargetSequence(track: "bass") == nil)
+    }
+
+    /// Recording actually writes where `recordTargetSequence` says, for a real pad hit.
+    @Test @MainActor func aRecordedHitLandsInThePinnedPattern() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = true
+        p.activeSeq = 0
+        p.quantize = "1/16"
+        p.arrangement = [ArrItem(id: "s0", section: "verse", start: 0, len: 4, seq: 0)]
+        p.bar = 0
+        // Use a pad both seeded patterns leave empty, and clear it in both, so the assertion can only
+        // pass because the hit was routed — not because the seed already had something on step 0.
+        let pad = "cowbell"
+        p.clips[Kit.trackOf(pad), default: []] = [Clip(s: 0, l: 4, color: .red, seq: 1)]
+        p.lanes[pad] = Kit.emptyLane()
+        p.sequences[1].lanes[pad] = Kit.emptyLane()
+        p.recordHit(pad, 0.0, vel: 1)
+        #expect(p.sequences[1].lanes[pad]?[0] == 1)   // landed in the pinned pattern B
+        #expect(p.lanes[pad]?[0] == 0)                // and NOT in the active edit buffer (A)
+    }
 }

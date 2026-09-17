@@ -118,7 +118,7 @@ extension Project {
             n.append(MelodyNote(step: s, pitch: pitch, dur: dur, vel: s % 4 == 0 ? 0.9 : 0.8))
         }
         // Song Mode: the keyboard records into the sequence SOUNDING at this bar, like the pads (round 2, transport-1).
-        if let target = recordTargetSequence(wrapToNextBar: wrapped) {
+        if let target = recordTargetSequence(track: "vox", wrapToNextBar: wrapped) {
             if activePart == "lead" { write(&sequences[target].melody); return }
             if let i = sequences[target].parts.firstIndex(where: { $0.id == activePart }) { write(&sequences[target].parts[i].notes); return }
             // The active part does not exist in that sequence yet: carry it over (empty) so the note has a

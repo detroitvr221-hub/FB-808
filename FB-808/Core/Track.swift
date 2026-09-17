@@ -348,12 +348,14 @@ extension Project {
         // intact rather than baking an empty, unrecoverable "frozen" zombie (#review).
         switch tracks[i].type {
         case .drumPattern:
-            guard let lanesCopy = resolvedLanes(link, atBar: 0) else { return false }
+            // Capture what the track PLAYS at bar 0, pin included — otherwise "detach a copy" of a
+            // clip pinned to B would quietly bake the section's pattern instead (re-audit, gap F).
+            guard let lanesCopy = resolvedLanes(link, atBar: 0, pinnedSeq: clipSeq(track: id, atBar: 0)) else { return false }
             checkpoint("freezeLink:\(id)", coalesce: false)
             tracks[i].source.lanes = lanesCopy
             tracks[i].source.notes = nil; tracks[i].source.patch = nil
         case .synthPart:
-            guard let (notes, patch) = resolvedNotes(link, atBar: 0) else { return false }
+            guard let (notes, patch) = resolvedNotes(link, atBar: 0, pinnedSeq: clipSeq(track: id, atBar: 0)) else { return false }
             checkpoint("freezeLink:\(id)", coalesce: false)
             tracks[i].source.notes = notes; tracks[i].source.patch = patch
             tracks[i].source.lanes = nil

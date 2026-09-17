@@ -113,7 +113,9 @@ final class Transport: ObservableObject {
         // synthesis. Suppressing them here is what keeps a sent/promoted/frozen pattern playing ONCE. (#15)
         for track in p.tracks where track.playsAdditively || track.frozenToAudio {
             let owned = p.trackOwnership(track)
-            if owned.allLanes { cachedOwnedRows.formUnion(curLanes.keys) } else { cachedOwnedRows.formUnion(owned.rows) }
+            // Union over the FOLDED lanes: a clip pin can introduce a pad the arranged pattern does not
+            // have, and an "owns every lane" track must suppress that one too or it would play twice.
+            if owned.allLanes { cachedOwnedRows.formUnion(cachedLegacyLanes.keys) } else { cachedOwnedRows.formUnion(owned.rows) }
             cachedOwnedLeadMelody = cachedOwnedLeadMelody || owned.leadMelody
             cachedOwnedPartIDs.formUnion(owned.partIDs)
         }
