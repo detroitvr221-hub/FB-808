@@ -31,7 +31,10 @@ struct SampleModeView: View {
     @State private var auditionTask: Task<Void, Never>?
     @State private var looping = false
     @State private var confirm: String?
+    @State private var importTask: Task<Void, Never>?
+    @State private var importGeneration = UUID()
     @State private var importing = false
+    @State private var pendingAudioURL: URL?
     @State private var sf2Importing = false
     @State private var stretchRatio = 1.0
     @State private var specFreeze = 0.0
@@ -76,6 +79,11 @@ struct SampleModeView: View {
 
     private var sample: SampleState? { project.sample }
     private var has: Bool { sample != nil }
+    private var ownsMic: Bool { engine.micOwner == .sampler(project.projectID) }
+    private var micLabel: String {
+        if ownsMic { return engine.isMicRecording ? "Stop" : "Cancel Mic" }
+        return engine.micOwner == nil ? "Record Mic" : "Mic in use by track"
+    }
 
     /// Identity of the underlying AUDIO (not the trim window) — rebuild the GPU buffer only when this changes,
     /// so dragging the trim handles never re-uploads the whole sample to the GPU.
@@ -120,18 +128,29 @@ struct SampleModeView: View {
                 side
             }
         }
-        .onDisappear { stopAudition(); cancelStemWork() }
-        .onChange(of: project.projectID) { _, _ in cancelStemWork() }
-        .onChange(of: project.bank) { _, _ in cancelStemWork() }
+        .onDisappear { stopAudition(); cancelStemWork(); cancelImport(); engine.finishMicCapture(owner: .sampler(project.projectID)) }
+        .onChange(of: project.projectID) { _, _ in cancelStemWork(); cancelImport() }
+        .onChange(of: project.bank) { _, _ in cancelStemWork(); cancelImport() }
         // MicCapture silently stops appending at the cap — auto-stop instead so the user isn't
         // "recording" dead air. inputLevel publishes ~5 Hz while recording, so this checks often enough.
         .onReceive(engine.$inputLevel) { _ in
-            guard engine.isMicRecording, engine.now() - engine.micStartTime >= AudioDefaults.maxSampleSeconds else { return }
+            guard engine.micOwner == .sampler(project.projectID), engine.isMicRecording, engine.now() - engine.micStartTime >= AudioDefaults.maxSampleSeconds else { return }
             toggleMic()
             flash("Hit the \(Int(AudioDefaults.maxSampleSeconds))s limit — recording saved")
         }
         .overlay(alignment: .bottom) { if let c = confirm { toast(c) } }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { handleImport($0) }
+        .overlay(alignment: .top) {
+            if importTask != nil {
+                HStack { ProgressView(); Text("Importing…"); Button("Cancel") { cancelImport() } }
+                    .padding().background(.regularMaterial, in: Capsule())
+            }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result { pendingAudioURL = urls.first }
+        }
+        .modifier(AudioImportChoice(url: $pendingAudioURL, maxSeconds: 60, allowsStereo: false) { url, stereo in
+            handleImport(.success([url]))
+        })
         .fileImporter(isPresented: $sf2Importing, allowedContentTypes: [UTType(filenameExtension: "sf2") ?? .data], allowsMultipleSelection: false) { handleSF2($0) }
         .confirmationDialog("Replace pad sounds?", isPresented: Binding(get: { pendingSplit != nil }, set: { if !$0 { pendingSplit = nil } }), titleVisibility: .visible) {
             let kind = pendingSplit
@@ -464,7 +483,7 @@ struct SampleModeView: View {
                 trimDragOrig[side] = orig
                 project.sample = next
             }
-            .onEnded { _ in trimDragOrig[side] = nil; snapTrim(side) })
+            .onEnded { _ in trimDragOrig[side] = nil; snapTrim(side); refitFades() })   // fades follow the new trim
         .accessibilityLabel(Text(side == "l" ? "Trim start" : "Trim end"))
         .accessibilityValue(Text("\(Int((side == "l" ? (project.sample?.trim[0] ?? 0) : (project.sample?.trim[1] ?? 1)) * 100)) percent"))
         .accessibilityHint(Text("Drag to adjust the sample trim region"))
@@ -475,7 +494,15 @@ struct SampleModeView: View {
             if side == "l" { s.trim[0] = max(0, min(s.trim[0] + step, s.trim[1] - 0.02)) }
             else { s.trim[1] = min(1, max(s.trim[1] + step, s.trim[0] + 0.02)) }
             project.sample = s
+            refitFades()
         }
+    }
+
+    /// Fades are anchored to the trim (finding 5), so a trim that moved must rebuild them — but only when a
+    /// fade is actually on, and only on commit, never per drag frame (it re-renders the whole buffer).
+    private func refitFades() {
+        guard let s = project.sample, (s.tools["fadeIn"] ?? false) || (s.tools["fadeOut"] ?? false) else { return }
+        refreshEdits()
     }
 
     private var sourceRow: some View {
@@ -484,7 +511,7 @@ struct SampleModeView: View {
                 Button { resampleMix() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 16)).foregroundStyle(.white)
-                        Text("Resample Mix").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
+                        Text(engine.hasHostedEffects ? "Resample · without AU effects" : "Resample Mix").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)
                     }
                     .padding(.horizontal, 14).frame(height: 52)
                     .background(RoundedRectangle(cornerRadius: 12).fill(settings.accent.ctaGradient()))
@@ -500,15 +527,15 @@ struct SampleModeView: View {
                 }.buttonStyle(.plain)
                 Button { toggleMic() } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: engine.isMicRecording ? "stop.fill" : "mic.fill").font(.system(size: 16))
-                            .foregroundStyle(engine.isMicRecording ? settings.theme.miss : settings.accent)
-                        Text(engine.isMicRecording ? "Stop" : "Record Mic").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
+                        Image(systemName: ownsMic ? "stop.fill" : "mic.fill").font(.system(size: 16))
+                            .foregroundStyle(ownsMic ? settings.theme.miss : settings.accent)
+                        Text(micLabel).font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
                     }
                     .padding(.horizontal, 14).frame(height: 52)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(engine.isMicRecording ? settings.theme.miss.opacity(0.18) : settings.panel2))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(engine.isMicRecording ? settings.theme.miss.opacity(0.6) : settings.accent.opacity(0.5), lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 12).fill(ownsMic ? settings.theme.miss.opacity(0.18) : settings.panel2))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(ownsMic ? settings.theme.miss.opacity(0.6) : settings.accent.opacity(0.5), lineWidth: 1))
                 }.buttonStyle(.plain)
-                if engine.isMicRecording { recordingMeter }   // elapsed time + live input level next to Stop
+                if ownsMic && engine.isMicRecording { recordingMeter }
                 // Input device picker right where you record (native iOS 26 picker) — built-in / USB-C
                 // interface (Focusrite) / Bluetooth. Shows the active input; the system remembers it.
                 AudioInputPicker(prepare: { engine.prepareInputSelection() },
@@ -1073,72 +1100,71 @@ struct SampleModeView: View {
             project.sliceBank = nil
         }
     }
-    /// Record from the microphone into the sampler (toggle).
+    /// The sampler only controls its own take. Shared Stop dispatches to the same owner.
     private func toggleMic() {
-        if engine.isMicRecording {
-            // Undoable: capture the prior sample's audio BEFORE stopMicRecording loads the take over it.
-            var recordedDur: Double? = nil
-            project.mutateSample("mic") {
-                if let r = engine.stopMicRecording() {
-                    project.sample = SampleState(name: "Mic Recording", kind: "mic", dur: r.dur, wave: r.wave, transients: r.transients)
-                    project.sliceBank = nil
-                    recordedDur = r.dur
-                }
-            }
-            flash(recordedDur != nil ? "Recorded \(String(format: "%.1f", recordedDur!))s" : "Nothing recorded")
+        let owner = AudioEngine.MicOwner.sampler(project.projectID)
+        if engine.micOwner == owner {
+            let wasRecording = engine.isMicRecording
+            engine.finishMicCapture(owner: owner)
+            flash(wasRecording ? "Recording saved to the sampler" : "Mic request cancelled")
+        } else if engine.micOwner != nil {
+            flash("Finish the track recording before recording a sample")
         } else {
             stopAudition()
-            engine.startMicRecording { ok in
+            project.startSamplerRecording { ok in
                 flash(ok ? "Recording… tap Stop when done" : "Microphone unavailable or denied")
             }
         }
     }
 
-    /// Import a user audio file (Files / iCloud) into the sampler.
+    private func cancelImport() {
+        importTask?.cancel(); importTask = nil; importGeneration = UUID()
+    }
+
+    /// Decode off the UI thread, then commit only to the destination that requested this import.
     private func handleImport(_ result: Result<[URL], Error>) {
         stopAudition()
         guard case .success(let urls) = result, let url = urls.first else { return }
-        engine.start()
+        cancelImport()
+        let generation = importGeneration, destination = project.operationDestination()
         let name = url.deletingPathExtension().lastPathComponent
-        Task {   // off-main decode so the UI doesn't hitch on a long file (Phase 2)
-            guard let data = await engine.decodeAudioFileAsync(url: url, maxSeconds: AudioDefaults.maxSampleSeconds),
-                  !data.isEmpty else { flash("Couldn't read that audio file"); return }
-            // Checkpoint only on decode SUCCESS (C7): mutateSample captures the prior buffer right before
-            // importBuffer replaces it, so a failed decode leaves no junk undo step and an edit made
-            // during a long decode can't interleave between capture and apply.
-            var dur = 0.0
-            project.mutateSample("import") {
-                let r = engine.importBuffer(data)
-                project.sample = SampleState(name: name.isEmpty ? "Imported" : name, kind: "import",
-                                             dur: r.dur, wave: r.wave, transients: r.transients)
-                project.sliceBank = nil
-                dur = r.dur
-            }
-            // Surface truncation instead of silently keeping only the first N seconds (#SAMPLING-03).
-            if dur >= AudioDefaults.maxSampleSeconds - 0.25 {
-                flash("Imported \(name) · trimmed to \(Int(AudioDefaults.maxSampleSeconds))s")
-            } else {
-                flash("Imported \(name) · \(String(format: "%.1f", dur))s")
-            }
+        importTask = Task {
+            let data = await engine.decodeAudioFileAsync(url: url, maxSeconds: AudioDefaults.maxSampleSeconds)
+            guard !Task.isCancelled, generation == importGeneration else { return }
+            defer { importTask = nil }
+            guard let data, !data.isEmpty else { flash("Couldn't read that audio file"); return }
+            guard project.commitSamplerImport(destination: destination, data: data, name: name) else { return }
+            let dur = Double(data.count) / engine.sampleRate
+            flash(dur >= AudioDefaults.maxSampleSeconds - 0.25
+                  ? "Imported \(name) · first \(Int(AudioDefaults.maxSampleSeconds))s · mono"
+                  : "Imported \(name) · \(String(format: "%.1f", dur))s · mono")
         }
     }
 
     /// Load a SoundFont (.sf2) → a multisample instrument on the Synth keyboard.
     private func handleSF2(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        engine.start()
-        Task {
-            let data: Data?
-            let scoped = url.startAccessingSecurityScopedResource()
-            data = try? Data(contentsOf: url)
-            if scoped { url.stopAccessingSecurityScopedResource() }
-            guard let data else { flash("Couldn't read that .sf2"); return }
-            if let name = project.loadSoundFont(data) {
-                flash("Loaded \(name) — play it on the Synth keyboard")
-                openTab("synth")   // land where the instrument actually went, like toSynthKeys (E5)
-            } else {
-                flash("Couldn't parse that SoundFont")
+        cancelImport()
+        let generation = importGeneration, destination = project.operationDestination()
+        let part = project.activePart
+        importTask = Task {
+            let loaded: (Data, SFInstrument)? = await Task.detached(priority: .userInitiated) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                guard let data = try? Data(contentsOf: url), let instrument = SoundFont.load(data) else { return nil }
+                return (data, instrument)
+            }.value
+            guard !Task.isCancelled, generation == importGeneration else { return }
+            defer { importTask = nil }
+            guard destination.matches(project), part == project.activePart else {
+                flash("The instrument destination changed. Import the SoundFont again.")
+                return
             }
+            guard let (data, instrument) = loaded else { flash("Couldn't read that SoundFont"); return }
+            engine.start()
+            let name = project.installSoundFont(data, instrument: instrument)
+            flash("Loaded \(name) — play it on the Synth keyboard")
+            openTab("synth")
         }
     }
 
@@ -1160,7 +1186,8 @@ struct SampleModeView: View {
     private func refreshEdits() {
         guard var s = project.sample else { return }
         s.wave = engine.applySampleEdits(reverse: s.tools["reverse"] ?? false, normalize: s.tools["normalize"] ?? false,
-                                         fadeIn: s.tools["fadeIn"] ?? false, fadeOut: s.tools["fadeOut"] ?? false, gain: s.gain)
+                                         fadeIn: s.tools["fadeIn"] ?? false, fadeOut: s.tools["fadeOut"] ?? false, gain: s.gain,
+                                         trim: s.trim)
         project.sample = s
     }
     private func toggleTool(_ k: String) {
@@ -1199,7 +1226,8 @@ struct SampleModeView: View {
                 if s.trim[1] < 0.999 { s.trim[1] = Double(Project.nearestZeroCross(buf, near: Int(s.trim[1] * n), within: zc)) / n }
             }
             let r = engine.cropSample(trim: s.trim)
-            s.dur = r.dur; s.wave = r.wave; s.trim = [0, 1]; s.slices = []; s.count = 0
+            let (c0, c1) = (s.trim[0], s.trim[1])   // bound first: reading `s` while it is passed inout is an exclusivity violation
+            s.dur = r.dur; s.wave = r.wave; reshape(&s, .crop(from: c0, to: c1))
             s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
             project.sample = s
             flash("Cropped to \(String(format: "%.2f", r.dur))s")
@@ -1221,7 +1249,7 @@ struct SampleModeView: View {
                 project.mutateSample("stretch") {
                     guard var s = project.sample else { return }
                     let r = engine.importBuffer(stretched)
-                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; reshape(&s, .uniformWarp)
                     s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
                     project.sample = s
                     flash("Stretched to \(String(format: "%.2f", r.dur))s")
@@ -1250,7 +1278,7 @@ struct SampleModeView: View {
                 project.mutateSample(name) {
                     guard var s = project.sample else { return }
                     let r = engine.importBuffer(out)
-                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; reshape(&s, .timeAligned(inCount: src.data.count, outCount: out.count))
                     s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
                     project.sample = s
                     flash("\(name.capitalized) applied")
@@ -1275,7 +1303,7 @@ struct SampleModeView: View {
                 project.mutateSample("convReverb") {
                     guard var s = project.sample else { return }
                     let r = engine.importBuffer(out)
-                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; reshape(&s, .timeAligned(inCount: src.data.count, outCount: out.count))
                     s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
                     project.sample = s
                     flash("\(kind.capitalized) reverb applied")
@@ -1299,7 +1327,7 @@ struct SampleModeView: View {
                 project.mutateSample("pitch") {
                     guard var s = project.sample else { return }
                     let r = engine.importBuffer(out)
-                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; reshape(&s, .timeAligned(inCount: src.data.count, outCount: out.count))
                     s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
                     project.sample = s
                     flash("Pitched \(semis >= 0 ? "+" : "")\(Int(semis)) st")
@@ -1324,7 +1352,7 @@ struct SampleModeView: View {
                 project.mutateSample("spectral") {
                     guard var s = project.sample else { return }
                     let r = engine.importBuffer(out)
-                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; s.trim = [0, 1]; s.slices = []; s.count = 0
+                    s.dur = r.dur; s.wave = r.wave; s.transients = r.transients; reshape(&s, .timeAligned(inCount: src.data.count, outCount: out.count))
                     s.tools = ["normalize": false, "reverse": false, "fadeIn": false, "fadeOut": false]; s.gain = 1
                     project.sample = s
                     flash("Spectral applied")
@@ -1485,18 +1513,21 @@ struct SampleModeView: View {
     private func detectTransients() {
         guard var s = project.sample else { return }
         project.checkpoint("chop", coalesce: false)
-        // Threshold (MPC "Threshold" chop): higher → wider min spacing → fewer slices.
+        // Threshold (MPC "Threshold" chop): higher → wider min spacing → fewer slices. Only the trimmed
+        // audio is chopped, and the grid holds 16 — so say when the cap bit instead of hiding slices 17+.
         let minGap = 0.01 + chopThreshold * 0.18
-        var kept: [Double] = [0]
-        for t in s.transients where t > 0.01 {
-            if t - (kept.last ?? -1) >= minGap { kept.append(t) }
-        }
-        s.slices = kept; s.count = 0; project.sample = s
+        let r = Project.thresholdSlices(transients: s.transients, minGap: minGap, trim: s.trim,
+                                        mirrored: s.tools["reverse"] ?? false)
+        s.slices = r.slices; s.count = 0; project.sample = s
         selectedSlice = nil
+        if r.found > Project.maxSlices {
+            flash("Kept the first \(Project.maxSlices) of \(r.found) slices — raise Threshold for wider ones")
+        }
     }
     /// Split the selected slice into two at its midpoint (MPC SHIFT+B2 Split).
     private func splitSlice() {
         guard var s = project.sample, let i = selectedSlice, i < s.slices.count else { return }
+        guard s.slices.count < Project.maxSlices else { flash("\(Project.maxSlices) slices is the most the pads hold — merge one first"); return }
         project.checkpoint("sliceSplit", coalesce: false)
         let a = s.slices[i], b = i + 1 < s.slices.count ? s.slices[i + 1] : 1
         s.slices.insert((a + b) / 2, at: i + 1); s.count = 0; project.sample = s
@@ -1511,9 +1542,16 @@ struct SampleModeView: View {
     /// A slice's window on the CURRENT (edited) buffer. A baked Reverse tool flips the audio while
     /// slices/transients were detected on the forward buffer — mirror the window so audition, extract
     /// and assign all cut where the transient actually is (F3). (Reverse slice ORDER is separate.)
-    private func sliceWindow(_ s: SampleState, _ i: Int) -> (a: Double, b: Double) {
-        let a = s.slices[i], b = i + 1 < s.slices.count ? s.slices[i + 1] : 1
-        return (s.tools["reverse"] ?? false) ? (1 - b, 1 - a) : (a, b)
+    /// Carry slices + trim across a destructive effect instead of throwing them away (finding 6). Must run
+    /// BEFORE `tools` is reset, because a baked Reverse flips where the slices land.
+    private func reshape(_ s: inout SampleState, _ shape: Project.SampleReshape) {
+        let r = Project.reshapedEdits(slices: s.slices, trim: s.trim, bakedReverse: s.tools["reverse"] ?? false, shape)
+        s.slices = r.slices; s.trim = r.trim; s.count = 0
+        if selectedSlice.map({ $0 >= r.slices.count }) ?? false { selectedSlice = nil }
+    }
+    private func sliceWindow(_ s: SampleState, _ i: Int) -> (a: Double, b: Double)? {
+        let w = Project.sliceWindows(slices: s.slices, trim: s.trim, mirrored: s.tools["reverse"] ?? false)
+        return w.indices.contains(i) ? w[i] : nil
     }
 
     /// Extract the selected slice's audio as a new one-shot on the matching pad (MPC SHIFT+B1 Extract).
@@ -1521,26 +1559,28 @@ struct SampleModeView: View {
         guard let s = project.sample, let i = selectedSlice, i < s.slices.count else { return }
         let buf = engine.currentSampleData()   // the EDITED buffer, so extracted chops match what was auditioned (#SAMPLING-02)
         guard !buf.isEmpty else { flash("No audio to extract"); return }
-        let (a, b) = sliceWindow(s, i)
+        guard let (a, b) = sliceWindow(s, i) else { flash("Slice \(i + 1) is outside the trim"); return }
         var lo = max(0, min(buf.count, Int(a * Double(buf.count))))
         var hi = max(lo, min(buf.count, Int(b * Double(buf.count))))
         let zc = Int(0.005 * engine.sampleRate)   // click-free chop edges (SAMPLING-04)
         if lo > 0 { lo = Project.nearestZeroCross(buf, near: lo, within: zc) }
         if hi < buf.count { hi = Project.nearestZeroCross(buf, near: hi, within: zc) }
         guard hi > lo else { return }
-        let padID = Kit.pads[min(i, Kit.pads.count - 1)].id
-        project.setPadSample(padID, data: Array(buf[lo..<hi]), name: "Chop \(i + 1)", bank: "C")   // chops live on Bank C (F0)
-        flash("Extracted slice \(i + 1) → pad \(min(i, Kit.pads.count - 1) + 1) on Bank C")
+        let pads = Kit.banks["C"]?.pads ?? Kit.pads
+        guard pads.indices.contains(i) else { return }
+        let chop = Project.bakeHarmony(Array(buf[lo..<hi]), intervals: s.harmonize ? harmonyOffsets() : [])
+        project.setPadSample(pads[i].id, data: chop, name: "Chop \(i + 1)", bank: "C", pitch: effPitch(s))
+        flash("Extracted slice \(i + 1) → pad \(i + 1) on Bank C")
     }
     private func equalSlices(_ n: Int) {
         guard var s = project.sample else { return }
         project.checkpoint("slices", coalesce: false)
-        s.slices = (0..<n).map { Double($0) / Double(n) }; s.count = n; project.sample = s
+        s.slices = Project.equalSlices(n, trim: s.trim, mirrored: s.tools["reverse"] ?? false); s.count = n; project.sample = s
     }
     private func playSlice(_ idx: Int) {
         guard let s = sample else { return }
         engine.start()
-        let (a, b) = sliceWindow(s, idx)
+        guard let (a, b) = sliceWindow(s, idx) else { return }
         let off = a * s.dur, dur = (b - a) * s.dur
         engine.playBuffer(offset: off, dur: dur, vel: 0.95, pitch: effPitch(s))
         if s.harmonize { for h in harmonyOffsets() { engine.playBuffer(offset: off, dur: dur, vel: 0.55, pitch: effPitch(s) + Double(h)) } }
@@ -1550,11 +1590,14 @@ struct SampleModeView: View {
         // Extract each slice's audio onto its pad as a real one-shot — so the chops are playable
         // in the sequencer and bounce into export (not the old bank-C-only sliceBank dead-end).
         // Assignment is Bank-C-scoped (F0): the Bank A/B drum kit keeps its sounds.
-        let n = project.assignSlicesToPads(buffer: engine.currentSampleData(), slices: s.slices,
-                                           reverse: s.reverseSlices, mirror: s.tools["reverse"] ?? false)   // EDITED buffer → chops match audition + export (#SAMPLING-02)
+        let n = project.assignSlicesToPads(buffer: engine.currentSampleData(), slices: s.slices, trim: s.trim,
+                                           reverse: s.reverseSlices, mirror: s.tools["reverse"] ?? false,
+                                           pitch: effPitch(s), harmony: s.harmonize ? harmonyOffsets() : [])   // EDITED buffer → chops match audition + export (#SAMPLING-02)
         guard n > 0 else { flash("No audio to slice"); return }
         project.setBank("C")
-        flash("\(n) chops on Bank C — tap to play, sequence them & they’ll export")
+        let dropped = s.slices.count - min(s.slices.count, Project.maxSlices)
+        flash(dropped > 0 ? "\(n) chops on Bank C — \(dropped) past the 16-pad limit left off"
+                          : "\(n) chops on Bank C — tap to play, sequence them & they’ll export")
         openTab("pads")
     }
 }

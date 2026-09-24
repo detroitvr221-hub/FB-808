@@ -25,7 +25,10 @@ struct PadInspectorView: View {
 
     @State private var previewFlash = false
     @State private var showImporter = false
+    @State private var pendingAudioURL: URL?
     @State private var importError: String?
+    @State private var importTask: Task<Void, Never>?
+    @State private var importGeneration = UUID()
 
     // MARK: colour swatches (finding 39)
 
@@ -90,7 +93,22 @@ struct PadInspectorView: View {
         .background(RoundedRectangle(cornerRadius: 22).fill(settings.panel))
         .overlay(RoundedRectangle(cornerRadius: 22).stroke(color.opacity(0.4), lineWidth: 1))
         .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false, onCompletion: importSample)
+        .onDisappear { cancelImport() }
+        .onChange(of: project.projectID) { _, _ in cancelImport() }
+        .onChange(of: project.bank) { _, _ in cancelImport() }
+        .onChange(of: pad.id) { _, _ in cancelImport() }
+        .overlay(alignment: .top) {
+            if importTask != nil {
+                HStack { ProgressView(); Text("Importing…"); Button("Cancel") { cancelImport() } }
+                    .padding().background(.regularMaterial, in: Capsule())
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result { pendingAudioURL = urls.first }
+        }
+        .modifier(AudioImportChoice(url: $pendingAudioURL, maxSeconds: 12, allowsStereo: false) { url, stereo in
+            importSample(.success([url]))
+        })
     }
 
     private var header: some View {
@@ -291,14 +309,22 @@ struct PadInspectorView: View {
         }
     }
 
+    private func cancelImport() {
+        importTask?.cancel(); importTask = nil; importGeneration = UUID()
+    }
     private func importSample(_ result: Result<[URL], Error>) {
         importError = nil
         guard case .success(let urls) = result, let url = urls.first else { return }
+        cancelImport()
         let padID = pad.id, name = url.deletingPathExtension().lastPathComponent
-        Task {   // decode off the main thread so a big file never hitches the UI (Phase 2)
+        let generation = importGeneration, destination = project.operationDestination()
+        importTask = Task {
             let data = await engine.decodeAudioFileAsync(url: url, maxSeconds: 12)
+            guard !Task.isCancelled, generation == importGeneration else { return }
+            defer { importTask = nil }
             guard let data, !data.isEmpty else { importError = "Couldn't read that file."; return }
-            project.setPadSample(padID, data: data, name: name, bank: project.bank)   // scoped to the bank it was imported in (F0)
+            guard project.commitPadImport(destination: destination, padID: padID, data: data, name: name) else { return }
+            if Double(data.count) / engine.sampleRate >= 11.75 { importError = "Imported the first 12 seconds as mono." }
         }
     }
 

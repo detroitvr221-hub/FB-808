@@ -137,6 +137,7 @@ struct SavedProject: Identifiable, Hashable, Sendable {
 @MainActor
 final class ProjectStore: ObservableObject {
     @Published private(set) var items: [SavedProject] = []
+    @Published private(set) var recoveryItems: [SavedProject] = []
     /// Assets that blocked the most recent `save` (empty after a successful save) — see save() (#persist-3).
     @Published private(set) var lastSaveMissing: [String] = []
     @Published private(set) var lastRepairs: [String] = []   // what the last repaired() load cleaned up (health check)
@@ -155,6 +156,7 @@ final class ProjectStore: ObservableObject {
     nonisolated struct ProjectHeader: Decodable, Sendable { var id: String?; var name: String? }
     private struct HeaderCacheEntry: Sendable { var mtime: Date; var size: Int; var id: String?; var name: String }
     private var headerCache: [String: HeaderCacheEntry] = [:]   // keyed by file path; reset per launch
+    private var recoveryDir: URL { dir.appendingPathComponent(".recoveries", isDirectory: true) }
     private var autosaveURL: URL { dir.appendingPathComponent("\(autosaveStem).\(ext)") }
 
     init(directory: URL? = nil, audioDirectory: URL? = nil, sampleDirectory: URL? = nil) {
@@ -340,10 +342,39 @@ final class ProjectStore: ObservableObject {
         do { try enc.encode(snap).write(to: url, options: .atomic); return true } catch { return false }
     }
     /// Pure read+decode, safe to call off the main actor.
-    nonisolated static func decodeSnapshot(_ url: URL) -> ProjectSnapshot? {
+    nonisolated static func decodeSnapshot(_ url: URL, preservingLegacy: Bool = false) -> ProjectSnapshot? {
         guard let d = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(ProjectSnapshot.self, from: d)
+        guard let snapshot = try? JSONDecoder().decode(ProjectSnapshot.self, from: d) else { return nil }
+        // Keep the exact old snapshot before any migration/save. The asset sweep includes these
+        // backups, so their samples remain recoverable even after subsequent edits to the new project.
+        if preservingLegacy && snapshot.version < 4 && url.deletingLastPathComponent().lastPathComponent != ".pad-v3-backups" {
+            let backupDir = url.deletingLastPathComponent().appendingPathComponent(".pad-v3-backups", isDirectory: true)
+            let fingerprint = SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined()
+            let backup = backupDir.appendingPathComponent(legacyBackupPrefix(url) + fingerprint + "." + url.pathExtension)
+            do {
+                try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+                if !FileManager.default.fileExists(atPath: backup.path) {
+                    try d.write(to: backup, options: .withoutOverwriting)
+                }
+            } catch { fdLog.error("Could not preserve pre-migration project: \(error.localizedDescription, privacy: .public)"); return nil }
+        }
+        return snapshot
     }
+    nonisolated private static func legacyBackupPrefix(_ url: URL) -> String {
+        SHA256.hash(data: Data(url.lastPathComponent.utf8)).map { String(format: "%02x", $0) }.joined() + "-"
+    }
+
+    /// Explicitly deleting a project/recovery slot also discards its migration backups, allowing its
+    /// unreferenced audio to be reclaimed. Ordinary saves keep the backups for recovery.
+    nonisolated private static func removeLegacyBackups(for url: URL) {
+        let dir = url.deletingLastPathComponent().appendingPathComponent(".pad-v3-backups", isDirectory: true)
+        let prefix = legacyBackupPrefix(url)
+        for file in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            where file.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
     /// Read ONLY the tiny {id,name} header — no full-snapshot decode. Safe off the main actor.
     nonisolated static func decodeHeader(_ url: URL) -> ProjectHeader? {
         guard let d = try? Data(contentsOf: url) else { return nil }
@@ -352,24 +383,23 @@ final class ProjectStore: ObservableObject {
 
     /// Read + decode OFF the main actor (no open hitch on large projects), then stamp the "last opened"
     /// keys back on the main actor.
-    func load(_ item: SavedProject) async -> ProjectSnapshot? {
+    func load(_ item: SavedProject, touchLastOpened: Bool = true) async -> ProjectSnapshot? {
         let url = item.url
-        guard let snap = await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url) }).value else { return nil }
-        lastProjectName = snap.name
-        lastProjectID = snap.id
+        guard let snap = await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url, preservingLegacy: true) }).value else { return nil }
+        if touchLastOpened { lastProjectName = snap.name; lastProjectID = snap.id }
         return snap
     }
 
     func loadByName(_ name: String) async -> ProjectSnapshot? {
         let url = fileURL(name)
-        return await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url) }).value
+        return await Task.detached(priority: .userInitiated, operation: { Self.decodeSnapshot(url, preservingLegacy: true) }).value
     }
 
     /// Load the saved project whose embedded stable id matches (#219). Skips un-migrated
     /// (nil-id) files so nil never matches nil. Uses the cached `items` list to pick the file.
-    func loadByID(_ id: String) async -> ProjectSnapshot? {
+    func loadByID(_ id: String, touchLastOpened: Bool = true) async -> ProjectSnapshot? {
         for it in items where it.projectID == id {
-            if let s = await load(it) { return s }
+            if let s = await load(it, touchLastOpened: touchLastOpened) { return s }
         }
         return nil
     }
@@ -379,10 +409,24 @@ final class ProjectStore: ObservableObject {
         // A recovery slot holding THIS beat's unsaved edits must die with it: leaving it offered the deleted
         // work back at the next launch ("This can't be undone" was a lie) and let Recover overwrite whatever
         // beat was open then. A slot belonging to a DIFFERENT (open) beat must be left untouched (#RECOVERY-SLOT).
-        let ownsRecoverySlot = Self.recoverySlotBelongsTo(item, slot: autosaveURL)
+        let isSavedProject = item.url.deletingLastPathComponent() == dir
+        let ownsRecoverySlot = isSavedProject && Self.recoverySlotBelongsTo(item, slot: autosaveURL)
         do { try FileManager.default.removeItem(at: item.url) } catch { return false }
-        if lastProjectName == item.name { lastProjectName = nil }
-        if let pid = item.projectID, lastProjectID == pid { lastProjectID = nil }
+        Self.removeLegacyBackups(for: item.url)
+        if isSavedProject {
+            recoveryItems.removeAll { item.projectID != nil ? $0.projectID == item.projectID : $0.name == item.name }
+            let history = recoveryDir
+            persistenceQueue.async {
+                for file in (try? FileManager.default.contentsOfDirectory(at: history, includingPropertiesForKeys: nil)) ?? []
+                    where Self.recoverySlotBelongsTo(item, slot: file) {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
+        } else { recoveryItems.removeAll { $0.url == item.url } }
+        if isSavedProject {
+            if lastProjectName == item.name { lastProjectName = nil }
+            if let pid = item.projectID, lastProjectID == pid { lastProjectID = nil }
+        }
         // Reclaim the deleted beat's audio NOW — deleting beats is the only thing the UI offers a full-disk
         // user, so waiting for a later launch's sweep (or for every other file to decode) freed nothing in
         // time. `protecting` carries the live session's asset names, which the sweep's 24h grace exists for
@@ -648,15 +692,52 @@ final class ProjectStore: ObservableObject {
     /// Cheap to call on scenePhase changes; the arrangement is what matters (sample WAVs aren't re-flushed here).
     func autosave(_ snap: ProjectSnapshot) { autosave(ProjectSavePayload(snapshot: snap)) }
     func autosave(_ payload: ProjectSavePayload, completion: (@Sendable () -> Void)? = nil) {
-        let url = autosaveURL, samples = sampleDir, audio = audioDir
+        let url = autosaveURL, samples = sampleDir, audio = audioDir, history = recoveryDir
         persistenceQueue.async { [weak self] in
             let ok = Self.writePayload(payload, to: url, samples: samples, audio: audio, pretty: false)
-            if !ok { fdLog.error("Recovery save failed; keeping previous recovery file") }
+            if ok { Self.keepRecoveryVersion(url, in: history) }
+            else { fdLog.error("Recovery save failed; keeping previous recovery file") }
             // Report the outcome to the UI: a full disk silently killed the crash safety net (#PERSIST-RECOVERY).
             Task { @MainActor [weak self] in self?.noteRecoveryWrite(ok) }
             completion?()
         }
     }
+    /// Keep three independent restore points per beat, including beats left with "Decide later".
+    nonisolated private static func keepRecoveryVersion(_ url: URL, in directory: URL) {
+        guard let header = decodeHeader(url) else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let copy = directory.appendingPathComponent(UUID().uuidString + ".fd808json")
+            try FileManager.default.copyItem(at: url, to: copy)
+            // copyItem preserves timestamps; stamp this version's actual creation time for ordering.
+            try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: copy.path)
+            let versions = (try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]))
+                .filter { file in
+                    guard let candidate = decodeHeader(file) else { return false }
+                    return header.id != nil ? candidate.id == header.id : candidate.name == header.name
+                }.sorted {
+                    ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+                        > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+                }
+            for old in versions.dropFirst(3) { try? FileManager.default.removeItem(at: old) }
+        } catch { fdLog.error("Couldn't retain recovery history: \(error.localizedDescription, privacy: .public)") }
+    }
+
+    func reloadRecoveries() async {
+        let directory = recoveryDir
+        recoveryItems = await withCheckedContinuation { continuation in
+            persistenceQueue.async {
+                let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+                let versions: [SavedProject] = files.compactMap { file in
+                    guard let h = Self.decodeHeader(file) else { return nil }
+                    let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return SavedProject(id: file.lastPathComponent, projectID: h.id, name: h.name ?? "Recovered beat", modified: date, url: file)
+                }
+                continuation.resume(returning: versions.sorted { $0.modified > $1.modified })
+            }
+        }
+    }
+
     /// Consecutive recovery-slot write failures. RootView surfaces this as a banner — the periodic slot is
     /// the only protection for a long unsaved session, so it must never stop working invisibly.
     @Published private(set) var recoveryWriteFailures = 0
@@ -668,7 +749,7 @@ final class ProjectStore: ObservableObject {
     func autosaveSnapshot() async -> ProjectSnapshot? {
         let url = autosaveURL
         return await withCheckedContinuation { continuation in
-            persistenceQueue.async { continuation.resume(returning: Self.decodeSnapshot(url)) }
+            persistenceQueue.async { continuation.resume(returning: Self.decodeSnapshot(url, preservingLegacy: true)) }
         }
     }
     /// Recovery is compared to the matching project, never an unrelated recent save.
@@ -681,14 +762,14 @@ final class ProjectStore: ObservableObject {
         }
         return modified > (matching.map(\.modified).max() ?? .distantPast)
     }
-    /// Drop the recovery slot. The slot's payload may have written a content-addressed sampler WAV that
-    /// nothing else references, so the files only the slot needed are reclaimed immediately instead of
-    /// lingering until a later launch's sweep. `protecting` carries the live session's assets, which the
-    /// launch sweep's grace exists for (undo restores a removed clip from its WAV — #PERSIST-01/02).
+    /// Drop the automatic launch prompt's slot. Explicit recovery versions remain available in Projects
+    /// and protect their audio; deleting those versions or their saved beat releases those references.
+    /// `protecting` additionally keeps audio required by the current session and its undo history.
     func clearAutosave(protecting: Set<String> = []) {
         let url = autosaveURL, projectDir = dir, projectExt = ext, audio = audioDir, samples = sampleDir
         persistenceQueue.async {
             try? FileManager.default.removeItem(at: url)
+            Self.removeLegacyBackups(for: url)
             Self.sweepOrphanWAVs(projectDir: projectDir, ext: projectExt, audioDir: audio, sampleDir: samples,
                                  grace: 0, protecting: protecting)
         }
@@ -745,7 +826,19 @@ final class ProjectStore: ObservableObject {
         var sampleFiles = Set<String>()   // FD808Samples/<file>
         var complete = true
         guard let urls = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return (audioFiles, sampleFiles, false) }
-        for u in urls where u.pathExtension == ext {
+        let backupDir = dir.appendingPathComponent(".pad-v3-backups", isDirectory: true)
+        let backups: [URL]
+        if FileManager.default.fileExists(atPath: backupDir.path) {
+            guard let files = try? FileManager.default.contentsOfDirectory(at: backupDir, includingPropertiesForKeys: nil) else { return (audioFiles, sampleFiles, false) }
+            backups = files
+        } else { backups = [] }
+        let historyDir = dir.appendingPathComponent(".recoveries", isDirectory: true)
+        let history: [URL]
+        if FileManager.default.fileExists(atPath: historyDir.path) {
+            guard let files = try? FileManager.default.contentsOfDirectory(at: historyDir, includingPropertiesForKeys: nil) else { return (audioFiles, sampleFiles, false) }
+            history = files
+        } else { history = [] }
+        for u in urls + backups + history where u.pathExtension == ext {
             guard let data = try? Data(contentsOf: u),
                   let snap = try? JSONDecoder().decode(ProjectSnapshot.self, from: data) else { complete = false; continue }
             for c in snap.audioClips ?? [] { audioFiles.insert("\(c.id).wav"); audioFiles.insert("\(c.id).R.wav") }   // keep the paired stereo right channel
@@ -871,6 +964,10 @@ final class ProjectStore: ObservableObject {
         }
         let cb = max(40, min(220, s.bpm)); if cb != s.bpm { s.bpm = cb; log.append("clamped out-of-range tempo") }
         let cbs = max(1, min(16, s.barSteps ?? 16)); if cbs != (s.barSteps ?? 16) { s.barSteps = cbs; log.append("clamped out-of-range step count") }
+        if s.version < 4 {
+            s = s.migratedPadSlots()
+            log.append("Updated to independent pad banks, preserving the saved Bank \(s.bank) playback choice. Older on-disk projects are retained in .pad-v3-backups.")
+        }
         lastRepairs = log
         return s
     }

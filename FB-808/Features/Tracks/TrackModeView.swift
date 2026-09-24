@@ -19,6 +19,7 @@ struct TrackModeView: View {
     /// straight to the pattern they just tapped instead of making them find it
     /// (SEQUENCE_TRACKS_AUDIT finding 5). Optional so previews and tests can construct the view bare.
     var openSequenceTab: (() -> Void)? = nil
+    var openSynthTab: (() -> Void)? = nil
 
     @EnvironmentObject var project: Project
     @EnvironmentObject var engine: AudioEngine
@@ -36,6 +37,9 @@ struct TrackModeView: View {
     @State private var rangeStart = 0
     @State private var rangeLen = 2
     @State private var importingAudio = false
+    @State private var pendingAudioURL: URL?
+    @State private var importTask: Task<Void, Never>?
+    @State private var importGeneration = UUID()
     @State private var exportFile: ExportFile?
     @State private var exporting = false
     @State private var exportError: String?   // surface a failed render instead of silently stopping the spinner
@@ -103,7 +107,20 @@ struct TrackModeView: View {
         .sheet(item: $exportFile) { f in
             ShareSheet(urls: f.urls)
         }
-        .fileImporter(isPresented: $importingAudio, allowedContentTypes: [.audio], allowsMultipleSelection: false) { handleAudioImport($0) }
+        .onDisappear { cancelAudioImport() }
+        .onChange(of: project.projectID) { _, _ in cancelAudioImport() }
+        .overlay(alignment: .top) {
+            if importTask != nil {
+                HStack { ProgressView(); Text("Importing audio…"); Button("Cancel") { cancelAudioImport() } }
+                    .padding().background(.regularMaterial, in: Capsule())
+            }
+        }
+        .fileImporter(isPresented: $importingAudio, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result { pendingAudioURL = urls.first }
+        }
+        .modifier(AudioImportChoice(url: $pendingAudioURL, maxSeconds: 60, allowsStereo: true) { url, stereo in
+            handleAudioImport(.success([url]), stereo: stereo)
+        })
         .alert("Rename Track", isPresented: Binding(get: { renameID != nil }, set: { if !$0 { renameID = nil } })) {
             TextField("Name", text: $renameText)
             Button("Save") { if let id = renameID { project.renameTrack(id, renameText) }; renameID = nil }
@@ -136,26 +153,28 @@ struct TrackModeView: View {
         } message: { Text("All \(BARS) bars are used. Extend the song to add more sections.") }
     }
 
-    private func handleAudioImport(_ result: Result<[URL], Error>) {
+    private func cancelAudioImport() {
+        importTask?.cancel(); importTask = nil; importGeneration = UUID()
+    }
+    private func handleAudioImport(_ result: Result<[URL], Error>, stereo: Bool) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        let trackID = importTrackID, name = url.deletingPathExtension().lastPathComponent
-        let atBar = project.playing ? project.bar : project.punchInBar   // where you are, not always bar 1 (#export-6)
-        Task {   // off-main decode so importing a long take never hitches the UI (Phase 2)
-            let cap = AudioDefaults.maxSampleSeconds
-            let scoped = url.startAccessingSecurityScopedResource()
-            let src = try? AVAudioFile(forReading: url)
-            let srcSeconds = src.map { Double($0.length) / max(1, $0.fileFormat.sampleRate) } ?? 0
-            let srcChannels = Int(src?.fileFormat.channelCount ?? 1)
-            let data = await engine.decodeAudioFileAsync(url: url, maxSeconds: cap)
-            if scoped { url.stopAccessingSecurityScopedResource() }
-            guard let data, !data.isEmpty else { importNotice = "Couldn't read “\(name)”. Try a WAV, AIFF, M4A or MP3 file."; return }
-            guard project.addAudioClip(track: trackID, startBar: atBar, data: data, name: name) else {
-                importNotice = "Couldn't save “\(name)” — check free storage."; return
+        cancelAudioImport()
+        let trackID = project.audioArmedTrack ?? "audio"
+        let destination = project.operationDestination(), generation = importGeneration
+        let atBar = project.playing ? project.bar : project.punchInBar
+        let sr = engine.sampleRate, name = url.deletingPathExtension().lastPathComponent
+        importTask = Task {
+            let decoded = await Task.detached(priority: .userInitiated) {
+                SampleEngine.decodeChannels(url: url, targetSR: sr, maxSeconds: AudioDefaults.maxSampleSeconds, stereo: stereo)
+            }.value
+            guard !Task.isCancelled, generation == importGeneration else { return }
+            defer { importTask = nil }
+            guard let decoded else { importNotice = "Couldn't read that audio file."; return }
+            guard project.commitImportedClip(destination: destination, trackID: trackID, startBar: atBar,
+                                             data: decoded.left, dataR: decoded.right, name: name) else { return }
+            if decoded.sourceSeconds > AudioDefaults.maxSampleSeconds {
+                importNotice = "Imported the first \(Int(AudioDefaults.maxSampleSeconds)) seconds, as selected."
             }
-            var notes: [String] = []
-            if srcSeconds > cap + 0.5 { notes.append("trimmed to the first \(Int(cap)) s") }
-            if srcChannels > 1 { notes.append("mixed to mono") }
-            if !notes.isEmpty { importNotice = "Imported “\(name)” at bar \(atBar + 1) — \(notes.joined(separator: ", "))." }
         }
     }
 
@@ -173,9 +192,9 @@ struct TrackModeView: View {
     }
     private var exportMenu: some View {
         Menu {
-            Button { startExport(.audio(.m4a)) } label: { Label("M4A · AAC (compressed)", systemImage: "waveform") }
-            Button { startExport(.audio(.wav)) } label: { Label("WAV · lossless", systemImage: "waveform.path") }
-            Button { startExport(.stems) } label: { Label("Stems · per-track WAV (pre-master, FX-dry)", systemImage: "square.stack.3d.up") }
+            Button { startExport(.audio(.m4a)) } label: { Label(engine.hasHostedEffects ? "M4A · without AU effects" : "M4A · AAC (compressed)", systemImage: "waveform") }
+            Button { startExport(.audio(.wav)) } label: { Label(engine.hasHostedEffects ? "WAV · without AU effects" : "WAV · lossless", systemImage: "waveform.path") }
+            Button { startExport(.stems) } label: { Label(engine.hasHostedEffects ? "Stems · without master / AU effects" : "Stems · per-track WAV (pre-master, FX-dry)", systemImage: "square.stack.3d.up") }
             Button { startExport(.midi) } label: { Label("MIDI · .mid", systemImage: "pianokeys") }
             if !project.songMode {
                 Menu {
@@ -571,6 +590,25 @@ struct TrackModeView: View {
 
     private func trackMenu(_ t: Track) -> some View {
         Menu {
+            if !t.frozenToAudio && t.type == .drumPattern {
+                Menu("Choose & edit pattern") {
+                    ForEach(project.sequences.indices, id: \.self) { index in
+                        Button("Pattern " + project.sequences[index].name) {
+                            project.chooseTrackSource(t.id, sequence: index); openSequenceTab?()
+                        }
+                    }
+                }
+            }
+            if !t.frozenToAudio && t.type == .synthPart {
+                Menu("Choose & edit instrument") {
+                    Button("New instrument layer") {
+                        project.chooseTrackSource(t.id, newPart: true); openSynthTab?()
+                    }
+                    ForEach(project.partList, id: \.id) { part in
+                        Button(part.name) { project.chooseTrackSource(t.id, part: part.id); openSynthTab?() }
+                    }
+                }
+            }
             Button { renameID = t.id; renameText = t.name } label: { Label("Rename", systemImage: "pencil") }
             Menu {
                 ForEach(Track.palette, id: \.self) { hex in
@@ -582,9 +620,7 @@ struct TrackModeView: View {
                 .disabled(!project.canMoveTrack(t.id, up: true))
             Button { project.moveTrack(t.id, up: false) } label: { Label("Move Down", systemImage: "arrow.down") }
                 .disabled(!project.canMoveTrack(t.id, up: false))
-            if t.playsAdditively {   // linked or frozen — both are real arrangeable tracks
-                Button { project.tracks.contains { $0.id == t.id } ? sendClipFull(t) : () } label: { Label("Add Clip (full song)", systemImage: "rectangle.badge.plus") }
-                if !project.busTracks.isEmpty {   // route this track's audio into a group bus (G3.4)
+                if t.type != .bus && !project.busTracks.isEmpty {   // route this track's audio into a group bus (G3.4)
                     Menu {
                         Button { project.setTrackBusParent(t.id, nil) } label: {
                             Label("None", systemImage: t.busParent == nil ? "checkmark" : "")
@@ -596,6 +632,8 @@ struct TrackModeView: View {
                         }
                     } label: { Label("Route to Bus", systemImage: "arrow.triangle.merge") }
                 }
+            if t.playsAdditively || t.frozenToAudio {   // keep Unfreeze reachable after saving/reopening
+                Button { project.tracks.contains { $0.id == t.id } ? sendClipFull(t) : () } label: { Label("Add Clip (full song)", systemImage: "rectangle.badge.plus") }
                 if !t.frozenToAudio {   // live-link ⇄ independent copy (Step 2)
                     if t.isLinked {
                         Button { _ = project.freezeLinkToCopy(t.id) } label: { Label("Freeze (detach copy)", systemImage: "scissors") }
@@ -1019,40 +1057,7 @@ struct TrackModeView: View {
         }
     }
 
-    /// One-tap full song: Intro→Verse→Hook→Verse→Outro with track dynamics (Song Mode).
-    /// Each section only plays the tracks listed, so the arrangement actually breathes.
-    private func buildSong() {
-        project.checkpoint("buildsong", coalesce: false)
-        // The hook lifts to pattern B only when the user actually wrote one. B ships seeded with a stock
-        // house pattern, and `generateBeat` only ever fills the ACTIVE buffer, so the old unconditional
-        // `min(1, …)` dropped a four-on-the-floor house bar into the middle of (say) a trap beat the user
-        // had never heard (SEQUENCE_TRACKS_AUDIT finding 4). Untouched B → keep the user's own pattern.
-        let hookSeq = project.sequences.count > 1 && project.isUserAuthored(seq: 1) ? 1 : 0
-        let structure: [(sec: String, len: Int, seq: Int, tracks: [String])] = [
-            ("intro", 2, 0,       ["drums", "hats"]),
-            ("verse", 4, 0,       ["drums", "hats", "bass", "vox"]),
-            ("hook",  4, hookSeq, ["drums", "hats", "bass", "perc", "vox"]),
-            ("verse", 4, 0,       ["drums", "hats", "bass", "vox"]),
-            ("outro", 2, 0,       ["drums"]),
-        ]
-        var arr: [ArrItem] = []
-        var clipMap: [String: [Clip]] = [:]
-        var start = 0
-        for (i, s) in structure.enumerated() {
-            let seq = max(0, min(s.seq, project.sequences.count - 1))
-            arr.append(ArrItem(id: "sng\(i)", section: s.sec, start: start, len: s.len, seq: seq))
-            for t in s.tracks { clipMap[t, default: []].append(Clip(s: start, l: s.len, color: colorFor(t))) }
-            start += s.len
-        }
-        project.arrangement = arr
-        // Only the 5 legacy lanes are (re)built by the auto-arranger; preserve clips authored on any
-        // user-added tracks instead of wiping the whole clip map (which contradicted the 99-track feature).
-        let legacy: Set<String> = ["drums", "hats", "bass", "perc", "vox"]
-        var merged = project.clips.filter { !legacy.contains($0.key) }
-        for (k, v) in clipMap { merged[k] = v }
-        project.clips = merged
-        project.songMode = true
-    }
+    private func buildSong() { project.buildSong() }
 
     private var songToggle: some View {
         Button { project.checkpoint("songmode", coalesce: false); project.songMode.toggle() } label: {
@@ -1119,7 +1124,7 @@ extension TrackModeView {
 
     func audioTrackArea(track t: Track, width: CGFloat) -> some View {
         let barPx: CGFloat = Swift.max(1, width / CGFloat(BARS))   // a zero-width lane (Slide Over) must not trap Int(inf) (#cross-7)
-        let barSec = (60.0 / Double(project.bpm)) * 4
+        let barSec = (60.0 / Double(project.bpm)) * Double(project.barSteps) / 4
         let armed = project.audioArmedTrack == t.id
         return ZStack(alignment: .topLeading) {
             ForEach(0..<BARS, id: \.self) { b in
@@ -1324,9 +1329,9 @@ private struct ExportPrompts: ViewModifier {
                 Button("Cancel", role: .cancel) { pendingJob = nil }
             } message: { Text("You have an arrangement, but Song Mode is off. Export the whole song, or just the loop that's playing?") }
             .alert("Solo or mute is on", isPresented: Binding(get: { pendingGate != nil }, set: { if !$0 { pendingGate = nil } })) {
-                Button("Export as heard") { if let j = pendingGate { pendingGate = nil; afterGate(j) } }
+                Button("Export with mute/solo") { if let j = pendingGate { pendingGate = nil; afterGate(j) } }
                 Button("Cancel", role: .cancel) { pendingGate = nil }
-            } message: { Text("The export follows the mixer exactly — soloed-out or muted channels, rows and tracks will be missing from the file.") }
+            } message: { Text("Muted and soloed-out channels, rows and tracks are excluded. Hosted AU effects are used only for live monitoring.") }
             .alert("Audio import", isPresented: Binding(get: { importNotice != nil }, set: { if !$0 { importNotice = nil } })) {
                 Button("OK", role: .cancel) { importNotice = nil }
             } message: { Text(importNotice ?? "") }

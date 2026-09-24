@@ -7,6 +7,7 @@ import AVFoundation
 import CoreAudioKit
 
 struct AUPluginsSheet: View {
+    @EnvironmentObject var project: Project
     @EnvironmentObject var engine: AudioEngine
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
@@ -18,7 +19,16 @@ struct AUPluginsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Master inserts") {
+                Section("Live monitoring effects") {
+                    Text(AudioEngine.pluginExportNotice).font(.footnote)
+                    if let notice = engine.pluginNotice { Text(notice).font(.footnote).foregroundStyle(.orange) }
+                    ForEach(engine.projectEffects.filter { item in !engine.masterAUs.contains { $0.id == item.id } }) { item in
+                        HStack {
+                            Text("\(item.name) · unavailable")
+                            Spacer()
+                            Button("Remove") { engine.removeMasterAU(item.id) }
+                        }
+                    }
                     if engine.masterAUs.isEmpty {
                         Text("No plugins loaded").foregroundStyle(.secondary)
                     }
@@ -26,7 +36,7 @@ struct AUPluginsSheet: View {
                         HStack {
                             Text(au.name)
                             Spacer()
-                            Button { openAU = au } label: { Image(systemName: "slider.horizontal.3") }
+                            Button { project.checkpoint("pluginParameters", coalesce: false); openAU = au } label: { Image(systemName: "slider.horizontal.3") }
                                 .buttonStyle(.borderless)
                             Button(role: .destructive) { engine.removeMasterAU(au.id) } label: {
                                 Image(systemName: "trash")

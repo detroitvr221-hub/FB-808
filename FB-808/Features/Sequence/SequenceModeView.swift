@@ -52,7 +52,10 @@ struct SequenceModeView: View {
     private let velocityLaneH: CGFloat = 50   // must match velocityLane's outer frame
     private let automationLaneH: CGFloat = 66 // must match automationLane's outer frame
 
-    private var sel: String { project.selectedRow }
+    /// The selected pad's SLOT in the bank being viewed. `selectedRow` is one project-wide value, so on a
+    /// bank switch it still names the old bank's pad; resolving the slot keeps the selection on the same
+    /// position instead of pointing at a pad that is not on screen.
+    private var sel: String { Kit.slotKey(bank: project.bank, pad: project.selectedRow) }
 
     /// Finding 67: the velocity lane attaches its 0.4 s long-press as a `simultaneousGesture` with the
     /// drag, so a hold that has already begun dragging still opened the step-inspector popover over the
@@ -82,10 +85,10 @@ struct SequenceModeView: View {
                 gridWrap
             }
         }
-        .alert("Clear the whole pattern?", isPresented: $confirmClear) {
+        .alert("Clear Bank \(project.bank)?", isPresented: $confirmClear) {
             Button("Cancel", role: .cancel) {}
-            Button("Clear All", role: .destructive) { project.clearAll() }
-        } message: { Text("Erases every step on all rows of this sequence. You can undo it afterwards.") }
+            Button("Clear", role: .destructive) { project.clearAll() }
+        } message: { Text("Erases every step on Bank \(project.bank)'s 16 rows of this sequence. Other banks are kept. You can undo it afterwards.") }
     }
 
     // MARK: song context (findings 6, 7)
@@ -196,6 +199,7 @@ struct SequenceModeView: View {
     private func toolsRow(actionsFirst: Bool) -> some View {
         HStack(alignment: .center, spacing: 10) {
             patternPicker
+            bankPicker
             if actionsFirst { actionTools }
             toolGroup {
                 chip("Swing", value: swingFeel(project.swing), icon: "waveform.path", arrow: true) {
@@ -254,6 +258,34 @@ struct SequenceModeView: View {
                 .accessibilityLabel(Text("Sequence \(slot.name)"))
                 .accessibilityValue(Text(project.activeSeq == i ? "Selected" : "Not selected"))
                 .accessibilityAddTraits(project.activeSeq == i ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+        .padding(.horizontal, 8).frame(height: 44)
+        .background(RoundedRectangle(cornerRadius: 11).fill(settings.panel2.opacity(0.68)))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(settings.line, lineWidth: 1))
+    }
+
+    /// The bank being viewed. Each bank's 16 pads are their own lanes now (SAMPLE_FLOW_AUDIT findings 1–2),
+    /// so the grid shows ONE bank — and without a picker here, Bank C's chops could only be sequenced by
+    /// leaving for the Pads screen to switch.
+    private var bankPads: [PadDef] { Kit.banks[project.bank]?.pads ?? Kit.pads }
+
+    private var bankPicker: some View {
+        HStack(spacing: 5) {
+            Text("PADS").font(FDFont.mono(9, .bold)).tracking(1.1).foregroundStyle(settings.inkFaint)
+                .padding(.leading, 4)
+            ForEach(Kit.bankOrder, id: \.self) { b in
+                Button { project.setBank(b) } label: {
+                    Text(b).font(FDFont.mono(12, .bold))
+                        .foregroundStyle(project.bank == b ? .white : settings.inkDim)
+                        .frame(width: 32, height: 32)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(project.bank == b ? settings.accent : Color.clear))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(project.bank == b ? .clear : settings.line, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Pad bank \(b), \(Kit.banks[b]?.name ?? "")"))
+                .accessibilityValue(Text(project.bank == b ? "Showing" : "Not showing"))
+                .accessibilityAddTraits(project.bank == b ? [.isButton, .isSelected] : .isButton)
             }
         }
         .padding(.horizontal, 8).frame(height: 44)
@@ -458,7 +490,7 @@ struct SequenceModeView: View {
     private var rowsScroll: some View {
         ScrollView {
             LazyVStack(spacing: gap) {
-                ForEach(Kit.pads) { pad in row(pad) }
+                ForEach(bankPads) { pad in row(pad) }
             }
             .padding(.vertical, 0)
         }
@@ -843,7 +875,7 @@ struct SequenceModeView: View {
 
     private func randomize() {
         var lane = Kit.emptyLane()
-        let density = sel == "hatClosed" ? 0.55 : (sel == "kick" ? 0.3 : 0.35)
+        let density = Kit.baseID(sel) == "hatClosed" ? 0.55 : (Kit.baseID(sel) == "kick" ? 0.3 : 0.35)
         for i in 0..<max(1, project.barSteps) where Double.random(in: 0..<1) < density { lane[i] = 0.5 + Double.random(in: 0..<0.5) }
         project.setRowLane(sel, lane)
     }

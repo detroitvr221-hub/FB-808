@@ -34,7 +34,10 @@ struct PadModeView: View {
     @State private var showMPCBridge = false
     @State private var confirmDeleteKit: UserKitDef?   // deleting a saved kit is outside the project undo system → confirm first
 
-    private var sel: String { project.selectedRow }
+    /// The selected pad's SLOT in the bank being viewed. `selectedRow` is one project-wide value, so on a
+    /// bank switch it still names the old bank's pad; resolving the slot keeps the selection on the same
+    /// position instead of pointing at a pad that is not on screen.
+    private var sel: String { Kit.slotKey(bank: project.bank, pad: project.selectedRow) }
 
     private func flashToast(_ msg: String) {
         toast = msg
@@ -128,7 +131,7 @@ struct PadModeView: View {
     private var badges: [String: String]? {
         guard project.sixteenLevels else { return nil }
         var b: [String: String] = [:]
-        for p in Kit.pads { b[p.id] = String(p.index + 1) }
+        for p in Kit.banks[project.bank]?.pads ?? Kit.pads { b[p.id] = String(p.index + 1) }
         return b
     }
 
@@ -275,7 +278,7 @@ struct PadModeView: View {
                 perfButton("⟳ Resample → \(Kit.padByID[sel]?.label ?? sel.uppercased())", on: false) {
                     engine.start()
                     Task { @MainActor in
-                        await project.resampleToPad(sel)   // off-main render (#ARCH-01)
+                        guard await project.resampleToPad(sel) else { return }
                         progress.awardCreative("resample", 6)
                         flashToast("Resampled your beat onto \(Kit.padByID[sel]?.label ?? sel) — now chop or play it")
                     }

@@ -6,40 +6,55 @@
 @preconcurrency import AVFoundation   // suppress AVFAudio Sendable noise (AVAudioPCMBuffer in the converter block)
 
 enum SampleEngine {
-    /// Decode `url` to mono Float32 @ `targetSR`, capped to `maxSeconds`. Background-safe (nonisolated,
-    /// touches no shared state). Returns nil on any failure.
+    struct DecodedAudio: Sendable {
+        let left: [Float]
+        let right: [Float]?
+        let sourceSeconds: Double
+        let sourceChannels: Int
+    }
+
     nonisolated static func decode(url: URL, targetSR: Double, maxSeconds: Double = 60) -> [Float]? {
+        decodeChannels(url: url, targetSR: targetSR, maxSeconds: maxSeconds, stereo: false)?.left
+    }
+
+    /// Preserve stereo for arrangement takes, or deliberately downmix for a mono pad/sampler.
+    nonisolated static func decodeChannels(url: URL, targetSR: Double, maxSeconds: Double = 60,
+                                           stereo: Bool) -> DecodedAudio? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-        guard let file = try? AVAudioFile(forReading: url) else { return nil }
-        let srcFmt = file.processingFormat
-        guard srcFmt.sampleRate > 0, maxSeconds > 0 else { return nil }
-        let maxSourceFrames = AVAudioFramePosition(ceil(srcFmt.sampleRate * maxSeconds))
-        let readableFrames = min(file.length, maxSourceFrames, AVAudioFramePosition(AVAudioFrameCount.max))
-        let frames = AVAudioFrameCount(readableFrames)
-        guard frames > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: srcFmt, frameCapacity: frames) else { return nil }
-        do { try file.read(into: inBuf) } catch { return nil }
-
-        // Fast path: already mono @ the engine rate.
-        if srcFmt.sampleRate == targetSR && srcFmt.channelCount == 1 {
-            let d = floats(from: inBuf, sr: targetSR, maxSeconds: maxSeconds)
-            return d.isEmpty ? nil : d
+        guard targetSR.isFinite, targetSR > 0, maxSeconds.isFinite, maxSeconds > 0,
+              let file = try? AVAudioFile(forReading: url) else { return nil }
+        let src = file.processingFormat
+        guard src.sampleRate > 0, src.channelCount > 0 else { return nil }
+        let frames = AVAudioFrameCount(min(file.length, AVAudioFramePosition(ceil(src.sampleRate * maxSeconds)), AVAudioFramePosition(AVAudioFrameCount.max)))
+        guard frames > 0, let input = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: frames) else { return nil }
+        do { try file.read(into: input) } catch { return nil }
+        // Keep the channels through sample-rate conversion. AVAudioConverter's default channel map
+        // selects the left channel when converting stereo to mono; explicitly average below instead.
+        let channels = src.channelCount
+        let output: AVAudioPCMBuffer
+        if src.sampleRate == targetSR && src.channelCount == channels && input.floatChannelData != nil {
+            output = input
+        } else {
+            guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSR, channels: channels, interleaved: false),
+                  let converter = AVAudioConverter(from: src, to: format),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(Double(frames) * targetSR / src.sampleRate) + 2048) else { return nil }
+            var fed = false
+            var error: NSError?
+            converter.convert(to: buffer, error: &error) { _, status in
+                if fed { status.pointee = .endOfStream; return nil }
+                fed = true; status.pointee = .haveData; return input
+            }
+            guard error == nil else { return nil }
+            output = buffer
         }
-        // Otherwise resample + downmix to mono Float32 @ the target rate.
-        guard let outFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSR, channels: 1, interleaved: false),
-              let conv = AVAudioConverter(from: srcFmt, to: outFmt) else { return nil }
-        let cap = AVAudioFrameCount(Double(frames) * targetSR / srcFmt.sampleRate) + 2048
-        guard let outBuf = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return nil }
-        var fed = false
-        var err: NSError?
-        conv.convert(to: outBuf, error: &err) { _, status in
-            if fed { status.pointee = .endOfStream; return nil }
-            fed = true; status.pointee = .haveData; return inBuf
-        }
-        guard err == nil else { return nil }
-        let d = floats(from: outBuf, sr: targetSR, maxSeconds: maxSeconds)
-        return d.isEmpty ? nil : d
+        let count = min(Int(output.frameLength), Int(targetSR * maxSeconds))
+        guard count > 0, let data = output.floatChannelData else { return nil }
+        let left = stereo ? Array(UnsafeBufferPointer(start: data[0], count: count))
+            : floats(from: output, sr: targetSR, maxSeconds: maxSeconds)
+        return DecodedAudio(left: left,
+                            right: stereo && channels > 1 ? Array(UnsafeBufferPointer(start: data[1], count: count)) : nil,
+                            sourceSeconds: Double(file.length) / src.sampleRate, sourceChannels: Int(src.channelCount))
     }
 
     /// Decode on a background executor; the result returns to the caller's actor without blocking it.

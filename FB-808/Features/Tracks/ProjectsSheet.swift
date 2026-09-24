@@ -12,6 +12,9 @@ struct ProjectsSheet: View {
     @Environment(\.dismiss) private var dismiss
     var onNewBeat: (() -> Void)? = nil   // route "New Beat" to the genre quick-start (RootView guards unsaved work)
 
+    var continueToNew = false
+    var onSavedForNew: (() -> Void)? = nil
+    @State private var saveThenNew = false
     @State private var nameField = ""
     @State private var saved = false
     @State private var operation: String?
@@ -55,13 +58,36 @@ struct ProjectsSheet: View {
             } else if let feedback {
                 Text(feedback).font(FDFont.ui(13)).foregroundStyle(settings.inkDim)
             }
+            Text("Save updates this beat. Use Duplicate in its menu to make a separate copy.")
+                .font(FDFont.ui(11.5)).foregroundStyle(settings.inkDim)
             Text("SAVED PROJECTS").font(FDFont.mono(10, .bold)).tracking(1.4).foregroundStyle(settings.inkDim)
             libraryControls
+            if !store.recoveryItems.isEmpty {
+                DisclosureGroup("Recovery versions · last 3 per beat") {
+                    ScrollView {
+                        VStack(alignment: .leading) {
+                            ForEach(store.recoveryItems) { version in
+                                Button { open(version) } label: {
+                                    HStack {
+                                        Text(version.name)
+                                        Spacer()
+                                        Text(version.modified, format: .dateTime.month().day().hour().minute().second())
+                                    }.font(FDFont.ui(12))
+                                }.buttonStyle(.bordered)
+                                .contextMenu {
+                                    Button("Delete recovery version", role: .destructive) { pendingDelete = version }
+                                }
+                            }
+                        }
+                    }.frame(maxHeight: 150)
+                }
+            }
             list
         }
         .padding(24)
         .background(settings.theme.bg.ignoresSafeArea())
-        .onAppear { nameField = project.name }
+        .onAppear { nameField = project.name; saveThenNew = continueToNew }
+        .task { await store.reloadRecoveries() }
         .onChange(of: nameField) { _, _ in saved = false; feedback = nil }
         .disabled(isSaving)
         .interactiveDismissDisabled(isSaving)
@@ -84,7 +110,7 @@ struct ProjectsSheet: View {
             Button("Cancel", role: .cancel) {}
         } message: { Text("This clears the current beat. Save it first if you want to keep it.") }
         .alert("Overwrite “\(trimmedName)”?", isPresented: $confirmOverwrite) {
-            Button("Cancel", role: .cancel) { saveThenOpen = nil }
+            Button("Cancel", role: .cancel) { saveThenOpen = nil; saveThenNew = false }
             Button("Overwrite", role: .destructive) { doSave() }
         } message: { Text("A different saved beat already uses this name. Saving replaces it.") }
         .alert(item: $pendingDelete) { item in
@@ -250,6 +276,8 @@ struct ProjectsSheet: View {
                 saveButton
             }
             HStack(spacing: 10) {
+                Button("Save & New") { saveThenNew = true; attemptSave() }
+                    .buttonStyle(.bordered).disabled(isSaving)
                 Button { if let onNewBeat { dismiss(); onNewBeat() } else { confirmNew = true } } label: {
                     Label("New Beat", systemImage: "sparkles").font(FDFont.ui(13, .semibold))
                         .foregroundStyle(settings.inkDim)
@@ -307,6 +335,7 @@ struct ProjectsSheet: View {
     }
     private func doSave() {
         guard !isSaving else { return }
+        engine.finishMicCapture()
         operation = "Saving beat…"
         feedback = nil
         saved = false
@@ -324,6 +353,11 @@ struct ProjectsSheet: View {
                 }
                 saved = unchanged
                 feedback = unchanged ? "Saved \(payload.snapshot.name)." : "Saved — but you made more edits meanwhile, so those are still unsaved."
+                if unchanged && saveThenNew {
+                    saveThenNew = false; operation = nil; dismiss()
+                    (onSavedForNew ?? onNewBeat)?()
+                    return
+                }
                 let next = saveThenOpen
                 if unchanged, let next {
                     saveThenOpen = nil
@@ -359,7 +393,7 @@ struct ProjectsSheet: View {
         Button { attemptSave() } label: {
             HStack(spacing: 7) {
                 Image(systemName: (saved && !project.hasUnsavedChanges) ? "checkmark" : "square.and.arrow.down.fill").font(.system(size: 14, weight: .bold))
-                Text(operation == "Saving beat…" ? "Saving…" : (saved && !project.hasUnsavedChanges) ? "Saved" : "Save").font(FDFont.ui(14, .bold))
+                Text(operation == "Saving beat…" ? "Saving…" : (saved && !project.hasUnsavedChanges) ? "Saved" : saveThenNew ? "Save & New" : "Save").font(FDFont.ui(14, .bold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 18).frame(height: 44)

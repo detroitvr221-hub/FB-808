@@ -47,7 +47,43 @@ nonisolated enum Kit {
         return p
     }()
 
-    static let padByID: [String: PadDef] = Dictionary(uniqueKeysWithValues: pads.map { ($0.id, $0) })
+    /// Every pad in every bank, by id. Bank A keeps its bare ids ("kick"); Banks B–D use slot keys
+    /// ("C:kick") so the 4 × 16 pads are 64 DISTINCT pads — see `slotKey`.
+    static let padByID: [String: PadDef] = {
+        var m = Dictionary(uniqueKeysWithValues: pads.map { ($0.id, $0) })
+        for b in bankOrder where b != "A" { for p in banks[b]?.pads ?? [] { m[p.id] = p } }
+        return m
+    }()
+
+    // MARK: Bank slot keys (SAMPLE_FLOW_AUDIT findings 1–2)
+    //
+    // The four banks used to RELABEL the same 16 pad ids, so a Bank C chop and a Bank A kick were the same
+    // pad: one sample slot, one lane, and playback chose between them by whichever bank TAB was showing.
+    // Now each bank's pads carry their own id. Bank A keeps the bare id, so every existing project, lane,
+    // template and MIDI import is unchanged; B–D prefix it. Everything keyed by pad id — lanes, params,
+    // samples, mutes, step meta — becomes per-bank automatically, because the id is where the key starts.
+
+    /// The id for base pad `base` in `bank`: "kick" in Bank A, "C:kick" in Bank C.
+    static func slotKey(bank: String, pad base: String) -> String {
+        let b = baseID(base)
+        return (bank == "A" || bank.isEmpty) ? b : "\(bank):\(b)"
+    }
+    /// The underlying Bank A pad id ("C:kick" → "kick"). What the mixer channel, arrangement track,
+    /// default voice and GM drum note are defined against.
+    static func baseID(_ id: String) -> String {
+        guard let i = id.firstIndex(of: ":"), id.distance(from: id.startIndex, to: i) == 1 else { return id }
+        return String(id[id.index(after: i)...])
+    }
+    /// The bank a pad id belongs to ("C:kick" → "C", "kick" → "A").
+    static func bankOf(_ id: String) -> String {
+        guard let i = id.firstIndex(of: ":"), id.distance(from: id.startIndex, to: i) == 1 else { return "A" }
+        return String(id[..<i])
+    }
+
+    /// Stable identity for all 64 slots, including the reserved Mono self-choke groups.
+    static func slotIndex(_ id: String) -> Int {
+        (bankOrder.firstIndex(of: bankOf(id)) ?? 0) * pads.count + (padByID[id]?.index ?? 0)
+    }
 
     // MARK: Drum sound catalog (assignable to any pad via the Pad Inspector)
 
@@ -211,7 +247,7 @@ nonisolated enum Kit {
         for c in channels { for p in c.pads { m[p] = c.id } }
         return m
     }()
-    static func channelOf(_ id: String) -> String { padChannel[id] ?? soundChannel[id] ?? "drums" }
+    static func channelOf(_ id: String) -> String { let b = baseID(id); return padChannel[b] ?? soundChannel[b] ?? soundChannel[id] ?? "drums" }
     /// The mixer channel's accent color — one source of truth so clip/track tints can't drift from it.
     static func channelColor(_ id: String) -> Color { channels.first { $0.id == id }?.color ?? .gray }
 
@@ -228,7 +264,7 @@ nonisolated enum Kit {
         for (t, pads) in tracks { for p in pads { m[p] = t } }
         return m
     }()
-    static func trackOf(_ id: String) -> String { padTrack[id] ?? "drums" }
+    static func trackOf(_ id: String) -> String { padTrack[baseID(id)] ?? "drums" }
 
     // MARK: Pad banks
 
@@ -236,19 +272,26 @@ nonisolated enum Kit {
     static let bankOrder = ["A", "B", "C", "D"]
     static let banks: [String: Bank] = [
         "A": Bank(name: "Studio Kit", pads: pads),
-        "B": Bank(name: "Perc Lab", pads: relabel(pads, [
+        "B": Bank(name: "Perc Lab", pads: relabel(pads, bank: "B", [
             "kick": ("DEEP", "#FF5A3C"), "sub808": ("SUB", "#FF7A1A"), "snare": ("RIM SN", "#FFC23C"), "clap": ("SNAP", "#FFD84D"),
             "hatClosed": ("TICK", "#33E0D4"), "hatOpen": ("SIZZLE", "#27C2E8"), "rim": ("CLICK", "#7AE582"), "cowbell": ("BLOCK", "#B6E84D"),
             "lowTom": ("TABLA", "#4DD07A"), "midTom": ("DARB", "#46C9A8"), "hiTom": ("BONGO", "#5BD6C0"), "crash": ("SPLASH", "#5B8DEF"),
             "conga": ("CONGA", "#C77DFF"), "perc": ("AGOGO", "#E879F9"), "shaker": ("CABASA", "#FF7AC6"), "fx": ("ZAP", "#9B8CFF"),
         ])),
-        "C": Bank(name: "Chops", pads: relabel(pads, [:], prefix: "SLICE")),
-        "D": Bank(name: "Custom", pads: relabel(pads, [:], prefix: "PAD")),
+        "C": Bank(name: "Chops", pads: relabel(pads, bank: "C", [:], prefix: "SLICE")),
+        "D": Bank(name: "Custom", pads: relabel(pads, bank: "D", [:], prefix: "PAD")),
     ]
 
-    static func relabel(_ base: [PadDef], _ map: [String: (String, String)], prefix: String? = nil) -> [PadDef] {
+    /// A bank's pads: the base pads under a bank-scoped id (see `slotKey`), relabelled. The VOICE
+    /// (`sound`) is kept, so an untouched Bank B/C/D pad still sounds like its Bank A counterpart.
+    static func relabel(_ base: [PadDef], bank: String, _ map: [String: (String, String)], prefix: String? = nil) -> [PadDef] {
         base.enumerated().map { (i, p) in
-            var o = p
+            // Banks C (chops) and D (synth) hold the user's own audio, so they must not inherit the kit's
+            // family choke — slices 5 and 6 are arbitrary chops, not an open/closed hat pair that should
+            // cut each other.
+            let choke = (bank == "C" || bank == "D") ? 0 : p.defaultChoke
+            var o = PadDef(id: slotKey(bank: bank, pad: p.id), label: p.label, sound: p.sound, family: p.family,
+                           color: p.color, key: p.key, index: p.index, defaultChoke: choke)
             if let m = map[p.id] { o.label = m.0; o.color = Color(hex: m.1) }
             else if let pre = prefix { o.label = "\(pre) \(i + 1)" }
             return o

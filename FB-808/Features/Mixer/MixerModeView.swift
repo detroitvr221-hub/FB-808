@@ -262,7 +262,7 @@ struct MixerModeView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
                                 ForEach(project.tracks) { t in
-                                    TrackStrip(track: t, meter: meters.cell(t.id == "vox" ? "melody" : t.id))
+                                    TrackStrip(track: t, meter: meters.cell("track:" + t.id))
                                 }
                                 MixStrip(ch: "master", name: "MASTER", color: settings.accent, meter: meters.cell("master"), master: true)
                                     .frame(width: 96)
@@ -278,8 +278,8 @@ struct MixerModeView: View {
             // Only the per-channel cells publish, so this no longer invalidates the mode body. A fully
             // decayed mixer publishes nothing at all.
             meters.decay()
+            readMeters()
         }
-        .onChange(of: project.step) { _, s in bump(s) }
     }
 
     private var mixTabPicker: some View {
@@ -296,38 +296,31 @@ struct MixerModeView: View {
         }
     }
 
-    private func bump(_ s: Int) {
-        guard project.playing, s >= 0 else { return }
-        let solo = project.mixer.values.contains { $0.solo }
-        var mx = 0.0
-        for c in Kit.channels {
-            var lvl = 0.0
-            for pid in c.pads {
-                let v = (project.lanes[pid]?[safe: s]) ?? 0
-                if v > lvl { lvl = v }
-            }
-            let mm = project.mixer[c.id] ?? MixChannel()
-            if mm.mute || (solo && !mm.solo) { lvl = 0 }
-            if lvl > 0 {
-                let val = min(1, lvl * mm.vol * 1.35)
-                meters.set(c.id, val)
-                if val > mx { mx = val }
-            }
+    private func readMeters() {
+        let peaks = project.engine.core.channelPeaks()
+        let order = project.busOrder
+        var levels: [String: Double] = [:]
+        for (i, id) in order.enumerated() where peaks.indices.contains(i) {
+            let value = Double(peaks[i])
+            levels[id] = value
+            meters.set(id, max(meters.value(id), value))
         }
-        // melody meter
-        if !project.melodyMuted {
-            var ml = 0.0
-            for note in project.melody where note.step == s { ml = max(ml, note.vel) }
-            let mm = project.mixer["melody"] ?? MixChannel()
-            if mm.mute || (solo && !mm.solo) { ml = 0 }
-            if ml > 0 {
-                let val = min(1, ml * mm.vol * 1.3)
-                meters.set("melody", val)
-                if val > mx { mx = val }
+        for track in project.tracks {
+            let mix = project.trackMix(track.id)
+            let buses: [String]
+            if let key = mix.busKey { buses = [key] }
+            else if track.type == .synthPart || track.type == .audio { buses = ["melody"] }
+            else {
+                let rows = project.trackLanes(track, atBar: project.bar)?.keys.map { $0 } ?? track.source.padRows
+                buses = Array(Set(rows.map { Kit.channelOf($0) }))
             }
+            let value = mix.audible ? (buses.compactMap { levels[$0] }.max() ?? 0) : 0
+            let key = "track:" + track.id
+            meters.set(key, max(meters.value(key), value))
         }
-        if mx > 0 { meters.set("master", min(1, mx * (project.mixer["master"]?.vol ?? 0.9) * 1.1)) }
+        meters.set("master", max(meters.value("master"), Double(project.engine.diag.peak)))
     }
+
 }
 
 struct MixStrip: View {
@@ -888,6 +881,7 @@ struct TrackStrip: View {
             }
             panKnob
             Text("PAN \(panLabel)").font(FDFont.mono(8.5, .bold)).tracking(0.6).foregroundStyle(th.inkFaint)
+            Text("ROUTED BUS LEVEL").font(FDFont.mono(7)).foregroundStyle(th.inkFaint)
             HStack(spacing: 10) { meterBar; fader }.frame(maxHeight: .infinity)
             HStack(spacing: 5) {
                 Circle().fill(hot ? th.miss : settings.line).frame(width: 7, height: 7)

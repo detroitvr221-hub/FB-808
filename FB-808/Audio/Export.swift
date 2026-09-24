@@ -13,7 +13,7 @@ import UIKit
 
 struct ExportDrum: Sendable { var sound: String; var vel: Double; var opts: TriggerOpts; var atSample: Double; var sampleData: [Float]? = nil; var busKey: String? = nil }
 struct ExportSynth: Sendable { var patch: SynthPatch; var midi: Int; var dur: Double; var vel: Double; var atSample: Double; var pan: Double = 0; var busKey: String? = nil }
-struct ExportClip: Sendable { var data: [Float]; var dataR: [Float]? = nil; var atSample: Double; var gain: Double; var channel: Int }
+struct ExportClip: Sendable { var data: [Float]; var dataR: [Float]? = nil; var atSample: Double; var gain: Double; var channel: Int; var pan: Double = 0; var maxFrames: Int? = nil }
 struct ExportPlan: Sendable {
     var drums: [ExportDrum]
     var synths: [ExportSynth]
@@ -71,6 +71,7 @@ extension Project {
         let n = max(1, barSteps)        // steps per bar (A13 time signature)
         // Resample (loopBarsOverride set) always bounces the current PATTERN, never the arrangement.
         let songMode = loopBarsOverride == nil ? (songModeOverride ?? self.songMode) : false
+        let context: PlaybackContext = songMode ? .song : .pattern
         let totalBars = loopBarsOverride ?? (songMode ? songBars : 4)
         let masterCh = mixer["master"] ?? MixChannel(vol: 0.9)
         // Live applies the fader (baked into velocities) AND a fixed 0.9 render trim (RootView
@@ -80,7 +81,8 @@ extension Project {
         var automation: [AutoPoint] = []   // FX-automation schedule, mirrors Transport.scheduleStep
         let solo = mixer.values.contains { $0.solo }
         let rowSoloOn = rowSolo.values.contains(true)
-        let trackSoloOn = trackSolo.values.contains(true)
+        let trackMixes = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, trackMix($0.id)) })
+        func mix(_ id: String) -> TrackMix { trackMixes[id] ?? trackMix(id) }
 
         var drums: [ExportDrum] = []
         var synths: [ExportSynth] = []
@@ -89,12 +91,12 @@ extension Project {
             // Clip pattern pins are folded in exactly as Transport.refreshStepCache does, and the lead /
             // parts resolve per-track, so a pinned clip bounces the pattern it plays (SEQUENCE_TRACKS_AUDIT
             // finding 1 — live-vs-bounce parity is non-negotiable here).
-            let pins = songMode ? clipSeqOverrides(atBar: bar) : [:]
-            let curLanes = Transport.foldClipPins(base: songMode ? lanesForBar(bar) : lanes, overrides: pins,
+            let pins = songMode ? clipSeqOverrides(atBar: bar, context: context) : [:]
+            let curLanes = Transport.foldClipPins(base: songMode ? lanesForBar(bar, context: context) : lanes, overrides: pins,
                                                   lanesOfSeq: { self.lanesOfSeq($0) }, trackOf: { Kit.trackOf($0) })
-            let curMelody = songMode ? melodyForTrack("vox", atBar: bar) : melody
-            let curParts = songMode ? partsForTrack("vox", atBar: bar) : parts
-            var curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            let curMelody = songMode ? melodyForTrack("vox", atBar: bar, context: context) : melody
+            let curParts = songMode ? partsForTrack("vox", atBar: bar, context: context) : parts
+            var curMeta = songMode ? stepMetaForBar(bar, context: context) : stepMeta
             for (tk, si) in pins {
                 let src = stepMetaOfSeq(si)
                 for pad in Set(curMeta.keys).union(src.keys) where Kit.trackOf(pad) == tk { curMeta[pad] = src[pad] }
@@ -135,8 +137,8 @@ extension Project {
                     if rowMute[padID] == true { continue }
                     if rowSoloOn && !(rowSolo[padID] ?? false) { continue }
                     let tk = Kit.trackOf(padID)
-                    if trackMute[tk] == true { continue }
-                    if trackSoloOn && !(trackSolo[tk] ?? false) { continue }
+                    let tm = mix(tk)
+                    if !tm.audible { continue }
                     if songMode && !trackPlaysInSong(tk, atBar: bar) { continue }
                     let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
                     if m.mute { continue }
@@ -151,23 +153,18 @@ extension Project {
                             if Double(seed % 997) / 997.0 > sm.prob { continue }
                         }
                     }
-                    var vel = padVel(padID, fullLevel ? 1 : lane[step]) * padHitGain(padID)
+                    var vel = padVel(padID, fullLevel ? 1 : lane[step]) * padHitGain(padID) * tm.gain
                     var atS = atSample + padOffsetSec(padID) * sr
                     if humanize > 0 {   // deterministic humanize so bounces are reproducible
                         let h = Project.humanized(seed: padID, bar: bar, step: step, amount: humanize)
                         vel *= h.velScale
                         atS += h.timeOffset * sr
                     }
-                    drums.append(ExportDrum(sound: soundFor(padID), vel: vel, opts: padOpts(padID, meta: sm) ?? TriggerOpts(),
-                                            atSample: atS, sampleData: padSampleActive(padID) ? padSampleData[padID] : nil))
-                    // stacked layers — were dropped from bounces (#20); each is gated by its OWN bus (finding 72)
-                    for ly in audiblePadLayers(padID) {
-                        drums.append(ExportDrum(sound: ly.sound, vel: vel * ly.vol, opts: TriggerOpts(pitch: ly.pitch, pan: ly.pan), atSample: atS))
-                    }
+                    appendPadPlayback(padID, velocity: vel, atSample: atS, meta: sm,
+                                      panOffset: tm.pan, busKey: tm.busKey, drums: &drums, synths: &synths)
                 }
 
-                if !melodyMuted, !ownedLeadMelody, !curMelody.isEmpty, trackMute["vox"] != true,
-                   !(trackSoloOn && !(trackSolo["vox"] ?? false)),
+                if !melodyMuted, !ownedLeadMelody, !curMelody.isEmpty, mix("vox").audible,
                    !(songMode && !trackPlaysInSong("vox", atBar: bar)) {
                     let mmel = mixer["melody"] ?? MixChannel(vol: 0.85)
                     if !mmel.mute && !(solo && !mmel.solo) {
@@ -177,25 +174,24 @@ extension Project {
                             // every melody note): a Humanized beat used to bounce with drifting drums and a
                             // rigid, slightly louder lead. (finding 73)
                             let h = Project.humanized(seed: "melody:\(note.pitch)", bar: bar, step: step, amount: humanize)
-                            let vel = note.vel * mmel.vol * 1.25 * h.velScale
+                            let vel = note.vel * mmel.vol * 1.25 * mix("vox").gain * h.velScale
                             synths.append(ExportSynth(patch: synthPatch, midi: note.pitch, dur: dur, vel: vel,
-                                                      atSample: atSample + h.timeOffset * sr))
+                                                      atSample: atSample + h.timeOffset * sr, pan: mix("vox").pan, busKey: mix("vox").busKey))
                         }
                     }
                 }
 
                 // extra instrument parts (Tier 2) — own gate, per-sequence, decoupled from the vox clip / melody mute
-                if !curParts.isEmpty, trackMute["vox"] != true,
-                   !(trackSoloOn && !(trackSolo["vox"] ?? false)) {
+                if !curParts.isEmpty, mix("vox").audible {
                     let mmel = mixer["melody"] ?? MixChannel(vol: 0.85)
                     if !mmel.mute && !(solo && !mmel.solo) {
                         for part in curParts where !part.muted && !ownedPartIDs.contains(part.id) {
                             for note in part.notes where note.step == step {
                                 let dur = Double(note.dur) * stepDur
                                 let h = Project.humanized(seed: "part:\(part.id):\(note.pitch)", bar: bar, step: step, amount: humanize)
-                                let vel = note.vel * mmel.vol * 1.25 * h.velScale
+                                let vel = note.vel * mmel.vol * 1.25 * mix("vox").gain * h.velScale
                                 synths.append(ExportSynth(patch: part.patch, midi: note.pitch, dur: dur, vel: vel,
-                                                          atSample: atSample + h.timeOffset * sr))
+                                                          atSample: atSample + h.timeOffset * sr, pan: mix("vox").pan, busKey: mix("vox").busKey))
                             }
                         }
                     }
@@ -204,22 +200,21 @@ extension Project {
                 // layered tracks (Add Track / send-to-track) — LIVE-LINKED tracks resolve their source
                 // live (so bounces match the edited source), FROZEN tracks bounce their captured copy.
                 for track in tracks where track.playsAdditively {   // frozen-to-audio bounces via its clip
-                    if trackMute[track.id] == true { continue }
-                    if trackSoloOn && !(trackSolo[track.id] ?? false) { continue }
+                    let tm = mix(track.id)
+                    if !tm.audible { continue }
                     if songMode && !trackPlaysInSong(track.id, atBar: bar) { continue }
                     // route to a group bus if assigned, else this track's own bus; apply the group fader as gain (G3.4)
-                    let busKey = track.busParent ?? (track.ownsBus ? track.id : nil)
-                    let gVol = track.busParent.flatMap { pid in tracks.first { $0.id == pid }?.vol } ?? 1
+                    let busKey = tm.busKey
                     switch track.type {
                     case .drumPattern:
-                        guard let tlanes = trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
+                        guard let tlanes = trackLanes(track, atBar: bar, context: context) else { continue }   // live-resolved if linked
                         for (padID, lane) in tlanes {
                             guard step < lane.count, lane[step] > 0 else { continue }
                             let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
                             if m.mute || (solo && !m.solo) { continue }
                             // Honor the linked track's live step prob/conditions/p-locks so the bounce matches
                             // playback (deterministic seed = reproducible, matching the classic export above). (#review)
-                            let sm = trackStepMeta(track, padID, step, atBar: bar)
+                            let sm = trackStepMeta(track, padID, step, atBar: bar, context: context)
                             if let sm {
                                 if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
                                 if sm.prob < 0.999 {
@@ -229,23 +224,21 @@ extension Project {
                                 }
                             }
                             let h = Project.humanized(seed: padID, bar: bar, step: step, amount: humanize)
-                            let vel = padVel(padID, fullLevel ? 1 : lane[step]) * padHitGain(padID) * track.vol * gVol * h.velScale
-                            var opts = padOpts(padID, meta: sm) ?? TriggerOpts()
-                            opts.pan = max(-1, min(1, opts.pan + track.pan))
-                            drums.append(ExportDrum(sound: soundFor(padID), vel: vel, opts: opts,
-                                                    atSample: atSample + padOffsetSec(padID) * sr + h.timeOffset * sr,
-                                                    sampleData: padSampleActive(padID) ? padSampleData[padID] : nil, busKey: busKey))
+                            let vel = padVel(padID, fullLevel ? 1 : lane[step]) * padHitGain(padID) * tm.gain * h.velScale
+                            appendPadPlayback(padID, velocity: vel,
+                                              atSample: atSample + padOffsetSec(padID) * sr + h.timeOffset * sr,
+                                              meta: sm, panOffset: tm.pan, busKey: busKey, drums: &drums, synths: &synths)
                         }
                     case .synthPart:
-                        guard let (notes, patch) = trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
+                        guard let (notes, patch) = trackNotes(track, atBar: bar, context: context) else { continue }   // live-resolved if linked
                         let mmel = mixer["melody"] ?? MixChannel(vol: 0.85)
                         if mmel.mute || (solo && !mmel.solo) { break }
                         for note in notes where note.step == step {
                             let dur = Double(note.dur) * stepDur
                             let h = Project.humanized(seed: "track:\(track.id):\(note.pitch)", bar: bar, step: step, amount: humanize)
-                            let vel = note.vel * mmel.vol * 1.25 * track.vol * gVol * h.velScale
+                            let vel = note.vel * mmel.vol * 1.25 * tm.gain * h.velScale
                             synths.append(ExportSynth(patch: patch, midi: note.pitch, dur: dur, vel: vel,
-                                                      atSample: atSample + h.timeOffset * sr, pan: track.pan, busKey: busKey))
+                                                      atSample: atSample + h.timeOffset * sr, pan: tm.pan, busKey: busKey))
                         }
                     default: break
                     }
@@ -257,8 +250,8 @@ extension Project {
         var clips: [ExportClip] = []
         var audioEnd = 0.0
         for clip in audioClips where !clip.muted {
-            if trackMute[clip.track] == true { continue }
-            if trackSoloOn && !(trackSolo[clip.track] ?? false) { continue }
+            let tm = mix(clip.track)
+            if !tm.audible || masterMuted { continue }
             // Placement must match live playback — Transport.audioClipsToFire. In Song Mode a clip sits at
             // its arrangement bar and is dropped past the end. In a loop / resample bounce
             // (songMode == false) live replays EVERY non-muted clip from the loop top on each pass, so the
@@ -271,8 +264,11 @@ extension Project {
             let bars = songMode ? [clip.startBar] : Array(0..<totalBars)
             for b in bars {
                 let atSample = Double(b) * stepDur * Double(n) * sr
-                clips.append(ExportClip(data: clip.data, dataR: clip.dataR, atSample: atSample, gain: clip.gain, channel: AudioEngine.melodyChannel))
-                audioEnd = max(audioEnd, atSample + Double(clip.data.count))
+                let limit = songMode ? nil : Int((stepDur * Double(n) * sr).rounded())
+                clips.append(ExportClip(data: clip.data, dataR: clip.dataR, atSample: atSample,
+                                        gain: clip.gain * tm.gain, channel: trackBusChannel(tm, fallback: AudioEngine.melodyChannel),
+                                        pan: tm.pan, maxFrames: limit))
+                audioEnd = max(audioEnd, atSample + Double(min(clip.data.count, limit ?? clip.data.count)))
             }
         }
 
@@ -292,6 +288,7 @@ extension Project {
     /// A DRY, unity-gain plan containing ONLY one frozen track's voices — for bus-freeze (render the
     /// track to an AudioClip so it costs one voice). No master FX/bus (re-applied on playback).
     func buildSoloTrackPlan(_ track: Track) -> ExportPlan {
+        let context = playbackContext
         // Freeze renders at the engine rate: the resulting clip is played back LIVE at core.sr, so a 48 k
         // bounce of a 96 k engine would play 2× fast. Match the rate (Phase 5/8). 48 k by default.
         let sr = engine.sampleRate, stepDur = (60 / Double(bpm)) / 4, n = max(1, barSteps)
@@ -309,12 +306,12 @@ extension Project {
                 let atSample = t * sr
                 switch track.type {
                 case .drumPattern:
-                    guard let tlanes = trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
+                    guard let tlanes = trackLanes(track, atBar: bar, context: context) else { continue }   // live-resolved if linked
                     for (padID, lane) in tlanes where step < lane.count && lane[step] > 0 {
                         let m = mixer[Kit.channelOf(padID)] ?? MixChannel()
                         // Same gate as live playback and the full bounce: a "fill" trig or a 50 % hat must
                         // freeze the way it plays, not at full density with its p-locks dropped (#transport-5).
-                        let sm = trackStepMeta(track, padID, step, atBar: bar)
+                        let sm = trackStepMeta(track, padID, step, atBar: bar, context: context)
                         if let sm {
                             if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: bar) { continue }
                             if sm.prob < 0.999 {
@@ -323,15 +320,16 @@ extension Project {
                                 if Double(seed % 997) / 997.0 > sm.prob { continue }
                             }
                         }
-                        var opts = padOpts(padID, meta: sm) ?? TriggerOpts(); opts.pan = max(-1, min(1, opts.pan + track.pan))
-                        drums.append(ExportDrum(sound: soundFor(padID), vel: padVel(padID, fullLevel ? 1 : lane[step]) * (m.vol * Project.padDrive * padVolMul(padID)) * track.vol,
-                                                opts: opts, atSample: atSample + padOffsetSec(padID) * sr,
-                                                sampleData: padSampleActive(padID) ? padSampleData[padID] : nil))
+                        let h = Project.humanized(seed: padID, bar: bar, step: step, amount: humanize)
+                        appendPadPlayback(padID,
+                                          velocity: padVel(padID, fullLevel ? 1 : lane[step]) * (m.vol * Project.padDrive * padVolMul(padID)) * h.velScale,
+                                          atSample: atSample + padOffsetSec(padID) * sr + h.timeOffset * sr,
+                                          meta: sm, panOffset: track.pan, drums: &drums, synths: &synths)
                     }
                 case .synthPart:
-                    guard let (notes, patch) = trackNotes(track, atBar: bar) else { continue }   // live-resolved if linked
+                    guard let (notes, patch) = trackNotes(track, atBar: bar, context: context) else { continue }   // live-resolved if linked
                     for note in notes where note.step == step {
-                        synths.append(ExportSynth(patch: patch, midi: note.pitch, dur: Double(note.dur) * stepDur, vel: note.vel * 1.25 * track.vol, atSample: atSample, pan: track.pan))
+                        synths.append(ExportSynth(patch: patch, midi: note.pitch, dur: Double(note.dur) * stepDur, vel: note.vel * 1.25, atSample: atSample, pan: track.pan))
                     }
                 default: break
                 }
@@ -353,12 +351,13 @@ nonisolated func buildVoices(_ plan: ExportPlan) -> [Voice] {
     var seed: UInt32 = 1
     for d in plan.drums.sorted(by: { $0.atSample < $1.atSample }) {
         seed &+= 0x9e3779b9
-        let pr = pow(2, d.opts.pitch / 12.0)
+        let pitch = d.opts.pitch.isFinite ? min(48, max(-48, d.opts.pitch)) : 0
+        let pr = pow(2, pitch / 12.0)
         // Imported one-shot: play the whole buffer (repitched) instead of synthesizing.
         if let data = d.sampleData {
             let sv = SampleVoice(data: data, offset: 0, dur: data.count, vel: d.vel, rate: pr)
             sv.startSample = d.atSample
-            sv.pan = d.opts.pan
+            sv.applyPadOptions(d.opts)
             let chKey = d.sound.hasPrefix("smp:") ? String(d.sound.dropFirst(4)) : d.sound
             sv.channel = d.busKey.flatMap { plan.busIndex[$0] } ?? (FX_CHANNELS.firstIndex(of: Kit.channelOf(chKey)) ?? 0)
             voices.append(sv)
@@ -368,14 +367,7 @@ nonisolated func buildVoices(_ plan: ExportPlan) -> [Voice] {
         v.startSample = d.atSample
         v.pan = d.opts.pan
         v.channel = d.busKey.flatMap { plan.busIndex[$0] } ?? (FX_CHANNELS.firstIndex(of: Kit.channelOf(d.sound)) ?? 0)
-        if let c = d.opts.cutoff, c < 17000 { v.extCutoff = max(80, c); v.extReso = d.opts.reso }
-        let needEnv = (d.opts.attack ?? 0.001) > 0.004 || d.opts.decay > 0 || (d.opts.sustain ?? 1) < 0.999 || (d.opts.release ?? 1.5) < 1.4
-        if needEnv {
-            v.hasAmp = true
-            v.aA = d.opts.attack ?? 0.001; v.aD = d.opts.decay; v.aS = d.opts.sustain ?? 1; v.aR = d.opts.release ?? 1.5
-            v.aLen = v.aA + v.aD + v.aR
-        }
-        v.chokeGroup = d.opts.chokeGroup
+        v.applyPadOptions(d.opts)
         voices.append(v)
     }
     for syn in plan.synths {
@@ -387,18 +379,30 @@ nonisolated func buildVoices(_ plan: ExportPlan) -> [Voice] {
         voices.append(v)
     }
     for c in plan.audioClips {
-        let v = AudioClipVoice(data: c.data, gain: c.gain)
+        let balance = Project.stereoBalance(c.pan)
+        let v = AudioClipVoice(data: c.data, gain: c.gain * (c.dataR == nil ? 1 : balance.left), maxFrames: c.maxFrames)
+        v.pan = c.pan
         v.startSample = c.atSample
         v.channel = c.channel
         if let r = c.dataR {                     // stereo take → two hard-panned voices (matches live playback)
             v.pan = -1
-            let vr = AudioClipVoice(data: r, gain: c.gain)
+            let vr = AudioClipVoice(data: r, gain: c.gain * balance.right, maxFrames: c.maxFrames)
             vr.startSample = c.atSample; vr.channel = c.channel; vr.pan = 1
             voices.append(vr)
         }
         voices.append(v)
     }
     for voice in voices { voice.quality = plan.quality }
+    // Choke groups cross mixer buses. Precompute their onsets across the full voice list before
+    // rendering stems one bus at a time; arm each fade only when that onset is reached.
+    var previous: [Int: Voice] = [:]
+    for voice in voices.sorted(by: { $0.startSample < $1.startSample }) where voice.chokeGroup != 0 {
+        if let victim = previous[voice.chokeGroup] {
+            victim.chokeFade = true
+            victim.chokeArmSample = max(0, voice.startSample.rounded(.up))
+        }
+        previous[voice.chokeGroup] = voice
+    }
     return voices
 }
 
@@ -452,7 +456,6 @@ nonisolated func renderStems(_ plan: ExportPlan, isCancelled: (@Sendable () -> B
         var nextIdx = 0, lastFrame = 0
         var anyAudio = false   // a genuinely all-zero bus is skipped; a quiet one is kept (round 3, export-3)
         var active: [Voice] = []
-        var chokeActive: [Int: DrumVoice] = [:]
         var kIdx = 0, lastKick = -1e18
 
         for i in 0..<n {
@@ -460,12 +463,6 @@ nonisolated func renderStems(_ plan: ExportPlan, isCancelled: (@Sendable () -> B
             let g = Double(i)
             while nextIdx < voices.count && voices[nextIdx].startSample <= g {
                 let v = voices[nextIdx]
-                if let dv = v as? DrumVoice, dv.chokeGroup != 0 {
-                    if let prev = chokeActive[dv.chokeGroup], !prev.finished {
-                        prev.chokeFade = true; prev.chokeT0 = (g - prev.startSample) / sr
-                    }
-                    chokeActive[dv.chokeGroup] = dv
-                }
                 active.append(v); nextIdx += 1
             }
             while kIdx < kickSamples.count && kickSamples[kIdx] <= g { lastKick = kickSamples[kIdx]; kIdx += 1 }
@@ -476,6 +473,7 @@ nonisolated func renderStems(_ plan: ExportPlan, isCancelled: (@Sendable () -> B
             while k < active.count {
                 let v = active[k]
                 if v.finished { active.remove(at: k); continue }
+                armOfflineChoke(v, sample: g, sr: sr)
                 let s = v.next(sr)
                 let (gl, gr) = exportPanGains(v.pan, quality: plan.quality); aL += s * gl; aR += s * gr
                 if v.finished { active.remove(at: k); continue }
@@ -510,7 +508,6 @@ nonisolated func renderOffline(_ plan: ExportPlan,
     let m = Float(plan.master)
     var nextIdx = 0
     var active: [Voice] = []
-    var chokeActive: [Int: DrumVoice] = [:]   // last hit per choke group (mirrors SynthCore)
     var lastFrame = 0
     let fx = FXChain(sr: sr)
     fx.configure(plan.fx, sr: sr)
@@ -556,13 +553,6 @@ nonisolated func renderOffline(_ plan: ExportPlan,
         // activate voices that start now — apply choke at the moment of activation
         while nextIdx < voices.count && voices[nextIdx].startSample <= g {
             let v = voices[nextIdx]
-            if let dv = v as? DrumVoice, dv.chokeGroup != 0 {
-                if let prev = chokeActive[dv.chokeGroup], !prev.finished {
-                    prev.chokeFade = true
-                    prev.chokeT0 = (g - prev.startSample) / sr   // prev's elapsed time → dt starts at 0
-                }
-                chokeActive[dv.chokeGroup] = dv
-            }
             active.append(v); nextIdx += 1
         }
         while kIdx < kickSamples.count && kickSamples[kIdx] <= g { lastKick = kickSamples[kIdx]; kIdx += 1 }
@@ -576,6 +566,7 @@ nonisolated func renderOffline(_ plan: ExportPlan,
         while k < active.count {
             let v = active[k]
             if v.finished { active.remove(at: k); continue }
+            armOfflineChoke(v, sample: g, sr: sr)
             var s = v.next(sr)
             if v.polyScaled { s *= exPolyGain }
             let ch = (v.channel >= 0 && v.channel < nch) ? v.channel : 0
@@ -766,3 +757,11 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 #endif
+
+/// Same onset rule as SynthCore's live render loop, including cross-bus stem choking.
+@inline(__always) nonisolated private func armOfflineChoke(_ voice: Voice, sample: Double, sr: Double) {
+    if voice.chokeFade && !voice.chokeArmed && sample >= voice.chokeArmSample {
+        voice.chokeT0 = (sample - voice.startSample) / sr
+        voice.chokeArmed = true
+    }
+}

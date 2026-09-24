@@ -178,6 +178,7 @@ private struct FirstRunFlow: ViewModifier {
     @Binding var showGenre: Bool
     @Binding var coachTip: String?
     @Binding var confirmNewBeat: Bool
+    @Binding var discardApproved: Bool
     @Binding var pendingGenre: String?   // a genre picked while the current beat has unsaved changes — confirm first
     @Binding var exportErr: String?
     var onSaveFirst: () -> Void
@@ -187,10 +188,10 @@ private struct FirstRunFlow: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay { if showTour { TourOverlay(settings: settings, show: $showTour, onDone: onTourDone) } }
-            .overlay { if showGenre { GenrePicker(settings: settings, onPick: onPick, onClose: { showGenre = false }) } }
+            .overlay { if showGenre { GenrePicker(settings: settings, onPick: onPick, onClose: { showGenre = false; discardApproved = false }) } }
             .alert("Start a new beat?", isPresented: $confirmNewBeat) {
                 Button("Save First") { onSaveFirst() }
-                Button("Discard & start new", role: .destructive) { showGenre = true }
+                Button("Discard & start new", role: .destructive) { discardApproved = true; showGenre = true }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This clears your current beat. Save it first if you want to keep it.") }
             // The genre cards used to replace the project outright — reachable from Help → tour → Skip with
@@ -256,6 +257,8 @@ struct RootView: View {
     @State private var tab = "pads"
     @State private var showSettings = false
     @State private var showProjects = false
+    @State private var saveAndNew = false
+    @State private var discardApproved = false
     @State private var didAutoLoad = false
     @AppStorage("fd.toured") private var toured = false
     @State private var showTour = false
@@ -320,8 +323,8 @@ struct RootView: View {
         .environmentObject(session)
         .environmentObject(midi)
         .modifier(FirstRunFlow(settings: settings, showTour: $showTour, showGenre: $showGenre, coachTip: $coachTip,
-                               confirmNewBeat: $confirmNewBeat, pendingGenre: $pendingGenre, exportErr: $exportErr,
-                               onSaveFirst: { showProjects = true },
+                               confirmNewBeat: $confirmNewBeat, discardApproved: $discardApproved, pendingGenre: $pendingGenre, exportErr: $exportErr,
+                               onSaveFirst: { saveAndNew = true; showProjects = true },
                                // Only the FIRST tour flows into the genre picker. Replaying it from the rail's Help
                                // button used to land on the picker too — one tap from wiping the current beat.
                                onTourDone: { if !toured { toured = true; showGenre = true } },
@@ -330,6 +333,7 @@ struct RootView: View {
             engine.start()
             project.pushMasterVolume()  // live master gain from the master fader (0.9 base × master.vol)
             applyAudio()                // push persisted buffer / polyphony / limiter prefs to the engine
+            engine.onMasterChainWillChange = { [weak project] in project?.checkpoint("plugins", coalesce: false) }
             wireMIDI()                  // CoreMIDI input → existing trigger APIs (Phase 6); no-op when no device
             session.project = project   // received ops apply into the live project
             // Joining replaces the beat (#sync-1). Explicit weak captures: an implicit `self` here retained the
@@ -357,20 +361,23 @@ struct RootView: View {
                 didAutoLoad = true
                 // Disk reads run off the main actor (no launch hitch on large projects); the sequence below
                 // stays ordered via sequential awaits on the main actor.
+                let launchDestination = ProjectRenderDestination(project)
                 Task { @MainActor in
                     await store.reload()   // populate the saved list off-main BEFORE resolving the last project
                     // Resolve the last project by STABLE ID first (survives rename/same-name collisions, #219),
                     // then fall back to the legacy name key (pre-id sessions), then to the most-recent save so
                     // the user is never silently dropped to a blank default.
                     var loaded: ProjectSnapshot? = nil
-                    if let id = store.lastProjectID { loaded = await store.loadByID(id) }
+                    if let id = store.lastProjectID { loaded = await store.loadByID(id, touchLastOpened: false) }
                     if loaded == nil, let nm = store.lastProjectName { loaded = await store.loadByName(nm) }
-                    if loaded == nil, let first = store.items.first { loaded = await store.load(first) }
+                    if loaded == nil, let first = store.items.first { loaded = await store.load(first, touchLastOpened: false) }
                     if let snap = loaded {
                         let miss = await store.missingAudioAssetsAsync(in: snap)   // RAW snap, off-main (round 2, persist-M3)
+                        guard launchDestination.matches(project), !project.hasUnsavedChanges else { return }
                         project.restore(store.repaired(snap))           // load into a clean state (item 9 health repair)
                         if !miss.isEmpty { missingAudio = miss }
                     }
+                    if loaded == nil && (!launchDestination.matches(project) || project.hasUnsavedChanges) { return }
                     settings.mergeLegacySavedSynths(project.savedSynths)   // migrate per-project saved patches → global library (#67)
                     if store.hasFreshAutosave() { recoverSnap = await store.autosaveSnapshot() }   // crash/quit recovery
                     if recoverSnap == nil && !toured { showTour = true }
@@ -401,19 +408,20 @@ struct RootView: View {
         // modifier chain, and inlining this alert pushed the expression past the type-checker's
         // limit ("unable to type-check this expression in reasonable time" at body's opening line).
         .modifier(SaveAudioFailureAlert(failed: project.audioWriteFailed) { project.audioWriteFailed = false })
-        .alert("Project cleaned up on load", isPresented: Binding(get: { !store.lastRepairs.isEmpty }, set: { if !$0 { store.clearRepairs() } })) {
+        .modifier(BackgroundOperationAlert(project: project))
+        .alert("Project updated on load", isPresented: Binding(get: { !store.lastRepairs.isEmpty }, set: { if !$0 { store.clearRepairs() } })) {
             Button("OK") { store.clearRepairs() }
         } message: {
-            Text("Some unreadable or orphaned data was removed so the project opens cleanly:\n\n• \(store.lastRepairs.prefix(8).joined(separator: "\n• "))\n\nSaving the project will make these changes permanent.")
+            Text("The following updates were made while opening this project:\n\n• \(store.lastRepairs.prefix(8).joined(separator: "\n• "))\n\nSaving the project will make these changes permanent.")
         }
         .onChange(of: settings.level) { _, _ in
             if !allowed.contains(tab) { tab = allowed.first ?? "pads" }
         }
         .onOpenURL { url in importSharedBeat(url) }
         .alert("Solo or mute is on", isPresented: Binding(get: { pendingMixGate != nil }, set: { if !$0 { pendingMixGate = nil } })) {
-            Button("Export as heard") { if let f = pendingMixGate { pendingMixGate = nil; quickExportAfterGate(f) } }
+            Button("Export with mute/solo") { if let f = pendingMixGate { pendingMixGate = nil; quickExportAfterGate(f) } }
             Button("Cancel", role: .cancel) { pendingMixGate = nil }
-        } message: { Text("The export follows the mixer exactly — soloed-out or muted channels, rows and tracks will be missing from the file.") }
+        } message: { Text("Muted and soloed-out channels, rows and tracks are excluded. Hosted AU effects are used only for live monitoring.") }
         .sheet(isPresented: $showSettings) {
             // Sheets don't inherit environmentObjects injected mid-hierarchy (settings/progress/midi live on
             // RootView, not the App root), so re-inject everything SettingsSheet reads — incl. midi (Phase 6).
@@ -421,8 +429,9 @@ struct RootView: View {
                 .environmentObject(link)   // the Link toggle is the only writer of LinkKit's enable flag (#20)
                 .presentationSizing(.page)   // full page sheet — the card sections need the height
         }
-        .sheet(isPresented: $showProjects) {
-            ProjectsSheet(onNewBeat: requestNewBeat)
+        .sheet(isPresented: $showProjects, onDismiss: { saveAndNew = false }) {
+            ProjectsSheet(onNewBeat: requestNewBeat, continueToNew: saveAndNew,
+                          onSavedForNew: { saveAndNew = false; showGenre = true })
                 .environmentObject(settings)
                 .environmentObject(project)
                 .environmentObject(store)
@@ -479,12 +488,12 @@ struct RootView: View {
     /// Genre quick-start pick. With unsaved work this is destructive and not undoable (`startFromTemplate`
     /// restores a fresh snapshot and clears the recovery slot), so it goes through a confirm first.
     private func pickGenre(_ id: String) {
-        if project.hasUnsavedChanges { pendingGenre = id } else { applyGenre(id) }
+        if project.hasUnsavedChanges && !discardApproved { pendingGenre = id } else { applyGenre(id) }
     }
     /// Seed the starter beat, auto-play it ("already grooving"), land on Pads, and nudge the first-time
     /// user toward the next step (jam / tweak / share).
     private func applyGenre(_ id: String) {
-        showGenre = false
+        showGenre = false; discardApproved = false
         project.startFromTemplate(id)
         // The previous beat's edits are discarded by the template switch, so its recovery slot must go with
         // it (and its now-unreferenced audio is reclaimed) instead of being offered back at the next launch.
@@ -629,8 +638,8 @@ struct RootView: View {
                 .accessibilityValue(Text("\(Int(quickExportProg.value * 100)) percent"))
             } else if project.hasExportableContent {   // bounce & share from any level (Tracks tab is hidden at Beginner)
                 Menu {
-                    Button { quickExport(.m4a) } label: { Label("M4A · easy to share", systemImage: "waveform") }
-                    Button { quickExport(.wav) } label: { Label("WAV · lossless", systemImage: "waveform.path") }
+                    Button { quickExport(.m4a) } label: { Label(engine.hasHostedEffects ? "M4A · without AU effects" : "M4A · easy to share", systemImage: "waveform") }
+                    Button { quickExport(.wav) } label: { Label(engine.hasHostedEffects ? "WAV · without AU effects" : "WAV · lossless", systemImage: "waveform.path") }
                 } label: {
                     Image(systemName: "square.and.arrow.up").font(.system(size: 17)).foregroundStyle(th.inkFaint)
                         .frame(width: 44, height: 44)
@@ -789,7 +798,7 @@ struct RootView: View {
         case .failed:
             bannerBtn("Failed — Retry") { Task { await session.submitCurrentBeat() } }
         case .idle:
-            bannerBtn("Submit") { Task { await session.submitCurrentBeat() } }
+            bannerBtn(engine.hasHostedEffects ? "Submit without AU effects" : "Submit") { Task { await session.submitCurrentBeat() } }
         }
     }
     private func bannerBtn(_ label: String, _ action: @escaping () -> Void) -> some View {
@@ -818,20 +827,25 @@ struct RootView: View {
     /// finger-tap path (trigger + visual bump + record-if-armed) so MIDI drumming records like taps.
     private func wireMIDI() {
         midi.onPad = { [weak project, weak engine, weak fx, weak transport] idx, vel in
-            guard let project, let engine, idx >= 0 && idx < Kit.pads.count else { return }
-            let padID = Kit.pads[idx].id
+            let pads = project.map { Kit.banks[$0.bank]?.pads ?? Kit.pads } ?? Kit.pads   // the bank on screen, like a tap
+            guard let project, let engine, idx >= 0 && idx < pads.count else { return }
+            let padID = pads[idx].id
             engine.start()
             project.triggerPad(padID, accent: vel >= 0.8)
             fx?.bump(padID)
             if project.recording {
                 if project.bank == "D", project.synthBank?[padID] != nil {
-                    project.recordSynthPad(padID, transport?.recordFraction() ?? 0)
+                    project.recordSynthPad(padID, transport?.recordFraction() ?? 0, vel: vel)
                 } else {
                     project.recordHit(padID, transport?.recordFraction() ?? 0, vel: vel)
                 }
             }
         }
-        midi.onNoteOn  = { [weak project, weak engine] note, vel, channel in engine?.start(); project?.synthNoteOn("midi-\(channel)-\(note)", midi: note, vel: vel) }   // pass controller velocity (#MIDI-02)
+        midi.onNoteOn = { [weak project, weak engine, weak transport] note, vel, channel in
+            engine?.start()
+            project?.playAndRecordNote("midi-\(channel)-\(note)", midi: note, velocity: vel,
+                                       fraction: transport?.recordFraction() ?? 0)
+        }
         midi.onNoteOff = { [weak project] note, channel in project?.synthNoteOff("midi-\(channel)-\(note)") }
         midi.onPanic   = { [weak engine, weak project] in
             project?.assistHeld.removeAll(); project?.stopArp(); engine?.allNotesOff()
@@ -846,7 +860,7 @@ struct RootView: View {
             case "sequence": SequenceModeView()
             case "synth": SynthModeView()
             case "sample": SampleModeView(openTab: { tab = $0 })
-            case "tracks": TrackModeView(openSequenceTab: { tab = "sequence" })
+            case "tracks": TrackModeView(openSequenceTab: { tab = "sequence" }, openSynthTab: { tab = "synth" })
             case "mixer": MixerModeView()
             case "theory": TheoryModeView(openTab: { tab = $0 })
             case "learn": LearnModeView(engine: engine, fx: fx, onXP: { progress.addXP($0) }, openTab: { tab = $0 })
@@ -896,5 +910,17 @@ private struct ClassSessionSync: ViewModifier {
             .onChange(of: session.classEndedByHost) { _, ended in if ended { onClassEnded() } }
             .onChange(of: session.isFollowing) { _, _ in project.editingLocked = session.isFollowing && !session.forked }
             .onChange(of: session.forked) { _, _ in project.editingLocked = session.isFollowing && !session.forked }
+    }
+}
+
+private struct BackgroundOperationAlert: ViewModifier {
+    @ObservedObject var project: Project
+    func body(content: Content) -> some View {
+        content.alert("Operation stopped", isPresented: Binding(
+            get: { project.backgroundOperationNotice != nil },
+            set: { if !$0 { project.backgroundOperationNotice = nil } }
+        )) {
+            Button("OK") { project.backgroundOperationNotice = nil }
+        } message: { Text(project.backgroundOperationNotice ?? "") }
     }
 }

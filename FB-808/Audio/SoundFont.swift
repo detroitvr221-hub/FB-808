@@ -7,7 +7,7 @@
 import Foundation
 
 /// One key-mapped sample zone of a SoundFont instrument.
-struct SFRegion {
+nonisolated struct SFRegion: Sendable {
     var loKey: Int, hiKey: Int          // MIDI key range this sample covers
     var rootKey: Int                    // the MIDI note the sample plays at original pitch
     var tuneCents: Int                  // fine pitch correction
@@ -17,12 +17,12 @@ struct SFRegion {
     var pcm: [Float]                    // mono PCM, −1..1
 }
 
-struct SFInstrument {
+nonisolated struct SFInstrument: Sendable {
     var name: String
     var regions: [SFRegion]
 }
 
-enum SoundFont {
+nonisolated enum SoundFont {
 
     // little-endian readers over Data
     private static func u16(_ d: Data, _ o: Int) -> Int { Int(d[o]) | (Int(d[o + 1]) << 8) }

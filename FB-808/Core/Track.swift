@@ -98,6 +98,8 @@ struct Track: Identifiable, Codable {
     var height: CGFloat = 64
     var ownsBus: Bool = false        // G3: the track has its own DSP insert-FX strip (channelFX[id])
     var busParent: String? = nil     // G3.4: route this track's voices into a `.bus` group track's strip
+    var frozenSourceGain: Double? = nil
+    var frozenSourcePan: Double? = nil
     var frozenToAudio: Bool = false  // bus-freeze: live synthesis is bounced to an AudioClip (this track plays it instead)
 
     var color: Color { Color(hex: colorHex) }
@@ -115,7 +117,7 @@ struct Track: Identifiable, Codable {
         self.id = id; self.name = name; self.type = type; self.source = source
         self.colorHex = colorHex; self.vol = vol; self.pan = pan; self.height = height
     }
-    enum CodingKeys: String, CodingKey { case id, name, type, source, colorHex, vol, pan, height, ownsBus, busParent, frozenToAudio }
+    enum CodingKeys: String, CodingKey { case id, name, type, source, colorHex, vol, pan, height, ownsBus, busParent, frozenToAudio, frozenSourceGain, frozenSourcePan }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -129,6 +131,8 @@ struct Track: Identifiable, Codable {
         ownsBus = (try? c.decode(Bool.self, forKey: .ownsBus)) ?? false
         busParent = try? c.decodeIfPresent(String.self, forKey: .busParent)
         frozenToAudio = (try? c.decode(Bool.self, forKey: .frozenToAudio)) ?? false
+        frozenSourceGain = (try? c.decodeIfPresent(Double.self, forKey: .frozenSourceGain)) ?? (frozenToAudio ? vol : nil)
+        frozenSourcePan = (try? c.decodeIfPresent(Double.self, forKey: .frozenSourcePan)) ?? (frozenToAudio ? pan : nil)
     }
 
     // Distinct colors for new tracks; cycles as the list grows.
@@ -200,6 +204,26 @@ extension Project {
 
     // MARK: add / remove / edit
 
+    /// Give an empty/new track an editable source, then navigate to the same pattern or part.
+    func chooseTrackSource(_ id: String, sequence: Int? = nil, part: String? = nil, newPart: Bool = false) {
+        guard let i = tracks.firstIndex(where: { $0.id == id }), !tracks[i].frozenToAudio else { return }
+        if tracks[i].type == .drumPattern, let sequence, sequences.indices.contains(sequence) {
+            checkpoint("trackSource", coalesce: false)
+            tracks[i].source = TrackSource(link: LinkRef(kind: .sequenceLanes, seqIndex: sequence))
+            switchSequence(sequence, record: false)
+        } else if tracks[i].type == .synthPart {
+            guard newPart || partList.contains(where: { $0.id == part }) else { return }
+            checkpoint("trackSource", coalesce: false)
+            let partID: String
+            if newPart {
+                partID = "part-" + UUID().uuidString
+                parts.append(InstrumentPart(id: partID, name: tracks[i].name, patch: SynthPresets.default, notes: []))
+            } else { partID = part ?? "lead" }
+            tracks[i].source = TrackSource(partID: partID, link: LinkRef(kind: .part, partID: partID))
+            activePart = partID
+        }
+    }
+
     /// Append an empty track of `type`. Returns its id, or "" if at the 99 cap.
     @discardableResult
     func addTrack(_ type: TrackType) -> String {
@@ -231,6 +255,9 @@ extension Project {
         trackSolo[id] = nil
         audioClips.removeAll { $0.track == id }
         if audioArmedTrack == id { audioArmedTrack = nil }
+        for i in tracks.indices where tracks[i].busParent == id { tracks[i].busParent = nil }
+        channelFX[id] = nil
+        pushChannelFX()
     }
 
     /// Reorder a track one slot up or down (drives Move Up / Move Down in the track menu).
@@ -301,7 +328,11 @@ extension Project {
     func setTrackBusParent(_ id: String, _ parent: String?) {
         guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
         checkpoint("busparent:\(id)", coalesce: false)
-        tracks[i].busParent = (parent == id) ? nil : parent   // never self-route
+        tracks[i].busParent = parent.flatMap { pid in
+            guard pid != id, tracks[i].type != .bus,
+                  tracks.contains(where: { $0.id == pid && $0.type == .bus }) else { return nil }
+            return pid
+        }
     }
     /// The `.bus` group tracks, for the "Route to Bus" picker.
     var busTracks: [Track] { tracks.filter { $0.type == .bus } }
@@ -311,20 +342,22 @@ extension Project {
     /// Bounce a frozen drum/synth track's content to an AudioClip on itself; live synthesis is then
     /// skipped (plays the clip → one voice instead of N). Best in Song Mode (renders the arrangement).
     @discardableResult
-    func freezeTrack(_ id: String) async -> Bool {
-        guard let i = tracks.firstIndex(where: { $0.id == id }),
+    func freezeTrack(_ id: String, render: ProjectOfflineRenderer = Project.renderOfflinePlan) async -> Bool {
+        guard !isBouncing, let i = tracks.firstIndex(where: { $0.id == id }),
               (tracks[i].isFrozen || tracks[i].isLinked), !tracks[i].frozenToAudio else { return false }
         let plan = buildSoloTrackPlan(tracks[i])   // resolves the link to live content if linked
         guard !plan.drums.isEmpty || !plan.synths.isEmpty else { return false }
+        let destination = ProjectRenderDestination(self)
         isBouncing = true; defer { isBouncing = false }
-        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor so the UI stays live (#ARCH-01)
-        guard !l.isEmpty else { return false }
-        var mono = [Float](repeating: 0, count: l.count)
-        for k in 0..<l.count { mono[k] = (l[k] + r[k]) * 0.5 }
+        let (l, r) = await render(plan)
+        guard acceptRender(destination), !l.isEmpty, l.count == r.count,
+              let i = tracks.firstIndex(where: { $0.id == id }), !tracks[i].frozenToAudio else { return false }
         // Only mark the track frozen once its bounce actually landed on disk — a track flagged frozen with
         // no clip is suppressed from live playback and plays nothing (#PERSIST-CLIP).
-        guard addAudioClip(track: id, startBar: 0, data: mono, name: "\(tracks[i].name) (frozen)") else { return false }
+        // Preserve layer and track pan in the rendered stereo pair.
+        guard addAudioClip(track: id, startBar: 0, data: l, dataR: r, name: "\(tracks[i].name) (frozen)") else { return false }
         tracks[i].frozenToAudio = true
+        tracks[i].frozenSourceGain = 1; tracks[i].frozenSourcePan = tracks[i].pan
         return true
     }
     func unfreezeTrack(_ id: String) {
@@ -442,7 +475,7 @@ extension Project {
 
     /// Resolve a drum link to the live lanes it points at (filtered to its rows). Returns nil for
     /// non-drum kinds. Call ONCE PER BAR (not per step) — the additive scheduler hoists this.
-    func resolvedLanes(_ link: LinkRef, atBar bar: Int, pinnedSeq: Int? = nil) -> [String: [Double]]? {
+    func resolvedLanes(_ link: LinkRef, atBar bar: Int, pinnedSeq: Int? = nil, context: PlaybackContext? = nil) -> [String: [Double]]? {
         switch link.kind {
         case .lanes:
             // In Song Mode resolve through the bar's arranged sequence so a linked track mirrors the same
@@ -450,44 +483,44 @@ extension Project {
             // so single-sequence / non-song projects are unaffected). (#review)
             // `pinnedSeq` is the track's own clip pattern when it sets one, so a linked track follows the
             // clip rather than the section (SEQUENCE_TRACKS_AUDIT finding 1).
-            let src = songMode ? lanesOfSeq(pinnedSeq ?? sequenceIndexForBar(bar)) : lanes
+            let src = (context ?? playbackContext) == .song ? lanesOfSeq(pinnedSeq ?? sequenceIndexForBar(bar, context: context)) : lanes
             guard let rows = link.rows else { return src }
             return src.filter { rows.contains($0.key) }
         case .sequenceLanes:
             guard let si = link.seqIndex, sequences.indices.contains(si) else { return nil }
-            let src = sequences[si].lanes
+            let src = lanesOfSeq(si)
             guard let rows = link.rows else { return src }
             return src.filter { rows.contains($0.key) }
         default: return nil
         }
     }
     /// Resolve a melody/part link to the live notes + patch it points at. Returns nil for non-synth kinds.
-    func resolvedNotes(_ link: LinkRef, atBar bar: Int, pinnedSeq: Int? = nil) -> (notes: [MelodyNote], patch: SynthPatch)? {
-        let arranged = pinnedSeq ?? sequenceIndexForBar(bar)
+    func resolvedNotes(_ link: LinkRef, atBar bar: Int, pinnedSeq: Int? = nil, context: PlaybackContext? = nil) -> (notes: [MelodyNote], patch: SynthPatch)? {
+        let arranged = pinnedSeq ?? sequenceIndexForBar(bar, context: context)
         switch link.kind {
         case .melody:
-            return (songMode ? melodyOfSeq(arranged) : melody, synthPatch)
+            return ((context ?? playbackContext) == .song ? melodyOfSeq(arranged) : melody, synthPatch)
         case .part:
-            if link.partID == nil || link.partID == "lead" { return (songMode ? melodyOfSeq(arranged) : melody, synthPatch) }
-            let pool = songMode ? partsOfSeq(arranged) : parts
+            if link.partID == nil || link.partID == "lead" { return ((context ?? playbackContext) == .song ? melodyOfSeq(arranged) : melody, synthPatch) }
+            let pool = (context ?? playbackContext) == .song ? partsOfSeq(arranged) : parts
             guard let p = pool.first(where: { $0.id == link.partID }) else { return nil }
             return (p.notes, p.patch)
         case .sequenceMelody:
             guard let si = link.seqIndex, sequences.indices.contains(si) else { return nil }
-            return (sequences[si].melody, synthPatch)
+            return (melodyOfSeq(si), synthPatch)
         default: return nil
         }
     }
     /// Effective lanes for an additively-played drum track (link-resolved if linked, else the frozen copy).
-    func trackLanes(_ track: Track, atBar bar: Int) -> [String: [Double]]? {
+    func trackLanes(_ track: Track, atBar bar: Int, context: PlaybackContext? = nil) -> [String: [Double]]? {
         let pinned = clipSeq(track: track.id, atBar: bar)
-        return track.isLinked ? (track.source.link.flatMap { resolvedLanes($0, atBar: bar, pinnedSeq: pinned) }) : track.source.lanes
+        return track.isLinked ? (track.source.link.flatMap { resolvedLanes($0, atBar: bar, pinnedSeq: pinned, context: context) }) : track.source.lanes
     }
     /// Effective notes+patch for an additively-played synth track (link-resolved if linked, else frozen).
-    func trackNotes(_ track: Track, atBar bar: Int) -> (notes: [MelodyNote], patch: SynthPatch)? {
+    func trackNotes(_ track: Track, atBar bar: Int, context: PlaybackContext? = nil) -> (notes: [MelodyNote], patch: SynthPatch)? {
         if track.isLinked {
             let pinned = clipSeq(track: track.id, atBar: bar)
-            return track.source.link.flatMap { resolvedNotes($0, atBar: bar, pinnedSeq: pinned) }
+            return track.source.link.flatMap { resolvedNotes($0, atBar: bar, pinnedSeq: pinned, context: context) }
         }
         if let n = track.source.notes, let p = track.source.patch { return (n, p) }
         return nil
@@ -495,15 +528,15 @@ extension Project {
     /// Live per-step probability/condition/p-locks for a LINKED drum track's pad, from the same source
     /// as its lanes — so a linked track keeps the authored stepMeta the live grid has (Step 3). Frozen
     /// copies have no stepMeta (a captured snapshot never carried it).
-    func trackStepMeta(_ track: Track, _ pad: String, _ step: Int, atBar bar: Int) -> StepMeta? {
+    func trackStepMeta(_ track: Track, _ pad: String, _ step: Int, atBar bar: Int, context: PlaybackContext? = nil) -> StepMeta? {
         guard track.isLinked, let link = track.source.link else { return nil }
         switch link.kind {
         case .lanes:
             // Same pattern the lanes came from, so a pinned clip's probability/conditions/p-locks match
             // the notes it is actually playing.
-            let i = clipSeq(track: track.id, atBar: bar) ?? sequenceIndexForBar(bar)
-            return (songMode ? stepMetaOfSeq(i) : stepMeta)[pad]?[step]
-        case .sequenceLanes: return link.seqIndex.flatMap { sequences.indices.contains($0) ? sequences[$0].stepMeta[pad]?[step] : nil }
+            let i = clipSeq(track: track.id, atBar: bar) ?? sequenceIndexForBar(bar, context: context)
+            return ((context ?? playbackContext) == .song ? stepMetaOfSeq(i) : stepMeta)[pad]?[step]
+        case .sequenceLanes: return link.seqIndex.flatMap { sequences.indices.contains($0) ? stepMetaOfSeq($0)[pad]?[step] : nil }
         default:             return nil
         }
     }

@@ -59,7 +59,7 @@ final class Transport: ObservableObject {
     private var stepCacheTracks = -1
     private var stepCacheRevision: UInt64 = .max
     private var cachedBusIdx: [String: Int] = [:]
-    private var cachedTrackVol: [String: Double] = [:]
+    private var cachedTrackMixes: [String: TrackMix] = [:]
     private var cachedOwnedRows = Set<String>()
     private var cachedOwnedLeadMelody = false
     private var cachedOwnedPartIDs = Set<String>()
@@ -93,7 +93,7 @@ final class Transport: ObservableObject {
         stepCacheTracks = p.tracks.count
         stepCacheRevision = p.editRevision
         cachedBusIdx = p.busIndex
-        cachedTrackVol = Dictionary(p.tracks.map { ($0.id, $0.vol) }, uniquingKeysWith: { a, _ in a })
+        cachedTrackMixes = Dictionary(p.tracks.map { ($0.id, p.trackMix($0.id)) }, uniquingKeysWith: { a, _ in a })
         cachedOwnedRows = []
         cachedOwnedLeadMelody = false
         cachedOwnedPartIDs = []
@@ -125,13 +125,7 @@ final class Transport: ObservableObject {
         self.project = project
         self.engine = engine
         self.fx = fx
-        // A take that cannot continue (input format changed, media services reset, interruption) is
-        // committed with the audio captured so far instead of being dropped.
-        engine.onRecordingInterrupted = { [weak self] in
-            guard let self, self.project.recording else { return }   // only a TRANSPORT take; Sample Mode owns its own capture
-            self.finishAudioRecord()
-            self.project.recording = false   // the take is over — the record button must not stay lit (round 2, lifecycle-3)
-        }
+        project.beforeProjectReplacement = { [weak self] in self?.stop() }
         // Toggling Song Mode while playing used to keep the old barCount/loopPass, so Loop-Mode conditional
         // trigs resumed on a stale pass number and the Tracks playhead sat on a frozen bar until Stop.
         songModeSub = project.$songMode.dropFirst().removeDuplicates().sink { [weak self] _ in
@@ -346,7 +340,7 @@ final class Transport: ObservableObject {
     }
 
     func stop() {
-        if engine.isMicRecording { finishAudioRecord() }
+        engine.finishMicCapture()
         playing = false
         timer?.cancel()
         timer = nil
@@ -365,18 +359,25 @@ final class Transport: ObservableObject {
     func record() {
         if project.recording {
             project.recording = false
-            finishAudioRecord()
+            if let owner = engine.micOwner, case .track = owner { engine.finishMicCapture(owner: owner) }
             return
         }
-        if project.audioArmedTrack != nil {
+        if let trackID = project.audioArmedTrack {
+            guard engine.micOwner == nil else { project.backgroundOperationNotice = "Finish the current microphone capture before starting a track take."; return }
             // bring up the play-and-record session BEFORE starting the transport so the
             // engine doesn't restart mid-playback
-            engine.startMicRecording { [weak self] ok in
-                guard let self else { return }
+            let projectID = project.projectID
+            let owner = AudioEngine.MicOwner.track(project: projectID, track: trackID)
+            engine.startMicRecording(owner: owner, finish: { [weak self] in
+                self?.finishAudioRecord()
+                self?.project.recording = false
+            }) { [weak self] ok in
+                guard let self, self.project.projectID == projectID else { return }
                 guard ok else { self.project.micRecordFailed = true; return }   // denied/failed → don't fake a recording
                 self.project.recording = true
                 let punch = self.project.punchInBar      // bars before it are count-in
-                self.audioRecTrackID = self.project.audioArmedTrack
+                self.audioRecTrackID = trackID
+                self.project.checkpoint("startCapture", coalesce: false)
 
                 self.audioRecStartBar = punch
                 if !self.playing { self.start() }
@@ -399,15 +400,18 @@ final class Transport: ObservableObject {
         // Stop the capture FIRST: if the track was disarmed/deleted mid-take, bailing before
         // stopMicRecordingRaw() left the tap installed and the session pinned to play-and-record, and the next
         // record attempt showed a bogus "microphone access" alert (SYSTEMS_GAP_AUDIT #lifecycle-5).
-        guard engine.isMicRecording else { return }
+        guard engine.isMicRecording, case .track = engine.micOwner else { return }
         let take = engine.stopMicRecordingRaw()
         // Fall back to the track that was armed when the take STARTED: disarming/deleting it mid-take used
         // to drop the captured audio silently (round 2, cross-4).
         guard let (raw, rawR, lat) = take else { audioRecTrackID = nil; return }
         let armed = audioRecTrackID ?? project.audioArmedTrack   // the track the take STARTED on wins over a mid-take re-arm
         audioRecTrackID = nil
-        guard let track = armed, project.tracks.contains(where: { $0.id == track }) else {
-            fdLog.error("take dropped: its track no longer exists"); return
+        let track: String
+        if let armed, project.tracks.contains(where: { $0.id == armed }) { track = armed }
+        else {
+            track = project.tracks.first(where: { $0.type == .audio })?.id ?? project.addTrack(.audio)
+            project.backgroundOperationNotice = "The recording track was removed. Your take was kept on an audio track."
         }
         let preRoll = max(0, audioRecBar0 - audioRecStartNow)
         let offset = Double(project.audioRecOffsetMs) / 1000.0
@@ -485,7 +489,6 @@ final class Transport: ObservableObject {
 
         let solo = p.mixer.values.contains { $0.solo }
         let rowSolo = p.rowSolo.values.contains(true)
-        let trackSolo = p.trackSolo.values.contains(true)
         let song = p.songMode
         let bar = barCount            // schedule against the lookahead bar (the bar these hits will play in)
         // Per-bar conditional trigs: the arrangement bar in Song Mode, the loop pass in Loop Mode (where
@@ -497,21 +500,28 @@ final class Transport: ObservableObject {
         let master = p.mixer["master"] ?? MixChannel(vol: 0.9)
         if master.mute { return }
 
+        if s == 0 || stepCacheBar != bar || stepCacheTracks != p.tracks.count || stepCacheRevision != p.editRevision {
+            refreshStepCache(bar: bar, curLanes: curLanes, curMeta: curMeta, song: song)
+        }
+        func mix(_ id: String) -> TrackMix { cachedTrackMixes[id] ?? p.trackMix(id) }
+
         // audio clips that start on this bar (A5 multitrack)
         if s == 0 && !p.audioClips.isEmpty {
             let fire = Self.audioClipsToFire(p.audioClips, atBar: bar, songMode: song)
             // Loop Mode replays the clip layer from the top every pass; stop the previous pass's voices
             // first so a take longer than the loop can't stack on (and amplify) itself. (#16)
-            if fire.restart { engine.stopClips() }
+            let limit = fire.restart ? Int((secPerStep() * Double(p.barSteps) * engine.sampleRate).rounded()) : nil
             for clip in fire.clips {
                 let tk = clip.track
-                if p.trackMute[tk] == true { continue }
-                if trackSolo && !(p.trackSolo[tk] ?? false) { continue }
+                let tm = mix(tk)
+                if !tm.audible { continue }
+                let ch = p.trackBusChannel(tm, fallback: AudioEngine.melodyChannel)
+                let gain = clip.gain * tm.gain, balance = Project.stereoBalance(tm.pan)
                 if let r = clip.dataR {   // stereo take → two hard-panned (±1) voices reconstruct L/R
-                    engine.playClip(clip.data, when: time, gain: clip.gain, channel: AudioEngine.melodyChannel, pan: -1)
-                    engine.playClip(r,         when: time, gain: clip.gain, channel: AudioEngine.melodyChannel, pan: 1)
+                    engine.playClip(clip.data, when: time, gain: gain * balance.left, channel: ch, pan: -1, maxFrames: limit)
+                    engine.playClip(r,         when: time, gain: gain * balance.right, channel: ch, pan: 1, maxFrames: limit)
                 } else {
-                    engine.playClip(clip.data, when: time, gain: clip.gain, channel: AudioEngine.melodyChannel)
+                    engine.playClip(clip.data, when: time, gain: gain, channel: ch, pan: tm.pan, maxFrames: limit)
                 }
             }
         }
@@ -520,9 +530,6 @@ final class Transport: ObservableObject {
         // promoted / sent pattern plays exactly ONCE (via its track), not doubled. Seeded tracks own
         // nothing; a frozen copy owns the source it captured, and a baked-to-audio track owns the source
         // its clip replaced. (#15)
-        if s == 0 || stepCacheBar != bar || stepCacheTracks != p.tracks.count || stepCacheRevision != p.editRevision {
-            refreshStepCache(bar: bar, curLanes: curLanes, curMeta: curMeta, song: song)
-        }
         let ownedRows = cachedOwnedRows
         let ownedLeadMelody = cachedOwnedLeadMelody
         let ownedPartIDs = cachedOwnedPartIDs
@@ -539,8 +546,8 @@ final class Transport: ObservableObject {
             if rowSolo && !(p.rowSolo[padID] ?? false) { continue }
             // Tracks tab mute/solo
             let tk = Kit.trackOf(padID)
-            if p.trackMute[tk] == true { continue }
-            if trackSolo && !(p.trackSolo[tk] ?? false) { continue }
+            let tm = mix(tk)
+            if !tm.audible { continue }
             // Song Mode: only play tracks that have a clip in this bar
             if song && !p.trackPlaysInSong(tk, atBar: bar) { continue }
             let m = p.mixer[Kit.channelOf(padID)] ?? MixChannel()
@@ -552,26 +559,24 @@ final class Transport: ObservableObject {
                 if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: trigBar) { continue }
                 if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
             }
-            let v = p.padVel(padID, p.fullLevel ? 1 : vel) * p.padHitGain(padID) * p.humVel()
+            let v = p.padVel(padID, p.fullLevel ? 1 : vel) * p.padHitGain(padID) * tm.gain * p.humVel()
             let when = time + p.padOffsetSec(padID) + p.humTime()
-            engine.trigger(p.soundFor(padID), vel: v, when: when, opts: p.padOpts(padID, meta: sm))
-            p.triggerPadLayers(padID, vel: v, when: when)
+            p.triggerPadPlayback(padID, velocity: v, when: when, meta: sm, panOffset: tm.pan, channel: tm.busKey.flatMap { p.busOrder.firstIndex(of: $0) })
             flash(padID, at: time)
         }
 
         // synth / melody track (played by the knob-driven patch) — gated by the "vox" arrangement track
         // The vox clip can pin its own pattern, so the lead resolves per-track rather than per-bar.
         let voxMelody = song ? p.melodyForTrack("vox", atBar: bar) : curMelody
-        if !p.melodyMuted, !ownedLeadMelody, !voxMelody.isEmpty, p.trackMute["vox"] != true,
-           !(trackSolo && !(p.trackSolo["vox"] ?? false)),
+        if !p.melodyMuted, !ownedLeadMelody, !voxMelody.isEmpty, mix("vox").audible,
            !(song && !p.trackPlaysInSong("vox", atBar: bar)) {
             let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
             if !mmel.mute && !(solo && !mmel.solo) {
                 let patch = p.synthPatch
                 for note in voxMelody where note.step == s {
                     let durSec = Double(note.dur) * secPerStep()
-                    let v = note.vel * mmel.vol * 1.25 * p.humVel()
-                    engine.triggerSynth(patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime())
+                    let v = note.vel * mmel.vol * 1.25 * mix("vox").gain * p.humVel()
+                    engine.triggerSynth(patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime(), pan: mix("vox").pan, channel: mix("vox").busKey.flatMap { p.busOrder.firstIndex(of: $0) })
                 }
             }
         }
@@ -579,8 +584,7 @@ final class Transport: ObservableObject {
         // extra instrument parts (Tier 2) — own gate: per-sequence in Song Mode, NOT tied to the
         // vox clip or melody mute, but still honoring the vox track mute/solo and the melody channel.
         let curParts = song ? p.partsForTrack("vox", atBar: bar) : p.parts
-        if !curParts.isEmpty, p.trackMute["vox"] != true,
-           !(trackSolo && !(p.trackSolo["vox"] ?? false)) {
+        if !curParts.isEmpty, mix("vox").audible {
             let mmel = p.mixer["melody"] ?? MixChannel(vol: 0.85)
             if !mmel.mute && !(solo && !mmel.solo) {
                 for part in curParts where !part.muted && !ownedPartIDs.contains(part.id) {
@@ -589,8 +593,8 @@ final class Transport: ObservableObject {
                         // Humanize like the lead melody and the tracks: the parts path was the one synth
                         // path live left dead on the grid, so it was the only one that disagreed with the
                         // bounce once the bounce humanized every synth path. (finding 73)
-                        let v = note.vel * mmel.vol * 1.25 * p.humVel()
-                        engine.triggerSynth(part.patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime())
+                        let v = note.vel * mmel.vol * 1.25 * mix("vox").gain * p.humVel()
+                        engine.triggerSynth(part.patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime(), pan: mix("vox").pan, channel: mix("vox").busKey.flatMap { p.busOrder.firstIndex(of: $0) })
                     }
                 }
             }
@@ -603,14 +607,12 @@ final class Transport: ObservableObject {
         //    above (no double-trigger). Link resolution is per-step here, matching the existing
         //    curLanes/trackVol per-step cost; a per-bar cache is a future optimization. (SYSTEM_AUDIT Step 1)
         let busIdx = cachedBusIdx
-        let trackVol = cachedTrackVol
         for track in p.tracks where track.playsAdditively {   // linked OR frozen, not frozen-to-audio (plays via clip)
-            if p.trackMute[track.id] == true { continue }
-            if trackSolo && !(p.trackSolo[track.id] ?? false) { continue }
+            let tm = mix(track.id)
+            if !tm.audible { continue }
             if song && !p.trackPlaysInSong(track.id, atBar: bar) { continue }
             // route to a group bus if assigned, else this track's own bus; group bus applies its fader as group gain (G3.4)
-            let busCh = track.busParent.flatMap { busIdx[$0] } ?? (track.ownsBus ? busIdx[track.id] : nil)
-            let gVol = track.busParent.flatMap { trackVol[$0] } ?? 1
+            let busCh = tm.busKey.flatMap { busIdx[$0] }
             switch track.type {
             case .drumPattern:
                 guard let tlanes = p.trackLanes(track, atBar: bar) else { continue }   // live-resolved if linked
@@ -624,12 +626,9 @@ final class Transport: ObservableObject {
                         if !sm.cond.isEmpty && !Project.condPass(sm.cond, bar: trigBar) { continue }
                         if sm.prob < 0.999 && Double.random(in: 0..<1) > sm.prob { continue }
                     }
-                    let v = p.padVel(pad, p.fullLevel ? 1 : lane[s]) * p.padHitGain(pad) * track.vol * gVol * p.humVel()
+                    let v = p.padVel(pad, p.fullLevel ? 1 : lane[s]) * p.padHitGain(pad) * tm.gain * p.humVel()
                     let when = time + p.padOffsetSec(pad) + p.humTime()
-                    var opts = p.padOpts(pad, meta: sm) ?? TriggerOpts()
-                    opts.pan = max(-1, min(1, opts.pan + track.pan))   // per-track pan offsets the pad's pan
-                    engine.trigger(p.soundFor(pad), vel: v, when: when, opts: opts, channel: busCh)
-                    p.triggerPadLayers(pad, vel: v, when: when)
+                    p.triggerPadPlayback(pad, velocity: v, when: when, meta: sm, panOffset: tm.pan, channel: busCh)
                     flash(pad, at: time)
                 }
             case .synthPart:
@@ -638,8 +637,8 @@ final class Transport: ObservableObject {
                 if mmel.mute || (solo && !mmel.solo) { break }
                 for note in notes where note.step == s {
                     let durSec = Double(note.dur) * secPerStep()
-                    let v = note.vel * mmel.vol * 1.25 * track.vol * gVol * p.humVel()
-                    engine.triggerSynth(patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime(), pan: track.pan, channel: busCh)
+                    let v = note.vel * mmel.vol * 1.25 * tm.gain * p.humVel()
+                    engine.triggerSynth(patch, midi: note.pitch, dur: durSec, vel: v, when: time + p.humTime(), pan: tm.pan, channel: busCh)
                 }
             default: break
             }

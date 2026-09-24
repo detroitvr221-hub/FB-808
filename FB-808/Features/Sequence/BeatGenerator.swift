@@ -125,7 +125,13 @@ extension Project {
             }
             out[role.pad] = lane
         }
-        lanes = out
+        // Roles are written onto the viewed bank's pads; every OTHER bank's lanes are kept. `lanes = out`
+        // replaced the whole dictionary, which now holds all 64 pads — it would have erased a Bank C chop
+        // sequence the moment Generate was pressed on Bank A.
+        let ids = Set((Kit.banks[bank]?.pads ?? Kit.pads).map(\.id))
+        var merged = lanes.filter { !ids.contains($0.key) }
+        for (pad, lane) in out { merged[Kit.slotKey(bank: bank, pad: pad)] = lane }
+        lanes = merged
         stepMeta = [:]
         if applyTempo, let st = Self.beatStyles.first(where: { $0.id == id }) {
             setBpm(st.bpm); swing = st.swing

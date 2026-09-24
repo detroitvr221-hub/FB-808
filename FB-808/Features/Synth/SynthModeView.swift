@@ -41,15 +41,8 @@ struct SynthModeView: View {
     private func keyDown(_ midi: Int) {
         engine.start()
         guard !lit.contains(midi) else { return }
-        lit.insert(midi); project.synthNoteOn("k\(midi)", midi: midi)
-        // MIDI record: when armed + playing, capture the hit into the active part at the nearest grid step.
-        if project.midiArmed && transport.playing && !project.countingIn {   // not during the count-in
-            // Same quantize setting as the pads (was always nearest 1/16) (#transport-8).
-            let f = transport.recordFraction()
-            if let step = Project.quantizedStep(f, barSteps: project.barSteps, quantize: project.quantize) {
-                project.captureNote(pitch: midi, step: step, wrapped: step == 0 && f > 0.5)
-            }
-        }
+        lit.insert(midi)
+        project.playAndRecordNote("k\(midi)", midi: midi, fraction: transport.recordFraction())
     }
     private func keyUp(_ midi: Int) {
         if lit.contains(midi) { lit.remove(midi); project.synthNoteOff("k\(midi)") }
@@ -74,7 +67,6 @@ struct SynthModeView: View {
                 .frame(width: g.size.width, height: g.size.height, alignment: .top)
             }
         }
-        .onAppear { if project.melody.isEmpty { project.generateMelody(checkpoint: false) } }
         .onDisappear { project.assistPanic() }   // stop the arp + release held notes when leaving
         .overlay { if showBrowser { presetBrowser } }
         .overlay(alignment: .top) {
@@ -142,7 +134,7 @@ struct SynthModeView: View {
                 .fdCard(12, fill: settings.panel)
             }.buttonStyle(.plain)
             presetArrow("chevron.right", "Next preset") { cyclePreset(1) }
-            presetArrow("star", "Save patch to library") { settings.addSavedSynth(project.editPatch) }
+            presetArrow("star", "Save patch to library") { savePatchToLibrary() }
         }
     }
     /// An icon-only preset-bar button. The label is required, not optional: these are the only names
@@ -155,7 +147,14 @@ struct SynthModeView: View {
         }.buttonStyle(.plain)
             .accessibilityLabel(Text(label))
     }
-    private func applyPreset(_ p: SynthPatch) { project.checkpoint("synth", coalesce: false); project.editPatch = p }
+    private func applyPreset(_ p: SynthPatch) {
+        if !project.applyInstrumentPreset(p) { flashToast("This SoundFont is missing. Import its .sf2 again.") }
+    }
+    private func savePatchToLibrary() {
+        guard project.persistPresetInstrument(project.editPatch) else { flashToast("Couldn't save the instrument. Check free storage."); return }
+        settings.addSavedSynth(project.editPatch)
+        flashToast("Patch saved to your library")
+    }
     private func cyclePreset(_ dir: Int) {
         let all = SynthPresets.all
         let i = all.firstIndex { $0.name == patch.name } ?? 0
@@ -423,7 +422,7 @@ struct SynthModeView: View {
                             .frame(maxWidth: .infinity).frame(height: 42)
                             .background(RoundedRectangle(cornerRadius: 11).fill(LinearGradient(colors: [Color(hex: "#21D0B2"), Color(hex: "#21D0B2").darker(0.24)], startPoint: .top, endPoint: .bottom)))
                     }.buttonStyle(.plain)
-                    Button { settings.addSavedSynth(project.editPatch) } label: {
+                    Button { savePatchToLibrary() } label: {
                         Text("★ Save to Synth Bank").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
                             .frame(maxWidth: .infinity).frame(height: 42)
                             .fdCard(11, fill: settings.panel2)

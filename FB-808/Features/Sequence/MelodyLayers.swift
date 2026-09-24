@@ -32,15 +32,20 @@ extension Project {
     @discardableResult
     func loadSoundFont(_ data: Data) -> String? {
         guard let inst = SoundFont.load(data) else { return nil }
-        engine.setMultiSample(inst.regions.map {
-            MultiSampleRegion(loKey: $0.loKey, hiKey: $0.hiKey, rootKey: $0.rootKey,
-                              sampleRate: $0.sampleRate, loopOn: $0.loopOn, pcm: $0.pcm,
-                              loopStart: $0.loopStart, loopEnd: $0.loopEnd,
-                              tuneCents: Double($0.tuneCents))   // per-zone correction → playback rate (finding 45)
-        })
+        return installSoundFont(data, instrument: inst)
+    }
+
+    @discardableResult
+    func installSoundFont(_ data: Data, instrument inst: SFInstrument) -> String {
         checkpoint("loadSF2", coalesce: false)
+        let id = UUID().uuidString
+        soundFontAssets[id] = data
+        decodedSoundFonts[id] = Self.soundFontRegions(inst)
+        engine.core.setInstrumentBanks(decodedSoundFonts)
+        engine.setMultiSample(decodedSoundFonts[id] ?? [])   // compatibility for unbound legacy patches
         var p = editPatch
         p.source = "multisample"
+        p.instrumentID = id
         p.name = inst.name.isEmpty ? "SoundFont" : String(inst.name.prefix(18))
         editPatch = p
         return p.name
@@ -84,7 +89,7 @@ extension Project {
         let lo = start, hi = start + dur
         checkpoint("drawnote")   // coalesces a drag into one undo
         mutateActiveNotes { n in
-            n.removeAll { $0.step < hi && $0.step + $0.dur > lo }
+            n.removeAll { $0.pitch == pitch && $0.step < hi && $0.step + $0.dur > lo }
             n.append(MelodyNote(step: start, pitch: pitch, dur: dur, vel: start % 4 == 0 ? 0.95 : 0.8))
         }
     }
@@ -104,18 +109,18 @@ extension Project {
             let dur = max(1, min(note.dur, bar))
             let start = Self.boundedMoveStep(to, dur: dur, barSteps: bar)
             let lo = start, hi = start + dur
-            n.removeAll { $0.step < hi && $0.step + $0.dur > lo }   // clear the destination span
+            n.removeAll { $0.pitch == pitch && $0.step < hi && $0.step + $0.dur > lo }   // clear the destination span
             n.append(MelodyNote(step: start, pitch: pitch, dur: dur, vel: note.vel))
         }
     }
     /// MIDI record capture: overdub a live-played note into the active part at `step`, snapped to the grid.
     /// Replaces any note already sounding at that pitch+step. Coalesced so a whole take is a few undos.
-    func captureNote(pitch: Int, step: Int, len: Int = 1, wrapped: Bool = false) {
+    func captureNote(pitch: Int, step: Int, len: Int = 1, wrapped: Bool = false, velocity: Double? = nil) {
         let (s, dur) = Self.boundedNote(step: step, len: len, barSteps: barSteps)
         checkpoint("reccapture")
         let write: (inout [MelodyNote]) -> Void = { n in
             n.removeAll { $0.pitch == pitch && s >= $0.step && s < $0.step + $0.dur }
-            n.append(MelodyNote(step: s, pitch: pitch, dur: dur, vel: s % 4 == 0 ? 0.9 : 0.8))
+            n.append(MelodyNote(step: s, pitch: pitch, dur: dur, vel: velocity.map { max(0.05, min(1, $0)) } ?? (s % 4 == 0 ? 0.9 : 0.8)))
         }
         // Song Mode: the keyboard records into the sequence SOUNDING at this bar, like the pads (round 2, transport-1).
         if let target = recordTargetSequence(track: "vox", wrapToNextBar: wrapped) {
@@ -174,7 +179,7 @@ extension Project {
         }
         let (step, dur) = Self.boundedNote(step: step, len: len, barSteps: barSteps)
         let lo = step, hi = step + dur
-        parts[i].notes.removeAll { $0.step < hi && $0.step + $0.dur > lo }
+        parts[i].notes.removeAll { $0.pitch == pitch && $0.step < hi && $0.step + $0.dur > lo }
         parts[i].notes.append(MelodyNote(step: step, pitch: pitch, dur: dur, vel: step % 4 == 0 ? 0.95 : 0.8))
     }
 

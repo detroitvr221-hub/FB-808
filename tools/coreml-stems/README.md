@@ -1,8 +1,15 @@
 # Demucs → Core ML stem model (D1, full 4-stem)
 
 Builds `StemSeparator.mlpackage` (htdemucs: drums / bass / other / vocals) for the FD-808 app's
-"Split → 4 Stems" button (`FourStemSeparator.swift`). The model is **gitignored** (too big for git);
-regenerate it locally with these scripts, or keep it in Git LFS.
+"Split → 4 Stems" button (`FourStemSeparator.swift`). The shipped, quantized package is versioned in
+`FB-808/StemSeparator.mlpackage` so a recursive checkout can build without conversion or an external
+asset server. Its three files are pinned by SHA-256 in `model-checksums.json`; CI fails on missing,
+truncated or changed files and runs Release app/AUv3 builds plus simulator unit/UI tests.
+
+From the outer repository, run `git submodule update --init --recursive`, then
+`python3 FB-808/tools/coreml-stems/verify_model.py`. Do not omit the model files when committing this
+submodule. The conversion workflow below is for replacing the shipped model, not for normal builds.
+A deliberate model replacement requires numerical verification and reviewed checksum updates.
 
 ## Why this is non-trivial
 `coremltools` can't convert Demucs as-is: `torch.stft` produces **complex64** tensors it can't slice,

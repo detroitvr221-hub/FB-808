@@ -26,6 +26,7 @@ extension Project {
         let ppq = 480, tick16 = ppq / 4
         let n = max(1, barSteps)              // steps per bar (honor the time signature, not a literal 16)
         let songMode = loopBarsOverride == nil ? (songModeOverride ?? self.songMode) : false
+        let context: PlaybackContext = songMode ? .song : .pattern
         let totalBars = loopBarsOverride ?? (songMode ? songBars : 4)
         // Swing: playback delays every off-beat 16th by swing·0.66 of a step (Transport.scheduler), applied
         // to the whole step — so MIDI offsets any note on an odd step by the same amount to match the groove.
@@ -60,6 +61,16 @@ extension Project {
             events.append((on + max(1, dur) * tick16, [0x80, note, 0]))
         }
 
+        func pad(_ id: String, _ velocity: Double, bar: Int, step: Int) {
+            switch padPlaybackSource(id) {
+            case .synth(let slot):
+                let gate = max(1, Int((0.5 / (60.0 / Double(bpm) / 4)).rounded()))
+                melodic(slot.midi, velocity, dur: gate, bar: bar, step: step)
+            case .oneShot:
+                if let note = GM_DRUM[Kit.baseID(id)] { drum(note, velocity, bar: bar, step: step) }
+            }
+        }
+
         // Structural per-step gates (A9): probability + conditions decide whether a note EXISTS, so MIDI must
         // honor them or it exports notes the audio bounce suppresses. Mirrors Export.swift's deterministic seed
         // exactly so the .mid and the .wav agree. Mix gates (mute/solo) are left out on purpose — MIDI keeps raw
@@ -85,25 +96,25 @@ extension Project {
         // disagrees with what the app plays (re-audit, gap E).
         func midiLanes(_ track: Track, atBar bar: Int) -> [String: [Double]]? {
             if let link = track.source.link, track.isLinked || track.frozenToAudio {
-                return resolvedLanes(link, atBar: bar, pinnedSeq: clipSeq(track: track.id, atBar: bar))
+                return resolvedLanes(link, atBar: bar, pinnedSeq: clipSeq(track: track.id, atBar: bar), context: context)
             }
             return track.source.lanes
         }
         func midiNotes(_ track: Track, atBar bar: Int) -> [MelodyNote]? {
             if let link = track.source.link, track.isLinked || track.frozenToAudio {
-                return resolvedNotes(link, atBar: bar, pinnedSeq: clipSeq(track: track.id, atBar: bar))?.notes
+                return resolvedNotes(link, atBar: bar, pinnedSeq: clipSeq(track: track.id, atBar: bar), context: context)?.notes
             }
             return track.source.notes
         }
 
         for bar in 0..<totalBars {
             // Same clip-pin fold as playback and the audio bounce, so all three agree.
-            let pins = songMode ? clipSeqOverrides(atBar: bar) : [:]
-            let curLanes = Transport.foldClipPins(base: songMode ? lanesForBar(bar) : lanes, overrides: pins,
+            let pins = songMode ? clipSeqOverrides(atBar: bar, context: context) : [:]
+            let curLanes = Transport.foldClipPins(base: songMode ? lanesForBar(bar, context: context) : lanes, overrides: pins,
                                                   lanesOfSeq: { self.lanesOfSeq($0) }, trackOf: { Kit.trackOf($0) })
-            let curMelody = songMode ? melodyForTrack("vox", atBar: bar) : melody
-            let curParts = songMode ? partsForTrack("vox", atBar: bar) : parts
-            var curMeta = songMode ? stepMetaForBar(bar) : stepMeta
+            let curMelody = songMode ? melodyForTrack("vox", atBar: bar, context: context) : melody
+            let curParts = songMode ? partsForTrack("vox", atBar: bar, context: context) : parts
+            var curMeta = songMode ? stepMetaForBar(bar, context: context) : stepMeta
             for (tk, si) in pins {
                 let src = stepMetaOfSeq(si)
                 for pad in Set(curMeta.keys).union(src.keys) where Kit.trackOf(pad) == tk { curMeta[pad] = src[pad] }
@@ -121,9 +132,8 @@ extension Project {
                 ownedPartIDs.formUnion(owned.partIDs)
             }
             for (padID, lane) in curLanes where !ownedRows.contains(padID) {
-                guard let note = GM_DRUM[padID] else { continue }
                 for s in 0..<min(n, lane.count) where lane[s] > 0 && stepSounds(padID, s, bar: bar, meta: curMeta) {
-                    drum(note, lane[s], bar: bar, step: s)
+                    pad(padID, lane[s], bar: bar, step: s)
                 }
             }
             if !ownedLeadMelody {
@@ -142,9 +152,8 @@ extension Project {
                 case .drumPattern:
                     guard let tl = midiLanes(track, atBar: bar) else { break }
                     for (padID, lane) in tl {
-                        guard let note = GM_DRUM[padID] else { continue }
-                        for s in 0..<min(n, lane.count) where lane[s] > 0 && stepPasses(trackStepMeta(track, padID, s, atBar: bar), padID, s, bar: bar) {
-                            drum(note, lane[s], bar: bar, step: s)
+                        for s in 0..<min(n, lane.count) where lane[s] > 0 && stepPasses(trackStepMeta(track, padID, s, atBar: bar, context: context), padID, s, bar: bar) {
+                            pad(padID, lane[s], bar: bar, step: s)
                         }
                     }
                 case .synthPart:

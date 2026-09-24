@@ -85,9 +85,6 @@ final class AudioEngine: ObservableObject {
     /// UI shows a banner from this; before it existed a failed start was a log line and the app animated in
     /// silence (SYSTEMS_GAP_AUDIT #lifecycle-3/8).
     @Published private(set) var audioFailure: String?
-    /// Set by Transport: called when a take in progress cannot continue (input format changed under the tap,
-    /// media services reset) so the audio captured so far is committed instead of silently lost.
-    var onRecordingInterrupted: (() -> Void)?
     /// Between `.began` and `.ended` the system owns the route: every trigger's ensure() must not hammer
     /// setActive/engine.start (~8 failed starts a second at 120 bpm) or flap the failure banner.
     private var interrupted = false
@@ -188,11 +185,19 @@ final class AudioEngine: ObservableObject {
     // MARK: - AUv3 hosting (A15): 3rd-party effects inserted on the master bus
 
     struct HostedAU: Identifiable {
-        let id = UUID()
+        let id: UUID
         let name: String
         let unit: AVAudioUnit
     }
     @Published private(set) var masterAUs: [HostedAU] = []
+    @Published private(set) var projectEffects: [HostedEffectState] = []
+    @Published private(set) var pluginNotice: String?
+    private var chainGeneration = UUID()
+    private var chainTask: Task<Void, Never>?
+    var onMasterChainWillChange: (() -> Void)?
+    var hasHostedEffects: Bool { !projectEffects.isEmpty || !masterAUs.isEmpty }
+    static let pluginExportNotice = "AU effects are for live monitoring. Audio exports, stems, resampling and classroom bounces exclude them. Built-in effects are included."
+
     private let auQuarantinePrefix = "fd808.auFail."
     private let auQuarantineThreshold = 2
 
@@ -211,12 +216,15 @@ final class AudioEngine: ObservableObject {
 
     /// Instantiate an effect and append it to the master insert chain.
     func addMasterAU(_ comp: AVAudioUnitComponent) async -> Bool {
+        ensureConfigured()
         let key = quarantineKey(comp.audioComponentDescription)
+        let generation = chainGeneration
         do {
-            ensureConfigured()
-            let avAU = try await AVAudioUnit.instantiate(with: comp.audioComponentDescription, options: [])
+            let avAU = try await instantiateAU(comp.audioComponentDescription, timeout: 5)
+            guard generation == chainGeneration, !Task.isCancelled else { return false }
+            onMasterChainWillChange?()
             engine.attach(avAU)
-            masterAUs.append(HostedAU(name: comp.name, unit: avAU))
+            masterAUs.append(HostedAU(id: UUID(), name: comp.name, unit: avAU))
             engine.mainMixerNode.outputVolume = 0   // mute across the rewire so disconnecting srcNode doesn't click
             rebuildMasterChain()
             engine.mainMixerNode.outputVolume = 1
@@ -232,13 +240,11 @@ final class AudioEngine: ObservableObject {
 
     func removeMasterAU(_ id: UUID) {
         ensureConfigured()
-        guard let idx = masterAUs.firstIndex(where: { $0.id == id }) else { return }
-        let removed = masterAUs.remove(at: idx)
-        engine.mainMixerNode.outputVolume = 0   // mute across the rewire (avoids the disconnect click)
-        rebuildMasterChain()
-        engine.mainMixerNode.outputVolume = 1
-        engine.detach(removed.unit)
-        persistMasterChain()
+        guard projectEffects.contains(where: { $0.id == id }) || masterAUs.contains(where: { $0.id == id }) else { return }
+        onMasterChainWillChange?()
+        // Reconcile the entire requested chain, including a restore still in progress.
+        // Cancelling only the removed unit could leave the later saved plugins unloaded.
+        restoreProjectEffects(masterChainSnapshot().filter { $0.id != id }, force: true)
     }
 
     /// Re-wire srcNode → [AU…] → mainMixer to reflect the current chain.
@@ -255,8 +261,7 @@ final class AudioEngine: ObservableObject {
         engine.connect(prev, to: mixer, format: ioFormat)
     }
 
-    // Persist the chain (component IDs + each plugin's fullState) so it reloads next launch.
-    private let auChainKey = "fd808.masterAUChain"
+    // The chain is persisted in each project; only the crash watchdog is global.
     private let auRestoreSentinelKey = "fd808.auRestoreInFlight"   // set before restore, cleared after → catches a hung/crashed restore
     struct AUTimeout: Error {}
     private final class AUInstantiateGate: @unchecked Sendable {
@@ -308,59 +313,81 @@ final class AudioEngine: ObservableObject {
     }
     private func clearAUFailure(_ key: String) { UserDefaults.standard.removeObject(forKey: key) }
 
-    private func persistMasterChain() {
-        let arr: [[String: Any]] = masterAUs.map { hosted in
+    func masterChainSnapshot() -> [HostedEffectState] {
+        var saved = projectEffects
+        for hosted in masterAUs {
             let d = hosted.unit.audioComponentDescription
-            var entry: [String: Any] = [
-                "type": NSNumber(value: d.componentType),
-                "sub": NSNumber(value: d.componentSubType),
-                "mfr": NSNumber(value: d.componentManufacturer),
-            ]
-            if let state = hosted.unit.auAudioUnit.fullState { entry["state"] = state }
-            return entry
+            let state = hosted.unit.auAudioUnit.fullState.flatMap {
+                try? PropertyListSerialization.data(fromPropertyList: $0, format: .binary, options: 0)
+            }
+            let item = HostedEffectState(id: hosted.id, name: hosted.name, type: d.componentType,
+                                         subtype: d.componentSubType, manufacturer: d.componentManufacturer, state: state)
+            if let i = saved.firstIndex(where: { $0.id == hosted.id }) { saved[i] = item }
+            else { saved.append(item) }
         }
-        UserDefaults.standard.set(arr, forKey: auChainKey)
+        return saved
     }
 
-    private func restoreMasterChain() {
-        guard let arr = UserDefaults.standard.array(forKey: auChainKey) as? [[String: Any]], !arr.isEmpty else { return }
-        // Launch watchdog: if the sentinel is still set, a PREVIOUS launch hung or crashed mid-restore
-        // (a buggy plugin's instantiate/fullState that never returns — which the per-plugin quarantine
-        // can't catch because it never throws). Fail safe: skip AU restore entirely this launch.
+    private func persistMasterChain() { projectEffects = masterChainSnapshot() }
+
+    func restoreProjectEffects(_ saved: [HostedEffectState], force: Bool = false) {
+        guard force || saved != masterChainSnapshot()
+                || (chainTask == nil && saved.count != masterAUs.count) else { return }
+        if chainTask != nil { UserDefaults.standard.removeObject(forKey: auRestoreSentinelKey) }
+        chainGeneration = UUID(); chainTask?.cancel(); chainTask = nil
+        let generation = chainGeneration
+        projectEffects = saved; pluginNotice = nil
+        let removed = masterAUs
+        masterAUs.removeAll()
+        rebuildMasterChain()
+        for au in removed { engine.detach(au.unit) }
+        restoredMasterChain = true
+        guard !saved.isEmpty else { return }
+        ensureConfigured()
         let defaults = UserDefaults.standard
         if defaults.bool(forKey: auRestoreSentinelKey) {
-            defaults.removeObject(forKey: auRestoreSentinelKey); defaults.synchronize()
-            logEvent("AUv3 restore disabled", "previous launch failed mid-restore — skipped; re-add plugins in the mixer")
+            defaults.removeObject(forKey: auRestoreSentinelKey)
+            pluginNotice = "Plugin restore was interrupted. The saved chain is retained; reopen the beat to retry."
             return
         }
-        defaults.set(true, forKey: auRestoreSentinelKey); defaults.synchronize()   // flush BEFORE the risky work
-        Task { @MainActor in
-            defer { defaults.removeObject(forKey: auRestoreSentinelKey); defaults.synchronize() }   // restore finished → clear
-            for entry in arr {
-                guard let t = (entry["type"] as? NSNumber)?.uint32Value,
-                      let s = (entry["sub"] as? NSNumber)?.uint32Value,
-                      let m = (entry["mfr"] as? NSNumber)?.uint32Value else { continue }
-                let desc = AudioComponentDescription(componentType: t, componentSubType: s,
-                                                     componentManufacturer: m, componentFlags: 0, componentFlagsMask: 0)
+        defaults.set(true, forKey: auRestoreSentinelKey)
+        chainTask = Task { @MainActor in
+            defer {
+                if generation == chainGeneration {
+                    defaults.removeObject(forKey: auRestoreSentinelKey)
+                    chainTask = nil
+                }
+            }
+            for item in saved {
+                guard !Task.isCancelled, generation == chainGeneration else { return }
+                let desc = AudioComponentDescription(componentType: item.type, componentSubType: item.subtype,
+                                                     componentManufacturer: item.manufacturer, componentFlags: 0, componentFlagsMask: 0)
                 let key = quarantineKey(desc)
-                guard !isAUQuarantined(key) else {
-                    logEvent("AUv3 skipped", "quarantined after repeated restore failures")
+                guard !isAUQuarantined(key), AVAudioUnitComponentManager.shared().components(matching: desc).first != nil else {
+                    pluginNotice = "Some saved plugins are unavailable. Their settings have been kept in this beat."
                     continue
                 }
-                guard AVAudioUnitComponentManager.shared().components(matching: desc).first != nil else { continue }
                 do {
-                    let avAU = try await instantiateAU(desc, timeout: 5)   // bound a hung instantiate
-                    if let state = entry["state"] as? [String: Any] { avAU.auAudioUnit.fullState = state }
-                    engine.attach(avAU)
-                    masterAUs.append(HostedAU(name: avAU.auAudioUnit.audioUnitName ?? "Plugin", unit: avAU))
+                    let unit = try await instantiateAU(desc, timeout: 5)
+                    guard !Task.isCancelled, generation == chainGeneration else { return }
+                    if let data = item.state,
+                       let state = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                        unit.auAudioUnit.fullState = state
+                    }
+                    engine.attach(unit)
+                    masterAUs.append(HostedAU(id: item.id, name: item.name, unit: unit))
                     clearAUFailure(key)
                 } catch {
-                    recordAUFailure(key, name: error is AUTimeout ? "Plugin (timed out)" : "Restored plugin")
+                    guard generation == chainGeneration else { return }
+                    recordAUFailure(key, name: item.name)
+                    pluginNotice = "A plugin could not load. Its settings have been kept in this beat."
                 }
             }
             rebuildMasterChain()
         }
     }
+
+    private func restoreMasterChain() { restoreProjectEffects(projectEffects, force: true) }
 
     func start() {
         guard !engine.isRunning else { started = true; audioFailure = nil; return }   // guard on real engine state, not a cached flag
@@ -396,7 +423,10 @@ final class AudioEngine: ObservableObject {
                     guard let self else { return }
                     self.diag = self.core.diagnostics()
                     self.recordTelemetry(self.diag)   // diff counters → rolling telemetry history
-                    self.inputLevel = self.isMicRecording ? (self.mic?.peakLevel() ?? 0) : 0   // record meter
+                    self.inputLevel = self.isMicRecording ? (self.mic?.peakLevel() ?? 0) : 0
+                    if self.isMicRecording, self.now() - self.micStartTime >= AudioDefaults.maxSampleSeconds {
+                        self.finishMicCapture()
+                    }
                 }
             }
         }
@@ -430,7 +460,7 @@ final class AudioEngine: ObservableObject {
                     self.allNotesOff()
                     self.engine.stop()   // make the stop explicit so isRunning is false and `.active` can recover (round 3, lifecycle-5)
                     self.started = false
-                    if self.isMicRecording { self.onRecordingInterrupted?() }   // commit the take captured so far
+                    if self.isMicRecording { self.finishMicCapture() }   // commit the take captured so far
                     self.logEvent("interruption", "began")
                 case .ended:
                     self.interrupted = false
@@ -500,7 +530,7 @@ final class AudioEngine: ObservableObject {
         // audio captured so far through Transport instead of a silently misaligned take (round 2, lifecycle-5).
         if isMicRecording && !engine.isRunning {
             logEvent("take ended", "audio route/engine restarted during recording")
-            onRecordingInterrupted?()
+            finishMicCapture()
         }
         if isMicRecording { sessionMgr.activateRecording() } else { sessionMgr.activatePlayback() }
         ensureConfigured()
@@ -536,9 +566,12 @@ final class AudioEngine: ObservableObject {
         if isMicRecording {
             // Commit the take FIRST (the hook tears the capture down through stopMicRecordingRaw); clearing
             // the mic state before it made the hook bail and the audio was lost (round 3, lifecycle-4).
-            if let hook = onRecordingInterrupted { hook() }
+            finishMicCapture()
             if isMicRecording { engine.inputNode.removeTap(onBus: 0); isMicRecording = false; mic = nil }
         }
+        persistMasterChain()
+        chainGeneration = UUID(); chainTask?.cancel()
+        UserDefaults.standard.removeObject(forKey: auRestoreSentinelKey)
         engine.stop()
         for au in masterAUs { engine.detach(au.unit) }
         masterAUs.removeAll()
@@ -629,6 +662,13 @@ final class AudioEngine: ObservableObject {
 
     // MARK: microphone recording (A4)
 
+    enum MicOwner: Equatable {
+        case sampler(String)
+        case track(project: String, track: String)
+    }
+    @Published private(set) var micOwner: MicOwner?
+    private var micRequest = UUID()
+    private var finishCapture: (() -> Void)?
     @Published private(set) var isMicRecording = false
     @Published private(set) var inputLevel: Float = 0   // record-meter input peak (0…1), published ~5 Hz while recording
     var stereoCapture = false                           // opt-in: capture 2 channels (set from AppSettings before recording)
@@ -644,12 +684,30 @@ final class AudioEngine: ObservableObject {
     }
 
     /// Ask for mic access, switch the session to play-and-record, and tap the input.
-    func startMicRecording(_ completion: @escaping (Bool) -> Void) {
-        guard !isMicRecording else { completion(false); return }
-        requestMicPermission { [weak self] granted in
-            guard let self else { completion(false); return }
-            completion(granted ? self.beginMicTap() : false)
+    func startMicRecording(owner: MicOwner, finish: @escaping () -> Void,
+                           requestPermission: ((@escaping (Bool) -> Void) -> Void)? = nil,
+                           completion: @escaping (Bool) -> Void) {
+        guard micOwner == nil, !isMicRecording else { completion(false); return }
+        let request = UUID()
+        micRequest = request; micOwner = owner; finishCapture = finish
+        let requestAccess = requestPermission ?? requestMicPermission
+        requestAccess { [weak self] granted in
+            guard let self, self.micRequest == request, self.micOwner == owner else { return }
+            let ok = granted && self.beginMicTap()
+            if !ok { self.micOwner = nil; self.finishCapture = nil }
+            completion(ok)
         }
+    }
+
+    /// Stop buttons, interruptions and project changes dispatch to the original destination.
+    /// Invalidating the request also prevents a late permission response starting capture elsewhere.
+    func finishMicCapture(owner: MicOwner? = nil) {
+        if let owner, micOwner != owner { return }
+        micRequest = UUID()
+        let finish = finishCapture
+        finishCapture = nil
+        if isMicRecording { finish?() }
+        micOwner = nil
     }
 
     private func beginMicTap() -> Bool {
@@ -683,6 +741,7 @@ final class AudioEngine: ObservableObject {
     private func endMicCaptureStereo() -> (l: [Float], r: [Float]?)? {
         guard isMicRecording else { return nil }
         isMicRecording = false
+        micOwner = nil; finishCapture = nil
         engine.inputNode.removeTap(onBus: 0)
         let st = mic?.takeStereo() ?? (l: [], r: nil)
         mic = nil
@@ -754,8 +813,9 @@ final class AudioEngine: ObservableObject {
         core.triggerSynth(patch, midi: midi, dur: dur, vel: vel, whenSample: w * core.sr, channel: channel ?? Self.melodyChannel, pan: pan)
     }
     func makeSynthSample(_ kind: String) { ensure(); core.makeSynthSample(kind) }
-    func applySampleEdits(reverse: Bool, normalize: Bool, fadeIn: Bool, fadeOut: Bool, gain: Double) -> [Double] {
-        core.applySampleEdits(reverse: reverse, normalize: normalize, fadeIn: fadeIn, fadeOut: fadeOut, gain: gain)
+    func applySampleEdits(reverse: Bool, normalize: Bool, fadeIn: Bool, fadeOut: Bool, gain: Double,
+                          trim: [Double] = [0, 1]) -> [Double] {
+        core.applySampleEdits(reverse: reverse, normalize: normalize, fadeIn: fadeIn, fadeOut: fadeOut, gain: gain, trim: trim)
     }
     func cropSample(trim: [Double]) -> (dur: Double, wave: [Double]) { core.cropSample(trim: trim) }
     func stretchSample(ratio: Double) -> (dur: Double, wave: [Double]) { core.stretchSample(ratio: ratio) }
@@ -811,9 +871,9 @@ final class AudioEngine: ObservableObject {
     @discardableResult
     func importBuffer(_ data: [Float]) -> (dur: Double, transients: [Double], wave: [Double]) { ensure(); return core.loadExternal(data) }
 
-    func playClip(_ data: [Float], when: Double, gain: Double, channel: Int, pan: Double = 0) {
+    func playClip(_ data: [Float], when: Double, gain: Double, channel: Int, pan: Double = 0, maxFrames: Int? = nil) {
         ensure()
-        core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel, pan: pan)
+        core.playClip(data: data, whenSample: when * core.sr, gain: gain, channel: channel, pan: pan, maxFrames: maxFrames)
     }
     func stopClips() { core.stopClips() }
     /// Stop any sample-audition voices sounding on the sample channel (Sample-tab Stop / leaving the tab). (#SAMPLING-05)

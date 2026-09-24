@@ -126,7 +126,7 @@ struct MelodyNote: Identifiable, Codable {
 struct SynthBankSlot: Codable { var midi: Int; var patch: SynthPatch }
 
 // Per-pad inspector edits. A pad with no entry behaves exactly like its base voice.
-struct PadLayer: Identifiable, Equatable, Codable {
+nonisolated struct PadLayer: Identifiable, Equatable, Codable {
     let id = UUID()
     var sound: String
     var vol: Double = 0.7
@@ -134,7 +134,7 @@ struct PadLayer: Identifiable, Equatable, Codable {
     var pan: Double = 0
     enum CodingKeys: String, CodingKey { case sound, vol, pitch, pan }
 }
-struct PadParam: Equatable, Codable {
+nonisolated struct PadParam: Equatable, Codable {
     var vol = 0.85
     var pan = 0.0
     var pitch = 0.0          // semitones
@@ -282,6 +282,8 @@ final class Project: ObservableObject {
     @Published var quantize = "1/16"
     @Published var barSteps = 16        // steps per bar: 16=4/4, 12=3/4, 8=2/4 (A13)
     @Published var playing = false
+    @Published var backgroundOperationNotice: String?
+    private(set) var renderRevision: UInt64 = 0
     @Published var isBouncing = false   // an offline render (auto-master / resample / freeze) is running — drives busy UI (#ARCH-01)
     @Published var recording = false
     /// True while the count-in clicks are playing (Transport owns it). Record paths skip these bars.
@@ -379,6 +381,8 @@ final class Project: ObservableObject {
     }
     @Published var parts: [InstrumentPart] = []   // Tier 2: extra instrument parts beyond Lead (=melody/synthPatch)
     @Published var activePart = "lead"            // which part the Synth UI edits: "lead" or a parts[].id
+    var soundFontAssets: [String: Data] = [:]
+    var decodedSoundFonts: [String: [MultiSampleRegion]] = [:]
     @Published var savedSynths: [SynthPatch] = []
     @Published var synthBank: [String: SynthBankSlot]?
 
@@ -403,6 +407,7 @@ final class Project: ObservableObject {
     private var isApplyingState = false
     // Op layer (Step 4): the sync bus (no-op until a live room attaches one), the remote-apply guard
     // (suppresses undo pollution + op echo while applying a received op), and the last applied seq.
+    var beforeProjectReplacement: (() -> Void)?
     var syncBus: SyncBus = NoSyncBus()
     private(set) var isApplyingRemote = false
     var lastOpSeq: UInt64 = 0
@@ -470,7 +475,15 @@ final class Project: ObservableObject {
         emit(.setStep(pad: padID, step: i, vel: lane[i]))
     }
     func clearRow(_ padID: String) { checkpoint("clearRow", coalesce: false); lanes[padID] = Kit.emptyLane(); stepMeta[padID] = nil; emit(.clearRow(pad: padID)) }
-    func clearAll() { checkpoint("clearAll", coalesce: false); lanes = [:]; stepMeta = [:]; contentRevision &+= 1 }
+    /// Clears the bank being viewed. The grid shows ONE bank's 16 rows now, so wiping all 64 would have
+    /// erased sequences the user could not see — Bank A's drums from a Clear pressed on Bank C.
+    func clearAll() {
+        checkpoint("clearAll", coalesce: false)
+        let ids = Set((Kit.banks[bank]?.pads ?? Kit.pads).map(\.id))
+        lanes = lanes.filter { !ids.contains($0.key) }
+        stepMeta = stepMeta.filter { !ids.contains($0.key) }
+        contentRevision &+= 1
+    }
     func setRowLane(_ padID: String, _ lane: [Double]) { checkpoint("row:\(padID)", coalesce: false); lanes[padID] = lane; stepMeta[padID] = nil }
 
     // MARK: row mute (checkpointed so it is undoable + dirty like every other mute control)
@@ -559,7 +572,7 @@ final class Project: ObservableObject {
     func applyOp(_ kind: OpKind, remote: Bool) {
         // remote ops apply like a state restore: checkpoint() early-outs (no undo pollution) and
         // emit() early-outs (no echo back to the network), both via the isApplyingState/Remote guards.
-        if remote { isApplyingRemote = true; isApplyingState = true }
+        if remote { renderRevision &+= 1; isApplyingRemote = true; isApplyingState = true }
         defer { if remote { isApplyingRemote = false; isApplyingState = false } }
         switch kind {
         case .setStep(let pad, let step, let vel):
@@ -667,7 +680,7 @@ final class Project: ObservableObject {
         stepMeta[pad]?[step] = nil
         if stepMeta[pad]?.isEmpty == true { stepMeta[pad] = nil }
     }
-    func stepMetaForBar(_ bar: Int) -> [String: [Int: StepMeta]] { stepMetaOfSeq(sequenceIndexForBar(bar)) }
+    func stepMetaForBar(_ bar: Int, context: PlaybackContext? = nil) -> [String: [Int: StepMeta]] { stepMetaOfSeq(sequenceIndexForBar(bar, context: context)) }
     /// Evaluate an Elektron-style trig condition against the loop/bar counter.
     static func condPass(_ cond: String, bar: Int) -> Bool {
         switch cond {
@@ -733,25 +746,9 @@ final class Project: ObservableObject {
         return (i != activeSeq && sequences.indices.contains(i)) ? i : nil
     }
 
-    /// Record a Bank-D synth pad as a MELODY note at the pad's mapped pitch — so it sequences and
-    /// exports as synth (the melody/synth path), not as a drum, and WITHOUT clobbering the shared
-    /// drum lanes (which `synthBank` maps for all 16 pads). Falls back to a drum hit if unmapped. (#26 Bank D)
-    func recordSynthPad(_ padID: String, _ when0to1: Double) {
-        guard let slot = synthBank?[padID] else {
-            recordHit(padID, when0to1, vel: fullLevel ? 1.0 : 0.85); return
-        }
-        guard !countingIn else { return }   // count-in (see recordHit)
-        guard let step = Self.quantizedStep(when0to1, barSteps: barSteps, quantize: quantize) else { return }
-        // Song Mode: the sequence sounding at this bar (see recordHit). Converges to followers through the
-        // heartbeat fullSync (the per-note op carries no sequence index).
-        if let target = recordTargetSequence(track: "vox", wrapToNextBar: step == 0 && when0to1 > 0.5) {
-            checkpoint("melody", coalesce: false)
-            let (st, dur) = Self.boundedNote(step: step, len: rollLen, barSteps: barSteps)
-            sequences[target].melody.removeAll { $0.step < st + dur && $0.step + $0.dur > st && $0.pitch == slot.midi }
-            sequences[target].melody.append(MelodyNote(step: st, pitch: slot.midi, dur: dur, vel: st % 4 == 0 ? 0.95 : 0.8))
-            return
-        }
-        placeMelodyNote(step: step, pitch: slot.midi, len: rollLen)   // checkpoints; plays via the synth in seq + export
+    /// Record the mapped pad's lane so its own pitch, patch and dynamics survive playback/export.
+    func recordSynthPad(_ padID: String, _ when0to1: Double, vel: Double = 0.85) {
+        recordHit(padID, when0to1, vel: fullLevel ? 1 : vel)
     }
 
     /// A pad's stacked layers that may sound right now. Each layer is gated by the mixer bus its OWN
@@ -760,14 +757,6 @@ final class Project: ObservableObject {
     /// bounce all resolve layers through this one function.
     func audiblePadLayers(_ padID: String) -> [PadLayer] {
         (padParams[padID]?.layers ?? []).filter { channelAudible(Kit.channelOf($0.sound)) }
-    }
-
-    /// Trigger a pad's extra stacked layers (Pad Inspector → Layers) at a scheduled time. Used by the
-    /// sequencer + frozen tracks so layered pads sound layered everywhere, not only on live taps.
-    func triggerPadLayers(_ padID: String, vel: Double, when: Double?) {
-        for ly in audiblePadLayers(padID) {
-            engine.trigger(ly.sound, vel: vel * ly.vol, when: when, opts: TriggerOpts(pitch: ly.pitch, pan: ly.pan))
-        }
     }
 
     // MARK: mixer
@@ -884,7 +873,7 @@ final class Project: ObservableObject {
         let defChoke = Kit.padByID[id]?.defaultChoke ?? 0   // e.g. open/closed hats share one out of the box (#PADS-02)
         // Finding 70: the sidechain duck key is the KICK PAD, not the "kick" voice string, so a kit or
         // sound remap of that pad keeps the pump. Carried on TriggerOpts so live and export agree.
-        let scKey = (id == "kick")
+        let scKey = (Kit.baseID(id) == "kick")
         guard let pp = padParams[id] else {
             // No inspector edits, but a family default choke must still cut (open hat ↔ closed hat).
             guard defChoke != 0 || scKey else { return nil }
@@ -894,7 +883,7 @@ final class Project: ObservableObject {
         let choke: Int
         if pp.choke != 0 { choke = pp.choke }
         else if defChoke != 0 { choke = defChoke }
-        else if !pp.polyV { choke = 100 + (Kit.padByID[id]?.index ?? 0) }
+        else if !pp.polyV { choke = 100 + Kit.slotIndex(id) }
         else { choke = 0 }
         return TriggerOpts(
             pitch: pp.pitch, pan: pp.pan,
@@ -918,8 +907,9 @@ final class Project: ObservableObject {
     func padOpts(_ id: String, meta: StepMeta?) -> TriggerOpts? {
         let hasPL = meta.map { $0.pitch != nil || $0.cutoff != nil || $0.decay != nil || $0.pan != nil } ?? false
         // The kick pad always needs opts so its sidechainKey flag survives (finding 70).
-        if padParams[id] == nil && !hasPL && id != "kick" { return nil }
-        var o = padOpts(id) ?? TriggerOpts()
+        let base = padOpts(id)
+        guard base != nil || hasPL else { return nil }
+        var o = base ?? TriggerOpts()
         if let m = meta {
             if let v = m.pitch { o.pitch = v }
             if let v = m.pan { o.pan = v }
@@ -934,8 +924,10 @@ final class Project: ObservableObject {
     /// `sampleBank` is a legacy (pre-scoping) save and keeps its old behavior: the sample plays in
     /// every bank. Live triggering, the sequencer, and export all resolve through this same check.
     func padSampleActive(_ padID: String) -> Bool {
-        guard let pp = padParams[padID], pp.sampleFile != nil else { return false }
-        return pp.sampleBank == nil || pp.sampleBank == bank
+        // The pad id names its bank ("C:kick"), so a sample is simply on that pad or not. Comparing
+        // against `bank` — the Pads screen's VIEW selector — made sequenced chops turn into the kit
+        // sound whenever another tab was showing, in playback AND export (SAMPLE_FLOW_AUDIT finding 2).
+        padParams[padID]?.sampleFile != nil
     }
 
     /// The voice id a pad should make sound with: an imported sample (active in this bank) wins, then
@@ -943,7 +935,7 @@ final class Project: ObservableObject {
     func soundFor(_ padID: String) -> String {
         if padSampleActive(padID) { return "smp:" + padID }
         if let s = padParams[padID]?.sound, !s.isEmpty { return s }
-        return padID
+        return Kit.padByID[padID]?.sound ?? Kit.baseID(padID)   // "C:kick" defaults to the kick voice
     }
 
     /// `vel` is a 0…1 strike velocity (finger pressure). nil keeps the old fixed 0.85/accent behavior;
@@ -956,17 +948,12 @@ final class Project: ObservableObject {
         let off = padOffsetSec(padID)
         let when = off > 0 ? (when ?? engine.now()) + off : when    // lay-back offset
         let pp = padParams[padID]
-        if bank == "D", let slot = synthBank?[padID] {
-            engine.triggerSynth(slot.patch, midi: slot.midi, dur: 0.5, vel: base * g, when: when)
-            return
-        }
-        if bank == "C", let slice = sliceBank?[padID], sample != nil {
+        if Kit.bankOf(padID) == "C", let slice = sliceBank?[Kit.baseID(padID)], sample != nil {   // legacy saves only
             engine.playBuffer(offset: slice.offset, dur: slice.dur, vel: base * g, when: when,
                               pitch: pp?.pitch ?? 0, pan: pp?.pan ?? 0)
             return
         }
-        engine.trigger(soundFor(padID), vel: base * g, when: when, opts: padOpts(padID))
-        triggerPadLayers(padID, vel: base * g, when: when)   // stacked layers, each gated by its own bus
+        triggerPadPlayback(padID, velocity: base * g, when: when)
     }
 
     /// Song-Mode playback gate. A track that has NO clips authored at all plays everywhere (so a
@@ -1049,24 +1036,32 @@ final class Project: ObservableObject {
         arrangement = arrangement.compactMap { a in
             remapBars(a.start, a.len, f).map { ArrItem(id: a.id, section: a.section, start: $0.0, len: $0.1, seq: a.seq) }
         }
-        audioClips = audioClips.compactMap { var c = $0; let n = f(c.startBar); guard n >= 0 && n < songBars else { return nil }; c.startBar = n; return c }
     }
     /// Insert `len` empty bars at bar `at`, pushing later content right.
     func arrangeInsertSpace(at b0: Int, len L: Int) {
-        guard L > 0 else { return }
+        guard L > 0, b0 >= 0, b0 < songBars, L <= songBars,
+              let editedAudio = prepareAudioRangeEdit(.insert, at: b0, length: L) else { return }
         checkpoint("arrInsert", coalesce: false)
+        audioClips = editedAudio
+        remapSongAutomation(.insert, at: b0, length: L)
         applyArrangeMap { $0 < b0 ? $0 : $0 + L }
     }
     /// Remove bars [at, at+len), sliding later content left to close the gap.
     func arrangeDeleteSpace(at b0: Int, len L: Int) {
-        guard L > 0 else { return }
+        guard L > 0, b0 >= 0, b0 < songBars, L <= songBars,
+              let editedAudio = prepareAudioRangeEdit(.delete, at: b0, length: L) else { return }
         checkpoint("arrDelete", coalesce: false)
+        audioClips = editedAudio
+        remapSongAutomation(.delete, at: b0, length: L)
         applyArrangeMap { $0 <= b0 ? $0 : ($0 >= b0 + L ? $0 - L : b0) }
     }
     /// Duplicate everything in [from, from+len) into the bars right after, shifting later content right.
     func arrangeDuplicate(from b0: Int, len L: Int) {
-        guard L > 0 else { return }
+        guard L > 0, b0 >= 0, b0 < songBars, L <= songBars,
+              let editedAudio = prepareAudioRangeEdit(.duplicate, at: b0, length: L) else { return }
         checkpoint("arrDup", coalesce: false)
+        audioClips = editedAudio
+        remapSongAutomation(.duplicate, at: b0, length: L)
         var clipCopies: [String: [Clip]] = [:]
         for (tk, cs) in clips {
             for c in cs {
@@ -1131,13 +1126,14 @@ final class Project: ObservableObject {
     func sectionCovers(_ bar: Int) -> Bool {
         arrangement.contains { bar >= $0.start && bar < $0.start + $0.len }
     }
-    func sequenceIndexForBar(_ bar: Int) -> Int {
+    func sequenceIndexForBar(_ bar: Int, context: PlaybackContext? = nil) -> Int {
+        guard (context ?? playbackContext) == .song else { return activeSeq }
         if let s = arrangement.first(where: { bar >= $0.start && bar < $0.start + $0.len })?.seq { return s }
         // No section covers this bar. Falling back to `activeSeq` here made playback depend on which
         // pattern TAB was last opened on the Sequence screen — peeking at B silently changed the song
         // (SEQUENCE_TRACKS_AUDIT finding 3). In Song Mode an uncovered bar resolves to a stable slot;
         // Loop Mode has no arrangement at all and must keep following the buffer being edited.
-        return songMode ? 0 : activeSeq
+        return 0
     }
 
     // MARK: pattern lookup by slot
@@ -1169,36 +1165,36 @@ final class Project: ObservableObject {
     /// The pattern a given TRACK plays at a bar: its clip's own pattern when it pins one, else the
     /// section's. This is the one lookup playback, bounce and MIDI export all go through, so the three
     /// can never disagree. Loop Mode ignores clips entirely (there is no arrangement to pin against).
-    func sequenceIndex(track: String, atBar bar: Int) -> Int {
-        if songMode, let pinned = clipSeq(track: track, atBar: bar) { return pinned }
-        return sequenceIndexForBar(bar)
+    func sequenceIndex(track: String, atBar bar: Int, context: PlaybackContext? = nil) -> Int {
+        if (context ?? playbackContext) == .song, let pinned = clipSeq(track: track, atBar: bar) { return pinned }
+        return sequenceIndexForBar(bar, context: context)
     }
 
     /// The drum lanes to play for a given bar (the active edit buffer for the active sequence).
-    func lanesForBar(_ bar: Int) -> [String: [Double]] { lanesOfSeq(sequenceIndexForBar(bar)) }
-    func melodyForBar(_ bar: Int) -> [MelodyNote] { melodyOfSeq(sequenceIndexForBar(bar)) }
+    func lanesForBar(_ bar: Int, context: PlaybackContext? = nil) -> [String: [Double]] { lanesOfSeq(sequenceIndexForBar(bar, context: context)) }
+    func melodyForBar(_ bar: Int, context: PlaybackContext? = nil) -> [MelodyNote] { melodyOfSeq(sequenceIndexForBar(bar, context: context)) }
     /// The extra instrument parts to play for a given bar (per-sequence in Song Mode).
-    func partsForBar(_ bar: Int) -> [InstrumentPart] { partsOfSeq(sequenceIndexForBar(bar)) }
+    func partsForBar(_ bar: Int, context: PlaybackContext? = nil) -> [InstrumentPart] { partsOfSeq(sequenceIndexForBar(bar, context: context)) }
 
     /// Per-track variants — identical to the `…ForBar` lookups unless a clip pins a pattern.
-    func lanesForTrack(_ track: String, atBar bar: Int) -> [String: [Double]] {
-        lanesOfSeq(sequenceIndex(track: track, atBar: bar))
+    func lanesForTrack(_ track: String, atBar bar: Int, context: PlaybackContext? = nil) -> [String: [Double]] {
+        lanesOfSeq(sequenceIndex(track: track, atBar: bar, context: context))
     }
-    func melodyForTrack(_ track: String, atBar bar: Int) -> [MelodyNote] {
-        melodyOfSeq(sequenceIndex(track: track, atBar: bar))
+    func melodyForTrack(_ track: String, atBar bar: Int, context: PlaybackContext? = nil) -> [MelodyNote] {
+        melodyOfSeq(sequenceIndex(track: track, atBar: bar, context: context))
     }
-    func partsForTrack(_ track: String, atBar bar: Int) -> [InstrumentPart] {
-        partsOfSeq(sequenceIndex(track: track, atBar: bar))
+    func partsForTrack(_ track: String, atBar bar: Int, context: PlaybackContext? = nil) -> [InstrumentPart] {
+        partsOfSeq(sequenceIndex(track: track, atBar: bar, context: context))
     }
-    func stepMetaForTrack(_ track: String, atBar bar: Int) -> [String: [Int: StepMeta]] {
-        stepMetaOfSeq(sequenceIndex(track: track, atBar: bar))
+    func stepMetaForTrack(_ track: String, atBar bar: Int, context: PlaybackContext? = nil) -> [String: [Int: StepMeta]] {
+        stepMetaOfSeq(sequenceIndex(track: track, atBar: bar, context: context))
     }
 
     /// Legacy tracks whose clip pins a pattern different from the section's, at this bar. Empty in the
     /// common case, which is what lets the scheduler keep its single hoisted lanes dictionary.
-    func clipSeqOverrides(atBar bar: Int) -> [String: Int] {
-        guard songMode, !clips.isEmpty else { return [:] }
-        let base = sequenceIndexForBar(bar)
+    func clipSeqOverrides(atBar bar: Int, context: PlaybackContext? = nil) -> [String: Int] {
+        guard (context ?? playbackContext) == .song, !clips.isEmpty else { return [:] }
+        let base = sequenceIndexForBar(bar, context: context)
         var out: [String: Int] = [:]
         for tk in clips.keys {
             if let s = clipSeq(track: tk, atBar: bar), s != base { out[tk] = s }
@@ -1254,7 +1250,7 @@ final class Project: ObservableObject {
         checkpoint("mapPads", coalesce: false)
         let midis = synthPadMidis()
         var bank: [String: SynthBankSlot] = [:]
-        for (i, p) in Kit.pads.enumerated() { bank[p.id] = SynthBankSlot(midi: midis[i], patch: editPatch) }
+        for (i, p) in (Kit.banks["D"]?.pads ?? Kit.pads).enumerated() { bank[p.id] = SynthBankSlot(midi: midis[i], patch: editPatch) }
         synthBank = bank
         self.bank = "D"
     }
@@ -1288,7 +1284,7 @@ final class Project: ObservableObject {
         }
         let (step, dur) = Self.boundedNote(step: step, len: len, barSteps: barSteps)   // honor the bar, not a literal 16
         let lo = step, hi = step + dur
-        melody.removeAll { $0.step < hi && $0.step + $0.dur > lo }
+        melody.removeAll { $0.pitch == pitch && $0.step < hi && $0.step + $0.dur > lo }
         melody.append(MelodyNote(step: step, pitch: pitch, dur: dur, vel: step % 4 == 0 ? 0.95 : 0.8))
         emit(.setMelodyNote(step: step, pitch: pitch, len: dur, on: true))
     }
@@ -1389,17 +1385,61 @@ final class Project: ObservableObject {
     /// Assign a decoded one-shot to a pad: persist a WAV, register it with the engine,
     /// keep a copy in memory for offline export, and point the PadParam at it.
     /// `bank` scopes where the sample plays (F0); nil = every bank (legacy behavior).
-    func setPadSample(_ padID: String, data: [Float], name: String, bank: String?) {
-        guard !data.isEmpty else { return }
-        checkpoint("padSample:\(padID)", coalesce: false)
-        applyPadSample(padID, data: data, name: name, bank: bank)
+    @discardableResult
+    func setPadSample(_ padID: String, data: [Float], name: String, bank: String?, pitch: Double? = nil) -> Bool {
+        guard !data.isEmpty else { return false }
+        checkpoint("padSample:\(Self.sampleKey(padID, bank: bank))", coalesce: false)
+        return applyPadSample(padID, data: data, name: name, bank: bank, pitch: pitch)
     }
     /// The pad-sample assignment work WITHOUT an undo checkpoint, so batch ops (chop-to-pads)
     /// can collapse to a single undo step. Returns false (and assigns nothing) when the WAV could not be
     /// written — pointing a pad at a file that does not exist silently loses the sound and would make the
     /// next Save refuse the project (#PERSIST-CLIP).
+    /// Move a pre-64-pad save onto per-bank pad ids. Idempotent — ids that already name a bank are left
+    /// alone — so it is safe on every restore, including undo.
+    ///
+    /// The old model had ONE `PadParam` per pad serving all four banks, with a sample tagged to a bank.
+    /// So the faithful split is: the tagged bank's pad gets a copy of the whole thing (those params DID
+    /// apply to that sample), and the Bank A pad keeps the same params minus the sample (they applied to
+    /// the drum it played there). Both then sound exactly as before.
+    ///
+    /// ProjectSnapshot.migratedPadSlots also migrates lane/track references using the saved audible bank.
+    /// A legacy synth bank was always Bank D and moves there.
+    nonisolated static func migratedToBankSlots(padParams: [String: PadParam],
+                                                synthBank: [String: SynthBankSlot]?)
+        -> (padParams: [String: PadParam], synthBank: [String: SynthBankSlot]?) {
+        var out = padParams
+        for (id, pp) in padParams where Kit.bankOf(id) == "A" {
+            for bank in Kit.bankOrder {
+                let key = Kit.slotKey(bank: bank, pad: id)
+                if key != id && out[key] != nil { continue }
+                var copy = pp
+                if let owner = pp.sampleBank, owner != bank {
+                    copy.sampleFile = nil; copy.sampleName = nil; copy.sampleBank = nil
+                }
+                if copy.sampleFile != nil { copy.sampleBank = bank }
+                out[key] = copy == PadParam() ? nil : copy
+            }
+        }
+        let synth = synthBank.map { bank -> [String: SynthBankSlot] in
+            var m: [String: SynthBankSlot] = [:]
+            for (id, slot) in bank { m[Kit.bankOf(id) == "A" ? Kit.slotKey(bank: "D", pad: id) : id] = slot }
+            return m
+        }
+        return (out, synth)
+    }
+
+    /// Where a sample for `padID` in `bank` lives. Every pad-sample writer goes through this, so a
+    /// sample can only ever land on its OWN bank's pad — assigning to Bank C's slot 1 used to overwrite
+    /// Bank A's kick, because both were the one "kick" slot (SAMPLE_FLOW_AUDIT finding 1). `nil` keeps
+    /// the id as given.
+    nonisolated static func sampleKey(_ padID: String, bank: String?) -> String {
+        bank.map { Kit.slotKey(bank: $0, pad: padID) } ?? padID
+    }
+
     @discardableResult
-    private func applyPadSample(_ padID: String, data: [Float], name: String, bank: String?) -> Bool {
+    private func applyPadSample(_ padID0: String, data: [Float], name: String, bank: String?, pitch: Double? = nil) -> Bool {
+        let padID = Self.sampleKey(padID0, bank: bank)
         // Old pad WAV intentionally kept — an undo snapshot may still reference it. The orphan sweep
         // reclaims WAVs no saved project references; deleting here destroyed the take on undo (#PERSIST-02).
         let file = UUID().uuidString + ".wav"
@@ -1410,7 +1450,10 @@ final class Project: ObservableObject {
         padSampleData[padID] = data
         engine.registerPadSample(padID, data)
         var p = padParams[padID] ?? PadParam()
-        p.sampleFile = file; p.sampleName = String(name.prefix(24)); p.sound = nil; p.sampleBank = bank
+        p.sampleFile = file; p.sampleName = String(name.prefix(24)); p.sound = nil; p.sampleBank = Kit.bankOf(padID)
+        // A chop from the Sample screen brings the pitch it was auditioned at. Without this the pad kept
+        // whatever pitch it had before, so a sample tuned to the song's key played out of key (finding 3).
+        if let pitch { p.pitch = pitch }
         padParams[padID] = p
         decodedPadSampleRefs[padID] = file   // now decoded — a restore of this state re-reads nothing
         return true
@@ -1455,12 +1498,13 @@ final class Project: ObservableObject {
         guard !prepared.isEmpty else { return 0 }
         checkpoint("padSamples", coalesce: false)
         for item in prepared {
-            padSampleData[item.id] = item.data
-            engine.registerPadSample(item.id, item.data)
-            var p = padParams[item.id] ?? PadParam()
-            p.sampleFile = item.file; p.sampleName = String(item.name.prefix(24)); p.sound = nil; p.sampleBank = bank
-            padParams[item.id] = p
-            decodedPadSampleRefs[item.id] = item.file
+            let key = Self.sampleKey(item.id, bank: bank)
+            padSampleData[key] = item.data
+            engine.registerPadSample(key, item.data)
+            var p = padParams[key] ?? PadParam()
+            p.sampleFile = item.file; p.sampleName = String(item.name.prefix(24)); p.sound = nil; p.sampleBank = Kit.bankOf(key)
+            padParams[key] = p
+            decodedPadSampleRefs[key] = item.file
         }
         return prepared.count
     }
@@ -1479,32 +1523,148 @@ final class Project: ObservableObject {
         return i0
     }
 
+    // MARK: - Slice geometry (SAMPLE_FLOW_AUDIT findings 3, 4, 6, 7)
+    //
+    // Two coordinate spaces meet here. Slices are stored in FORWARD space — positions on the original
+    // buffer, where transients are detected. The trim lives in EDITED space — the waveform actually shown
+    // and heard, which is the original reversed when the Reverse tool is on. Every consumer (audition,
+    // assign, extract) goes through `sliceWindows`, so they cannot disagree about where a chop is.
+
+    /// The most slices the grid and the pads can hold. Every way of making slices respects it.
+    nonisolated static let maxSlices = 16
+
+    /// Each slice's window in EDITED space, clamped to the trim — or nil where the slice falls entirely
+    /// outside it (that pad is then left alone). Audition, extract and assign all use this, so a chop is
+    /// exactly what you heard, and trimmed-off audio never ends up on a pad (finding 4).
+    nonisolated static func sliceWindows(slices: [Double], trim: [Double], mirrored: Bool) -> [(a: Double, b: Double)?] {
+        let t0 = trim.first ?? 0, t1 = trim.count > 1 ? trim[1] : 1
+        return slices.indices.map { i in
+            let a0 = slices[i], b0 = i + 1 < slices.count ? slices[i + 1] : 1
+            let (a1, b1) = mirrored ? (1 - b0, 1 - a0) : (a0, b0)
+            let a = max(a1, t0), b = min(b1, t1)
+            return b - a > 1e-6 ? (a, b) : nil
+        }
+    }
+
+    /// The trim expressed in FORWARD space, where slices are generated.
+    nonisolated static func forwardTrim(_ trim: [Double], mirrored: Bool) -> (Double, Double) {
+        let t0 = trim.first ?? 0, t1 = trim.count > 1 ? trim[1] : 1
+        return mirrored ? (1 - t1, 1 - t0) : (t0, t1)
+    }
+
+    /// `n` even regions across the TRIMMED audio, not the whole buffer (finding 4).
+    nonisolated static func equalSlices(_ n: Int, trim: [Double], mirrored: Bool) -> [Double] {
+        let (f0, f1) = forwardTrim(trim, mirrored: mirrored)
+        let k = max(1, min(maxSlices, n))
+        return (0..<k).map { f0 + (f1 - f0) * Double($0) / Double(k) }
+    }
+
+    /// Threshold chop within the trim, capped at `maxSlices`. Returns the slices and how many transients
+    /// qualified, so the caller can say what the cap dropped instead of dropping it silently (finding 7).
+    nonisolated static func thresholdSlices(transients: [Double], minGap: Double, trim: [Double],
+                                            mirrored: Bool) -> (slices: [Double], found: Int) {
+        let (f0, f1) = forwardTrim(trim, mirrored: mirrored)
+        var kept: [Double] = [f0]
+        for t in transients.sorted() where t > f0 + 0.01 && t < f1 {
+            if t - (kept.last ?? -1) >= minGap { kept.append(t) }
+        }
+        return (Array(kept.prefix(maxSlices)), kept.count)
+    }
+
+    /// How a destructive effect reshaped the buffer, so slices and trim can follow it (finding 6).
+    enum SampleReshape {
+        /// Content keeps its TIME; the buffer may grow (a reverb tail). Positions scale by in/out.
+        case timeAligned(inCount: Int, outCount: Int)
+        /// Content is warped uniformly across the whole buffer (time-stretch). Positions are unchanged.
+        case uniformWarp
+        /// The buffer was cut down to `[from, to]` of itself.
+        case crop(from: Double, to: Double)
+    }
+
+    /// Slices and trim after a destructive effect bakes the edited buffer into a new original. Every
+    /// effect used to end in `slices = []`, silently throwing away a chop you had just laid out.
+    /// `bakedReverse`: the Reverse tool was on, so the baked audio is reversed relative to where the
+    /// (forward-space) slices were detected — they are mirrored once to line up with it.
+    nonisolated static func reshapedEdits(slices: [Double], trim: [Double], bakedReverse: Bool,
+                                          _ shape: SampleReshape) -> (slices: [Double], trim: [Double]) {
+        var sl = slices
+        if bakedReverse, !sl.isEmpty {
+            let ends = Array(sl.dropFirst()) + [1.0]
+            sl = ends.map { 1 - $0 }.sorted()
+        }
+        var t0 = trim.first ?? 0, t1 = trim.count > 1 ? trim[1] : 1
+        switch shape {
+        case .uniformWarp:
+            break
+        case let .timeAligned(inCount, outCount):
+            guard inCount > 0, outCount > 0 else { break }
+            let r = Double(inCount) / Double(outCount)
+            sl = sl.map { $0 * r }
+            // An untrimmed end stays at 1 so a new reverb tail is heard, not cut off by a remapped trim.
+            if t0 > 0 { t0 *= r }
+            if t1 < 1 { t1 *= r }
+        case let .crop(from, to):
+            let w = to - from
+            guard w > 1e-6 else { return ([], [0, 1]) }
+            let inner = sl.filter { $0 > from + 1e-6 && $0 < to - 1e-6 }.map { ($0 - from) / w }
+            sl = sl.isEmpty ? [] : [0] + inner
+            t0 = 0; t1 = 1
+        }
+        return (Array(sl.prefix(maxSlices)), [t0, t1])
+    }
+
+    /// Mix harmony voices into a chop the way the Sample screen auditions them — each interval a
+    /// varispeed copy at `harmonyGain` of the root — so Harmonize survives the trip to the pads (finding 3).
+    /// Peak-limited only if the sum would clip the WAV.
+    nonisolated static func bakeHarmony(_ x: [Float], intervals: [Int], harmonyGain: Float = 0.55 / 0.95) -> [Float] {
+        guard !x.isEmpty, !intervals.isEmpty else { return x }
+        let voices = intervals.map { pow(2.0, Double($0) / 12.0) }
+        let outLen = voices.reduce(x.count) { max($0, Int(Double(x.count) / $1)) }
+        var out = [Float](repeating: 0, count: outLen)
+        for i in 0..<x.count { out[i] = x[i] }
+        for rate in voices {
+            let n = Int(Double(x.count) / rate)
+            for i in 0..<n {
+                let pos = Double(i) * rate, j = Int(pos), f = Float(pos - Double(j))
+                let a = x[min(j, x.count - 1)], b = x[min(j + 1, x.count - 1)]
+                out[i] += (a + (b - a) * f) * harmonyGain
+            }
+        }
+        let peak = out.reduce(Float(0)) { max($0, abs($1)) }
+        if peak > 1 { let g = 0.99 / peak; for i in out.indices { out[i] *= g } }
+        return out
+    }
+
     /// Chop the current sample buffer into per-pad one-shots, so the chops are playable in the
     /// step sequencer AND included in export — fixing the bank-C-only `sliceBank` dead-end where
     /// recorded/sequenced chops silently played the pad's drum voice (#26/#28/#118). One undo step.
+    ///
+    /// Chop `buffer` (the EDITED buffer) onto Bank C's own pads, one slice per pad. Windows come from
+    /// `sliceWindows`, so each chop is exactly what was auditioned and never includes trimmed-off audio;
+    /// `pitch` (the Sample screen's pitch + tune-to-key) goes onto the pad and `harmony` is baked in, so
+    /// the pad plays what you heard — it used to keep the pad's OLD pitch (findings 3, 4). Returns the
+    /// number of pads written.
     @discardableResult
-    func assignSlicesToPads(buffer: [Float], slices: [Double], reverse: Bool, mirror: Bool = false) -> Int {
+    func assignSlicesToPads(buffer: [Float], slices: [Double], trim: [Double] = [0, 1], reverse: Bool,
+                            mirror: Bool = false, pitch: Double = 0, harmony: [Int] = []) -> Int {
         guard !buffer.isEmpty, !slices.isEmpty else { return 0 }
         checkpoint("assignChops", coalesce: false)
         sliceBank = nil   // supersede the legacy live-only slice bank — chops are real pad samples now
-        let count = slices.count
-        var assigned = 0
+        let windows = Self.sliceWindows(slices: slices, trim: trim, mirrored: mirror)
+        let count = min(windows.count, Self.maxSlices)
+        let pads = Kit.banks["C"]?.pads ?? Kit.pads
         let zc = Int(0.005 * engine.sampleRate)   // ±5 ms zero-cross snap window (SAMPLING-04)
-        for (i, p) in Kit.pads.enumerated() {
-            if i >= count { break }
+        var assigned = 0
+        for i in 0..<min(count, pads.count) {
             let si = reverse ? (count - 1 - i) : i
-            let a0 = slices[si]
-            let b0 = si + 1 < count ? slices[si + 1] : 1
-            // A baked Reverse tool flips the audio but slices were detected on the forward buffer —
-            // mirror each window so the cut lands where the transient actually is (F3).
-            let (a, b) = mirror ? (1 - b0, 1 - a0) : (a0, b0)
+            guard let (a, b) = windows[si] else { continue }   // slice lies outside the trim — leave the pad
             var lo = max(0, min(buffer.count, Int(a * Double(buffer.count))))
             var hi = max(lo, min(buffer.count, Int(b * Double(buffer.count))))
             if lo > 0 { lo = Self.nearestZeroCross(buffer, near: lo, within: zc) }             // interior edges only —
             if hi < buffer.count { hi = Self.nearestZeroCross(buffer, near: hi, within: zc) }  // 0 and end ARE boundaries
             guard hi > lo else { continue }
-            // Count only chops whose WAV actually landed on disk (chops live on Bank C only, F0).
-            if applyPadSample(p.id, data: Array(buffer[lo..<hi]), name: "Chop \(si + 1)", bank: "C") { assigned += 1 }
+            let chop = Self.bakeHarmony(Array(buffer[lo..<hi]), intervals: harmony)
+            if applyPadSample(pads[i].id, data: chop, name: "Chop \(si + 1)", bank: "C", pitch: pitch) { assigned += 1 }
         }
         return assigned
     }
@@ -1512,19 +1672,24 @@ final class Project: ObservableObject {
     /// Resample (MPC-style): bounce the current pattern — drums + melody + parts + FX —
     /// to a new one-shot sample on `padID`, exactly `bars` long so it loops seamlessly.
     /// You can then chop it, retune it, or play it like any pad sample: the core MPC loop.
-    func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample") async {
+    @discardableResult
+    func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample",
+                       render: ProjectOfflineRenderer = Project.renderOfflinePlan) async -> Bool {
+        guard !isBouncing else { return false }
+        let destination = ProjectRenderDestination(self)
+        let target = operationDestination()
         let targetBank = bank   // scope the bounce to the bank it was resampled in (F0); bank may change mid-render
-        let plan = buildExportPlan(loopBarsOverride: bars)
-        isBouncing = true; defer { isBouncing = false }
-        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor so the UI stays live (#ARCH-01)
-        guard !l.isEmpty else { return }
+        let plan = buildExportPlan(loopBarsOverride: max(1, bars))
         let barSec = Double(max(1, barSteps)) * (60.0 / Double(bpm)) / 4.0
-        let frames = max(1, Int((Double(bars) * barSec * engine.sampleRate).rounded()))   // exact bar length → seamless loop
+        let frames = max(1, Int((Double(max(1, bars)) * barSec * plan.sr).rounded()))
+        isBouncing = true; defer { isBouncing = false }
+        let (l, r) = await render(plan)
+        guard acceptRender(destination), target.matches(self), !l.isEmpty, l.count == r.count else { return false }   // exact bar length → seamless loop
         var mono = [Float](repeating: 0, count: frames)   // pads with silence to the bar line; truncates any tail past it
         var peak: Float = 0
         for i in 0..<min(frames, l.count) { let v = (l[i] + r[i]) * 0.5; mono[i] = v; peak = max(peak, abs(v)) }
         if peak > 1 { for i in mono.indices { mono[i] /= peak } }   // guard inter-sum clipping
-        setPadSample(padID, data: mono, name: name, bank: targetBank)
+        return setPadSample(padID, data: mono, name: name, bank: targetBank)
     }
 
     /// One-knob auto-master (D2, heuristic — no ML): bounce the current beat, measure its loudness +
@@ -1532,13 +1697,16 @@ final class Project: ObservableObject {
     /// corrective high-shelf, and arm the limiter so the louder result can't clip. Returns a summary for
     /// the UI, or nil if there's nothing to analyze. Undoable (master fader + master-bus checkpoints).
     @discardableResult
-    func autoMaster() async -> String? {
+    func autoMaster(render: ProjectOfflineRenderer = Project.renderOfflinePlan) async -> String? {
+        guard !isBouncing else { return nil }
+        let destination = ProjectRenderDestination(self)
         let plan = buildExportPlan()
         isBouncing = true; defer { isBouncing = false }
-        let (l, r) = await Task.detached { renderOffline(plan) }.value   // off the main actor (#ARCH-01)
+        let (l, r) = await render(plan)
+        guard acceptRender(destination) else { return nil }
         let n = min(l.count, r.count)
         guard n > 1000 else { return nil }
-        let coef = exp(-2.0 * .pi * 2000.0 / engine.sampleRate)   // ~2 kHz split for a coarse low/high balance
+        let coef = exp(-2.0 * .pi * 2000.0 / plan.sr)   // ~2 kHz split for a coarse low/high balance
         var sumSq = 0.0, lowSq = 0.0, highSq = 0.0, lp = 0.0
         for i in 0..<n {
             let s = Double((l[i] + r[i]) * 0.5)
@@ -1581,9 +1749,10 @@ final class Project: ObservableObject {
 
     /// Remap every pad's sound from a `padID → sound` map (imported samples are kept untouched).
     private func applySoundMap(_ sounds: [String: String]) {
-        for pad in Kit.pads {
-            if padSampleActive(pad.id) { continue }   // don't stomp a sample that's audible in this bank
-            let snd = sounds[pad.id]
+        // Kits are defined against the base pads, so look each one up by its base id.
+        for pad in Kit.banks[bank]?.pads ?? Kit.pads {
+            if padSampleActive(pad.id) { continue }   // don't stomp a sample on this pad
+            let snd = sounds[Kit.baseID(pad.id)]
             let override = (snd != nil && snd != pad.sound) ? snd : nil
             if var p = padParams[pad.id] {
                 p.sound = override
@@ -1612,9 +1781,9 @@ final class Project: ObservableObject {
     /// Capture the current per-pad sound overrides (skipping defaults & samples) for saving as a kit.
     func currentPadSounds() -> [String: String] {
         var m: [String: String] = [:]
-        for pad in Kit.pads {
+        for pad in Kit.banks[bank]?.pads ?? Kit.pads {
             guard let pp = padParams[pad.id], !padSampleActive(pad.id), let s = pp.sound, s != pad.sound else { continue }
-            m[pad.id] = s
+            m[Kit.baseID(pad.id)] = s   // kits are defined against base pads, so they load onto any kit bank
         }
         return m
     }
@@ -1687,7 +1856,8 @@ final class Project: ObservableObject {
             || (s.tools["fadeIn"] ?? false) || (s.tools["fadeOut"] ?? false) || abs(s.gain - 1) > 0.001
         if edits {
             _ = engine.applySampleEdits(reverse: s.tools["reverse"] ?? false, normalize: s.tools["normalize"] ?? false,
-                                        fadeIn: s.tools["fadeIn"] ?? false, fadeOut: s.tools["fadeOut"] ?? false, gain: s.gain)
+                                        fadeIn: s.tools["fadeIn"] ?? false, fadeOut: s.tools["fadeOut"] ?? false, gain: s.gain,
+                                        trim: s.trim)   // fades sit on the trim, so every rebuild must place them there
         }
         decodedSamplerFile = file
     }
@@ -1767,9 +1937,12 @@ final class Project: ObservableObject {
     /// True when there's anything to render — guards Export against bouncing silence (#275). Shared by the
     /// Tracks export button and the level-independent rail Share action so Export is reachable at every level.
     var hasExportableContent: Bool {
-        lanes.values.contains { $0.contains { $0 != 0 } }
-            || !audioClips.isEmpty || !melody.isEmpty || !parts.isEmpty
-            || tracks.contains { $0.playsAdditively }
+        if !audioClips.isEmpty || tracks.contains(where: { $0.playsAdditively }) { return true }
+        if !songMode && sequenceHasContent(activeSeq) { return true }
+        var referenced = Set(arrangement.map(\.seq) + clips.values.flatMap { $0.compactMap(\.seq) })
+        // Unpinned clips outside a section resolve to A, just like sequenceIndexForBar.
+        if clips.values.contains(where: { !$0.isEmpty }) { referenced.insert(0) }
+        return referenced.contains { sequences.indices.contains($0) && sequenceHasContent($0) }
     }
 
     // Song-wide automation (Tracks Tier 3)
@@ -1826,6 +1999,8 @@ final class Project: ObservableObject {
         snap.punchInBar = punchInBar
         snap.id = projectID
         snap.songBars = songBars
+        snap.soundFonts = referencedSoundFonts()
+        snap.hostedEffects = engine.masterChainSnapshot()
         return snap
     }
 
@@ -1849,6 +2024,13 @@ final class Project: ObservableObject {
     /// Load a project snapshot (e.g. from disk). Resets the sample buffer and
     /// clears undo history — this is a fresh project, not an edit.
     func restore(_ s: ProjectSnapshot, keepHistory: Bool = false) {
+        if !isApplyingRemote || s.id != projectID {
+            engine.finishMicCapture()
+            beforeProjectReplacement?()
+            assistPanic(); engine.allNotesOff(); engine.stopClips()
+            playing = false; recording = false; countingIn = false; midiArmed = false
+            audioArmedTrack = nil; queuedSeq = nil; step = -1; bar = 0
+        }
         applyState(s, resetSample: true)
         // Everything is reconciled against what the live session already holds, so a restore of UNCHANGED
         // state (the follower's 6 s fullSync) re-reads no WAVs: re-decoding every take and pad one-shot on
@@ -1941,13 +2123,15 @@ final class Project: ObservableObject {
             || (s.tools["fadeIn"] ?? false) || (s.tools["fadeOut"] ?? false) || abs(s.gain - 1) > 0.001
         if edits {
             _ = engine.applySampleEdits(reverse: s.tools["reverse"] ?? false, normalize: s.tools["normalize"] ?? false,
-                                        fadeIn: s.tools["fadeIn"] ?? false, fadeOut: s.tools["fadeOut"] ?? false, gain: s.gain)
+                                        fadeIn: s.tools["fadeIn"] ?? false, fadeOut: s.tools["fadeOut"] ?? false, gain: s.gain,
+                                        trim: s.trim)   // fades sit on the trim, so every rebuild must place them there
         }
     }
 
     /// Apply a snapshot to the live state. Shared by load and by undo/redo;
     /// `resetSample` is true only on load (undo keeps the loaded sample around).
-    private func applyState(_ s: ProjectSnapshot, resetSample: Bool) {
+    private func applyState(_ incoming: ProjectSnapshot, resetSample: Bool) {
+        let s = incoming.migratedPadSlots()
         editRevision &+= 1
         isApplyingState = true
         defer { isApplyingState = false }
@@ -1971,6 +2155,8 @@ final class Project: ObservableObject {
         scaleLock = s.scaleLock; rollLen = s.rollLen
         autoTarget = s.autoTarget ?? ""; autoLane = s.autoLane ?? Array(repeating: 1, count: 16)
         songAutoTarget = s.songAutoTarget ?? ""; songAuto = s.songAuto ?? Array(repeating: 1, count: songBars)
+        restoreSoundFonts(s.soundFonts ?? [:])
+        engine.restoreProjectEffects(s.hostedEffects ?? [])
         synthPatch = s.synthPatch.validated(); savedSynths = s.savedSynths.map { $0.validated() }; padParams = s.padParams; synthBank = s.synthBank
         activePart = s.activePart ?? "lead"
         chordMode = s.chordMode ?? "off"; arpMode = s.arpMode ?? "off"; arpRate = s.arpRate ?? "1/16"; arpOct = s.arpOct ?? 1
@@ -2012,6 +2198,7 @@ final class Project: ObservableObject {
     func checkpoint(_ key: String, coalesce: Bool = true) -> Bool {
         if isApplyingState { return false }   // restoring a snapshot (undo/redo/load) is not itself an edit
         if !hasUnsavedChanges { hasUnsavedChanges = true }   // don't re-publish an unchanged flag on every drag frame
+        if !["movetrack", "renametrack", "trackcolor"].contains(key) { renderRevision &+= 1 }
         editRevision &+= 1   // per edit, deliberately: Transport's step cache + ProjectsSheet's "unchanged" check key off it
         let t = Date()
         if coalesce, key == lastCheckpointKey, t.timeIntervalSince(lastCheckpointAt) < 0.6 {
@@ -2084,7 +2271,11 @@ final class Project: ObservableObject {
 
     /// Reset to a fresh default project (same seed state as a clean launch).
     func resetToDefault() {
-        restore(Project(engine: engine).snapshot())
+        var blank = Project(engine: engine).snapshot()
+        blank.lanes = [:]; blank.melody = []; blank.parts = []
+        blank.sequences = ["A", "B", "C", "D"].map { SeqSlot(name: $0, lanes: [:], melody: []) }
+        blank.arrangement = []; blank.clips = [:]; blank.hostedEffects = []
+        restore(blank)
         name = "Untitled Beat"
     }
 
@@ -2105,7 +2296,7 @@ final class Project: ObservableObject {
 // MARK: - Codable snapshot
 
 nonisolated struct ProjectSnapshot: Codable, Sendable {   // Sendable + nonisolated → encode/decode can run off the main actor (no save/load hitch)
-    var version = 3   // v3: tracks may carry source.link (live-linked); v1/v2 decode as frozen (tolerant)
+    var version = 4   // v4: independent pad banks; migration moves all musical references together
     var name: String
     var bpm: Int
     var swing: Double
@@ -2163,5 +2354,7 @@ nonisolated struct ProjectSnapshot: Codable, Sendable {   // Sendable + nonisola
     var songBars: Int? = nil                    // optional → older saves decode to nil and load as 16 bars
     var sampleBufferToken: Int? = nil           // #19: in-memory only — links an undo snapshot to a stored engine buffer
     var id: String? = nil                        // optional → v1/name-keyed saves decode to nil; minted on first load, stamped on save (#219)
+    var hostedEffects: [HostedEffectState]? = nil
+    var soundFonts: [String: Data]? = nil   // embedded once; save, undo, duplicate and archives retain assets
     var punchInBar: Int? = nil                   // optional → record-start bar persists (was reset to 0 on every load)
 }

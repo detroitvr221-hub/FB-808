@@ -176,7 +176,7 @@ struct KitBrowserView: View {
                 Button { loadMIDI(s) } label: { chipLabel("→ Roll") }.buttonStyle(.plain).disabled(busy != nil)
             } else {
                 Menu {
-                    ForEach(Kit.pads, id: \.id) { pad in Button(pad.label) { assign(s, to: pad.id) } }
+                    ForEach(Kit.banks[project.bank]?.pads ?? Kit.pads, id: \.id) { pad in Button(pad.label) { assign(s, to: pad.id) } }
                 } label: { chipLabel("→ Pad") }.disabled(busy != nil)
             }
         }

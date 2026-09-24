@@ -731,9 +731,9 @@ struct FB_808Tests {
         #expect(FileManager.default.fileExists(atPath: fresh.path))
     }
 
-    /// #32: the recovery slot writes a content-addressed sampler WAV; dropping the slot left that WAV
-    /// behind forever (nothing else references it).
-    @Test @MainActor func clearingTheRecoverySlotReclaimsItsSamplerAudio() async throws {
+    /// Recovery history now retains a reference after clearing the automatic launch prompt.
+    /// Explicitly deleting the last version must still reclaim its otherwise orphaned sampler WAV.
+    @Test @MainActor func recoveryHistoryKeepsAudioUntilItsLastVersionIsDeleted() async throws {
         let dir = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let samples = dir.appendingPathComponent("samples")
@@ -745,6 +745,13 @@ struct FB_808Tests {
         _ = await store.autosaveSnapshot()   // barrier: the slot and its sampler WAV are on disk
         #expect((try? FileManager.default.contentsOfDirectory(atPath: samples.path))?.count == 1)
         store.clearAutosave()
+        #expect(await store.autosaveSnapshot() == nil)
+        await store.reloadRecoveries()
+        let version = try #require(store.recoveryItems.first)
+        #expect(store.recoveryItems.count == 1)
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: samples.path))?.count == 1,
+                "Retained recovery versions must keep their audio")
+        #expect(store.delete(version))
         await waitUntil { (try? FileManager.default.contentsOfDirectory(atPath: samples.path))?.isEmpty == true }
         #expect((try? FileManager.default.contentsOfDirectory(atPath: samples.path))?.isEmpty == true)
         #expect((try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.contains { $0.hasSuffix(".fd808json") } != true)
@@ -1947,5 +1954,200 @@ struct FB_808Tests {
         p.recordHit(pad, 0.0, vel: 1)
         #expect(p.sequences[1].lanes[pad]?[0] == 1)   // landed in the pinned pattern B
         #expect(p.lanes[pad]?[0] == 0)                // and NOT in the active edit buffer (A)
+    }
+
+    // MARK: - 64 distinct pads (SAMPLE_FLOW_AUDIT findings 1–2)
+
+    private static func tone(_ f: Double, _ n: Int = 512) -> [Float] {
+        (0..<n).map { Float(sin(Double($0) * f)) * 0.5 }
+    }
+
+    /// Finding 1, confirmed by a probe before the fix: a sample on Bank A's kick overwrote Bank C's chop
+    /// on the same position, because both were the single "kick" slot.
+    @Test @MainActor func aSampleOnOneBankDoesNotDestroyAnother() {
+        let p = Project(engine: AudioEngine())
+        let chop = Self.tone(0.05), other = Self.tone(0.2)
+        p.setPadSample("kick", data: chop, name: "Chop 1", bank: "C")
+        p.setPadSample("kick", data: other, name: "Imported", bank: "A")
+        #expect(p.padSampleData["C:kick"] == chop)       // Bank C's chop is intact
+        #expect(p.padSampleData["kick"] == other)        // Bank A has its own
+        #expect(p.padSampleActive("C:kick"))
+        #expect(p.padSampleActive("kick"))
+    }
+
+    /// Finding 2, confirmed by a probe before the fix: what played depended on which bank TAB was showing,
+    /// in the sequencer and in every export path.
+    @Test @MainActor func playbackDoesNotFollowTheViewedBank() {
+        let p = Project(engine: AudioEngine())
+        p.setPadSample("kick", data: Self.tone(0.05), name: "Chop 1", bank: "C")
+        p.setBank("C")
+        let whileViewingC = p.soundFor("C:kick")
+        p.setBank("A")                       // just LOOKING at Bank A
+        #expect(p.soundFor("C:kick") == whileViewingC)
+        #expect(p.soundFor("C:kick") == "smp:C:kick")
+        #expect(p.soundFor("kick") == "kick")  // and Bank A's kick is still the kick
+    }
+
+    @Test func slotKeysRoundTripAndBankAStaysBare() {
+        #expect(Kit.slotKey(bank: "A", pad: "kick") == "kick")
+        #expect(Kit.slotKey(bank: "C", pad: "kick") == "C:kick")
+        #expect(Kit.slotKey(bank: "C", pad: "C:kick") == "C:kick")   // already a slot → unchanged
+        #expect(Kit.baseID("C:hatOpen") == "hatOpen")
+        #expect(Kit.baseID("hatOpen") == "hatOpen")
+        #expect(Kit.bankOf("D:fx") == "D")
+        #expect(Kit.bankOf("fx") == "A")
+        // Every bank has 16 distinct ids, and none collide across banks.
+        let all = Kit.bankOrder.flatMap { (Kit.banks[$0]?.pads ?? []).map(\.id) }
+        #expect(all.count == 64)
+        #expect(Set(all).count == 64)
+        #expect(Kit.padByID.count == 64)
+    }
+
+    /// An untouched Bank B/C/D pad still sounds like, routes like, and belongs to the same track as its
+    /// Bank A counterpart — only its identity changed.
+    @Test @MainActor func slotPadsKeepTheirVoiceChannelAndTrack() {
+        let p = Project(engine: AudioEngine())
+        #expect(p.soundFor("B:snare") == "snare")
+        #expect(Kit.channelOf("C:hatClosed") == Kit.channelOf("hatClosed"))
+        #expect(Kit.trackOf("C:sub808") == Kit.trackOf("sub808"))
+    }
+
+    /// Bank C/D hold the user's own audio: slices 5 and 6 must not cut each other like an open/closed hat.
+    @Test func userBanksDoNotInheritTheHatChoke() {
+        #expect(Kit.padByID["hatOpen"]?.defaultChoke == DefaultChoke.hats)
+        #expect(Kit.padByID["B:hatOpen"]?.defaultChoke == DefaultChoke.hats)
+        #expect(Kit.padByID["C:hatOpen"]?.defaultChoke == 0)
+        #expect(Kit.padByID["D:hatOpen"]?.defaultChoke == 0)
+    }
+
+    /// A hit on Bank C records into Bank C's own lane — it used to share the kick's lane, so the two
+    /// were indistinguishable.
+    @Test @MainActor func recordingOnBankCWritesItsOwnLane() {
+        let p = Project(engine: AudioEngine())
+        p.songMode = false
+        p.quantize = "1/16"
+        p.lanes["kick"] = Kit.emptyLane()
+        p.recordHit("C:kick", 0.0, vel: 1)
+        #expect(p.lanes["C:kick"]?[0] == 1)
+        #expect(p.lanes["kick"]?[0] == 0)
+    }
+
+    /// Generate and Clear act on the bank being viewed and leave the others alone. `lanes` now holds all
+    /// 64 pads, so a whole-dictionary replace would have erased sequences on banks you cannot see.
+    @Test @MainActor func generateAndClearOnlyTouchTheViewedBank() {
+        let p = Project(engine: AudioEngine())
+        p.lanes["C:kick"] = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+        p.setBank("A")
+        p.generateBeat(style: "boombap", density: 0.5, applyTempo: false)
+        #expect(p.lanes["C:kick"]?[0] == 1)          // Bank C survived Generate on A
+        p.setBank("C")
+        p.clearAll()
+        #expect(p.lanes["C:kick"] == nil)            // cleared what was on screen
+        #expect(p.lanes.keys.contains { Kit.bankOf($0) == "A" })   // Bank A kept its generated beat
+    }
+
+    /// Old saves: one PadParam served all banks, with the sample tagged to one of them. The migration
+    /// splits it so both pads sound exactly as before, and it is safe to run again (restore = undo too).
+    @Test func legacySavesSplitOntoPerBankPads() {
+        var pp = PadParam()
+        pp.sampleFile = "chop.wav"; pp.sampleName = "Chop 1"; pp.sampleBank = "C"; pp.pitch = 3
+        let legacySynth = ["kick": SynthBankSlot(midi: 60, patch: SynthPresets.default)]
+        let r = Project.migratedToBankSlots(padParams: ["kick": pp], synthBank: legacySynth)
+        #expect(r.padParams["C:kick"]?.sampleFile == "chop.wav")   // the chop moved to Bank C
+        #expect(r.padParams["C:kick"]?.pitch == 3)                 // with the params that applied to it
+        #expect(r.padParams["kick"]?.sampleFile == nil)            // Bank A kick no longer has the chop…
+        #expect(r.padParams["kick"]?.pitch == 3)                   // …but keeps the params it played with
+        #expect(r.synthBank?["D:kick"] != nil)                     // legacy synth bank → Bank D
+        #expect(r.synthBank?["kick"] == nil)
+        let again = Project.migratedToBankSlots(padParams: r.padParams, synthBank: r.synthBank)
+        #expect(again.padParams["C:kick"]?.sampleFile == "chop.wav")
+        #expect(again.padParams["kick"]?.sampleFile == nil)
+        #expect(again.synthBank?.keys.sorted() == r.synthBank?.keys.sorted())
+    }
+
+    // MARK: - Slice geometry (findings 3–7)
+
+    /// Finding 4: a chop is exactly what was auditioned — clamped to the trim, never the trimmed-off audio.
+    @Test func sliceWindowsClampToTheTrim() {
+        let w = Project.sliceWindows(slices: [0, 0.25, 0.5, 0.75], trim: [0.3, 0.7], mirrored: false)
+        #expect(w[0] == nil)                                        // [0, .25) lies before the trim
+        #expect(w[1].map { abs($0.a - 0.3) < 1e-9 && abs($0.b - 0.5) < 1e-9 } == true)
+        #expect(w[2].map { abs($0.a - 0.5) < 1e-9 && abs($0.b - 0.7) < 1e-9 } == true)
+        #expect(w[3] == nil)                                        // [.75, 1) lies after it
+        // Mirrored (Reverse tool): windows flip into edited space, then clamp.
+        let m = Project.sliceWindows(slices: [0, 0.5], trim: [0, 1], mirrored: true)
+        #expect(m[0].map { abs($0.a - 0.5) < 1e-9 && abs($0.b - 1) < 1e-9 } == true)
+    }
+
+    @Test func regionsDivideTheTrimmedAudio() {
+        let e = Project.equalSlices(4, trim: [0.2, 0.6], mirrored: false)
+        #expect(e.count == 4)
+        #expect(abs(e[0] - 0.2) < 1e-9 && abs(e[3] - 0.5) < 1e-9)
+        #expect(Project.equalSlices(40, trim: [0, 1], mirrored: false).count == Project.maxSlices)
+    }
+
+    /// Finding 7: Threshold Chop respects the 16-pad cap AND reports what it found, so the UI can say so.
+    @Test func thresholdChopIsCappedAndHonest() {
+        let transients = (1..<30).map { Double($0) / 30 }
+        let r = Project.thresholdSlices(transients: transients, minGap: 0.01, trim: [0, 1], mirrored: false)
+        #expect(r.slices.count == Project.maxSlices)
+        #expect(r.found > Project.maxSlices)
+        let inTrim = Project.thresholdSlices(transients: transients, minGap: 0.01, trim: [0.5, 1], mirrored: false)
+        #expect(inTrim.slices.allSatisfy { $0 >= 0.5 })
+    }
+
+    /// Finding 6: effects keep your chop instead of throwing it away.
+    @Test func destructiveEffectsKeepSlices() {
+        let sl = [0.0, 0.25, 0.5, 0.75]
+        // Same length (shimmer) → unchanged.
+        #expect(Project.reshapedEdits(slices: sl, trim: [0, 1], bakedReverse: false,
+                                      .timeAligned(inCount: 100, outCount: 100)).slices == sl)
+        // Uniform time-stretch → unchanged positions.
+        #expect(Project.reshapedEdits(slices: sl, trim: [0, 1], bakedReverse: false, .uniformWarp).slices == sl)
+        // Reverb tail doubles the length → content (and slices) sit in the first half; an untrimmed end
+        // stays at 1 so the new tail is heard.
+        let tail = Project.reshapedEdits(slices: sl, trim: [0, 1], bakedReverse: false, .timeAligned(inCount: 100, outCount: 200))
+        #expect(tail.slices == [0, 0.125, 0.25, 0.375])
+        #expect(tail.trim == [0, 1])
+        // Crop to the middle half keeps the interior slice, rescaled.
+        let crop = Project.reshapedEdits(slices: sl, trim: [0.25, 0.75], bakedReverse: false, .crop(from: 0.25, to: 0.75))
+        #expect(crop.slices == [0, 0.5])
+        #expect(crop.trim == [0, 1])
+        // A baked Reverse mirrors the forward-space slices once so they land on the reversed audio.
+        let rev = Project.reshapedEdits(slices: [0, 0.25], trim: [0, 1], bakedReverse: true, .uniformWarp)
+        #expect(rev.slices == [0, 0.75])
+    }
+
+    /// Finding 3: Harmonize survives to the pad, and the result can never clip the WAV.
+    @Test func harmonyIsBakedIntoTheChop() {
+        let x = Self.tone(0.05, 2000)
+        #expect(Project.bakeHarmony(x, intervals: []) == x)
+        let h = Project.bakeHarmony(x, intervals: [4, 7])
+        #expect(h.count == x.count)                          // higher voices are shorter; root sets the length
+        #expect(h != x)
+        #expect(h.allSatisfy { abs($0) <= 1 })
+    }
+
+    /// Finding 3: the pad gets the pitch the chop was auditioned at, not whatever pitch it had before.
+    @Test @MainActor func chopsCarryTheAuditionedPitch() {
+        let p = Project(engine: AudioEngine())
+        var stale = PadParam(); stale.pitch = -7
+        p.padParams["C:kick"] = stale
+        let n = p.assignSlicesToPads(buffer: Self.tone(0.05, 4000), slices: [0, 0.5], trim: [0, 1],
+                                     reverse: false, pitch: 5)
+        #expect(n == 2)
+        #expect(p.padParams["C:kick"]?.pitch == 5)
+        #expect(p.padParams["C:sub808"]?.pitch == 5)
+        #expect(p.padSampleActive("C:kick"))
+        #expect(p.padParams["kick"]?.sampleFile == nil)      // and Bank A's kick was not touched
+    }
+
+    /// Finding 5: fades sit on the trim and stay a sensible length on a long take.
+    @Test func fadesAnchorToTheTrimAndCapAtASecond() {
+        let fb = SynthCore.fadeBounds(count: 48_000 * 60, trim: [0.5, 1], sampleRate: 48_000)
+        #expect(fb.start == 48_000 * 30)                     // starts where the trim does
+        #expect(fb.length == 48_000)                         // an eighth of 30 s is 3.75 s → capped at 1 s
+        let short = SynthCore.fadeBounds(count: 48_000, trim: [0, 1], sampleRate: 48_000)
+        #expect(short.length == 6_000)                       // a 1 s one-shot keeps its eighth (125 ms)
     }
 }

@@ -321,30 +321,35 @@ final class SessionStore: ObservableObject, SyncBus {
         return data
     }
     /// Student: bounce the current beat and submit it (audio uploaded server-side via the edge fn).
+    private var submissionGeneration = UUID()
     func submitCurrentBeat() async {
         guard submitState != .submitting else { return }   // ignore double-taps mid-submit
+        submissionGeneration = UUID()
+        let generation = submissionGeneration, room = roomCode, token = studentToken
         submitState = .submitting
         let name = project?.name ?? "Beat"
         guard let plan = project?.buildExportPlan() else {
             let ok = await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)
-            await finishSubmit(ok ? .sentMetadataOnly : .failed); return
+            if generation == submissionGeneration { await finishSubmit(ok ? .sentMetadataOnly : .failed) }; return
         }
         let wav = await Task.detached(priority: .userInitiated) { SessionStore.renderMonoWAV(plan) }.value
+        guard generation == submissionGeneration, roomCode == room, studentToken == token else { return }
         if let wav, wav.count < 8_000_000 {
             let res = await callFunc("submitAudio", ["code": roomCode, "studentToken": studentToken,
                                                      "displayName": displayName, "beatName": name,
                                                      "wavBase64": wav.base64EncodedString()])
-            await finishSubmit(res != nil ? .sentWithAudio : .failed)
+            if generation == submissionGeneration { await finishSubmit(res != nil ? .sentWithAudio : .failed) }
         } else {
             let ok = await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)   // metadata only if no/oversized audio
-            await finishSubmit(ok ? .sentMetadataOnly : .failed)
+            if generation == submissionGeneration { await finishSubmit(ok ? .sentMetadataOnly : .failed) }
         }
     }
     /// Publish the terminal submit state, then clear it back to idle after a few seconds so the banner resets.
     private func finishSubmit(_ state: SubmitState) async {
+        let generation = submissionGeneration
         submitState = state
         try? await Task.sleep(nanoseconds: 4_000_000_000)
-        if submitState == state { submitState = .idle }
+        if generation == submissionGeneration && submitState == state { submitState = .idle }
     }
 
     /// Open (or re-open) the WebSocket for the current role/room. Reused by reconnect.
@@ -445,6 +450,7 @@ final class SessionStore: ObservableObject, SyncBus {
         }
         if role != .solo { project?.syncBus = NoSyncBus() }
         teardownSocket()
+        submissionGeneration = UUID(); submitState = .idle
         role = .solo; status = "Offline"; roomCode = ""; hostToken = nil; remoteRoster = []; roomTitle = ""; lastError = nil
     }
 
