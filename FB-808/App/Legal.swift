@@ -6,8 +6,8 @@ import SwiftUI
 enum AppLinks {
     /// The published policy (also the App Store Connect Privacy Policy URL). The in-app summary below
     /// mirrors it so it is readable offline.
-    static let privacyPolicy = URL(string: "https://github.com/detroitvr221-hub/FD-808/blob/main/PRIVACY.md")!
-    static let support = URL(string: "https://github.com/detroitvr221-hub/FD-808/issues")!
+    static let privacyPolicy = URL(string: "https://github.com/detroitvr221-hub/FB-808/blob/main/PRIVACY.md")!
+    static let support = URL(string: "https://github.com/detroitvr221-hub/FB-808/issues")!
 }
 
 struct LegalView: View {
