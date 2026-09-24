@@ -254,12 +254,15 @@ struct TrackModeView: View {
     private func runExport(_ format: ExportFormat, fullSong: Bool) {
         guard !exporting else { return }
         exporting = true
-        let plan = project.buildExportPlan(loopBarsOverride: (fullSong || project.songMode) ? nil : loopBars,
-                                           songModeOverride: fullSong ? true : nil,
-                                           safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let loop: Int? = (fullSong || project.songMode) ? nil : loopBars
         let dither = settings.exportDither   // captured on the main actor before detaching
         let prog = exportProg; prog.reset()
         Task {
+            // A beat opened moments ago may still be decoding its takes off the main actor (H5): wait, or
+            // the bounce renders those clips as silence.
+            await project.awaitAudioRestore()
+            let plan = project.buildExportPlan(loopBarsOverride: loop, songModeOverride: fullSong ? true : nil,
+                                               safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
             await Task.detached(priority: .utility) { sweepExportDirs() }.value   // PRIOR batches, off-main (#227, #export-5)
             let dir = fd808ExportDir()   // one unique batch dir → re-exports never collide
             let result: Result<URL, ExportWriteFailure>? = await Task.detached(priority: .userInitiated) {
@@ -280,13 +283,14 @@ struct TrackModeView: View {
         guard !exporting else { return }
         exporting = true
         // Same length choice as the audio export — stems were hard-wired to `songMode ? songBars : 4` (#export-3).
-        let plan = project.buildExportPlan(loopBarsOverride: (fullSong || project.songMode) ? nil : loopBars,
-                                           songModeOverride: fullSong ? true : nil,
-                                           safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
+        let loop: Int? = (fullSong || project.songMode) ? nil : loopBars
         let dither = settings.exportDither   // captured on the main actor before detaching
         let stemNames = stemDisplayNames()   // bus id → track display name (sanitized, deduped)
         let prog = exportProg; prog.reset()
         Task {
+            await project.awaitAudioRestore()   // takes still decoding after open would bounce silent (H5)
+            let plan = project.buildExportPlan(loopBarsOverride: loop, songModeOverride: fullSong ? true : nil,
+                                               safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
             await Task.detached(priority: .utility) { sweepExportDirs() }.value   // PRIOR batches, off-main (#227)
             let dir = fd808ExportDir()   // all stems of this batch share one dir
             let out = await Task.detached(priority: .userInitiated) { () -> (urls: [URL], failure: ExportWriteFailure?) in

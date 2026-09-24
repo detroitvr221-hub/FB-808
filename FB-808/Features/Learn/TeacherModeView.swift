@@ -33,6 +33,13 @@ struct TeacherModeView: View {
     @State private var reviewEndTask: Task<Void, Never>?   // clears the "playing" cue when the engine clip ends
     @State private var reviewGen = 0                        // invalidates an in-flight load when the user taps again / stops
     @State private var playingSubID: String?
+    // Moderation + retention (PRODUCTION_READINESS B5 / App Review 1.2).
+    @State private var studentToRemove: RosterEntry?
+    @State private var submissionToDelete: RemoteSub?
+    @State private var classToDelete: PastClass?
+    @State private var pastClasses: [PastClass] = []
+    /// A finished class being reviewed from the Keychain list (nil = the live class, if hosting).
+    @State private var reviewPast: PastClass?
 
     /// A submission as returned by the `submissions` edge action (token-authorized; teacher-only).
     /// PII-free: only a moderated display name, never an email or account id.
@@ -58,7 +65,7 @@ struct TeacherModeView: View {
         let me = classroom.localRow(progress: progress, outOf: TE_TOTAL)
         if session.role == .host {
             let live = session.remoteRoster.enumerated().map { (i, e) -> Student in
-                Student(id: "remote-\(i)", name: e.name, colorHex: Student.palette[i % Student.palette.count],
+                Student(id: "remote-\(e.enrollmentID ?? String(i))", name: e.name, colorHex: Student.palette[i % Student.palette.count],
                         on: e.online, status: e.online ? "on-task" : "offline",
                         doing: e.online ? "In class" : "Away", done: 0, acc: 0, sub: nil)
             }
@@ -70,7 +77,12 @@ struct TeacherModeView: View {
     private var subs: [Student] { displayRoster.filter { $0.sub != nil } }   // local row has sub:nil → excluded
     private var newSubs: Int { subs.filter { !($0.sub?.reviewed ?? true) }.count }
     /// Unreviewed count for the Submissions tab badge — real remote subs when hosting, mock otherwise.
-    private var pendingReview: Int { session.role == .host ? remoteSubs.filter { !$0.reviewed }.count : newSubs }
+    private var pendingReview: Int { reviewRoom != nil ? remoteSubs.filter { !$0.reviewed }.count : newSubs }
+    /// Whose submissions the review tab shows: the live class while hosting, else a finished class the
+    /// teacher picked from "Past classes".
+    private var reviewRoom: ClassRoomRef? {
+        session.liveRoom ?? reviewPast.map { ClassRoomRef(code: $0.code, token: $0.token) }
+    }
     /// The lesson chosen in the "Assign to Class" picker, and the pattern the push buttons should send for it
     /// (so Push Pattern / Send Practice follow the assigned lesson instead of a hardcoded Boom Bap).
     private var assignedLesson: Kit.Lesson? { Kit.lessons.first { $0.id == classroom.assignLesson } }
@@ -82,7 +94,7 @@ struct TeacherModeView: View {
                 Text("\(onCount) of \(displayRoster.count) online\(classroom.live ? " · LIVE" : "")")
                     .font(FDFont.ui(12.5)).foregroundStyle(classroom.live ? settings.accent : settings.inkFaint)
             }
-            CoachNote("Classroom-safe by design — **teacher-managed accounts**, no public messaging, profiles or feeds. Push kits, beats and tempo straight to every student.")
+            CoachNote("Classroom-safe by design — **no student accounts**, no public messaging, profiles or feeds. Push kits, beats and tempo straight to every student.")
                 .padding(.top, 10)
             tabs.padding(.vertical, 14)
             Group {
@@ -100,10 +112,42 @@ struct TeacherModeView: View {
         .alert("End live class?", isPresented: $confirmEndLive) {
             Button("End Class", role: .destructive) { toggleLive() }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("This disconnects every joined student and ends the session.") }
+        } message: { Text("This disconnects every joined student and ends the session. Submissions stay available under Past classes until you delete them (or for 30 days).") }
+        .alert("Remove \(studentToRemove?.name ?? "student")?", isPresented: Binding(get: { studentToRemove != nil }, set: { if !$0 { studentToRemove = nil } })) {
+            Button("Remove", role: .destructive) {
+                guard let st = studentToRemove, let eid = st.enrollmentID else { return }
+                Task { flash(await session.removeStudent(enrollmentID: eid) ? "\(st.name) was removed" : "Couldn't remove \(st.name) — try again") }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("They're disconnected from this class and can't submit to it. Their earlier submissions stay until you delete them.") }
+        .alert("Delete this submission?", isPresented: Binding(get: { submissionToDelete != nil }, set: { if !$0 { submissionToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                guard let sub = submissionToDelete, let room = reviewRoom else { return }
+                Task {
+                    let ok = await session.deleteSubmission(sub.id, in: room)
+                    if ok { if playingSubID == sub.id { stopPlayback() }; remoteSubs.removeAll { $0.id == sub.id }; selectedRemoteID = nil }
+                    flash(ok ? "Submission deleted" : "Couldn't delete — check the connection and try again")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("The beat, its recording and your feedback are permanently deleted.") }
+        .alert("Delete class \(classToDelete?.code ?? "")?", isPresented: Binding(get: { classToDelete != nil }, set: { if !$0 { classToDelete = nil } })) {
+            Button("Delete Class Data", role: .destructive) {
+                guard let c = classToDelete else { return }
+                Task {
+                    let ok = await session.deleteClassData(c)
+                    if ok, reviewPast?.code == c.code { reviewPast = nil; remoteSubs = []; stopPlayback() }
+                    pastClasses = PastClassStore.all()
+                    flash(ok ? "Class data deleted" : "Couldn't delete — check the connection and try again")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Every student name, submission, recording and piece of feedback from this class is permanently deleted.") }
         // Poll real submissions while hosting (keeps the badge + list live regardless of which tab is open).
         .task(id: session.role) {
-            guard session.role == .host else { remoteSubs = []; stopPlayback(); return }
+            pastClasses = PastClassStore.all()
+            guard session.role == .host else { if reviewPast == nil { remoteSubs = []; stopPlayback() }; return }
+            reviewPast = nil
             while !Task.isCancelled {
                 await refreshSubs()
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -116,11 +160,11 @@ struct TeacherModeView: View {
     }
 
     @MainActor private func refreshSubs() async {
-        guard session.role == .host else { return }
+        guard let room = reviewRoom else { return }
         subsRefreshing = true
-        let raw = await session.fetchSubmissions()
+        let raw = await session.fetchSubmissions(in: room)
         subsRefreshing = false
-        guard session.role == .host else { return }       // role may have changed during the await
+        guard reviewRoom == room else { return }           // role / reviewed class may have changed during the await
         guard let raw else { return }                     // transport failure — keep the current list AND the
         // teacher's in-progress feedback; a network blip must never wipe submissions or unsent text.
         let parsed = raw.compactMap { RemoteSub($0) }
@@ -134,7 +178,7 @@ struct TeacherModeView: View {
         stopPlayback()   // stop any current submission before starting another (no overlapping audio)
         let gen = reviewGen
         Task {
-            guard let url = await session.submissionAudioURL(path: path) else { if gen == reviewGen { toast = "Couldn't load audio" }; return }
+            guard let room = reviewRoom, let url = await session.submissionAudioURL(path: path, in: room) else { if gen == reviewGen { toast = "Couldn't load audio" }; return }
             // Download + decode OFF the main thread, then play THROUGH THE ENGINE (not a side AVPlayer),
             // so all audio shares the one session/route and the master limiter/volume.
             guard let local = await downloadTemp(url) else { if gen == reviewGen { toast = "Couldn't load audio" }; return }
@@ -176,7 +220,8 @@ struct TeacherModeView: View {
         let text = remoteFeedback.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         Task {
-            let ok = await session.sendFeedbackRemote(submissionId: sub.id, text: text)
+            guard let room = reviewRoom else { return }
+            let ok = await session.sendFeedbackRemote(submissionId: sub.id, text: text, in: room)
             toast = ok ? "Feedback sent to \(sub.name)" : "Couldn't send feedback — check the connection and try again"
             if ok { await refreshSubs() }
         }
@@ -243,7 +288,9 @@ struct TeacherModeView: View {
         // The local "You" row has no submission to review — tapping it is a no-op — and is shown distinctly
         // (accent border + "YOU" badge) so it doesn't read as just another student.
         let isMe = st.id == ClassroomStore.localRowID
-        return Button { if !isMe { classroom.selectedID = st.id; tab = "review" } } label: {
+        let remote = session.role == .host
+            ? session.remoteRoster.first { $0.enrollmentID != nil && "remote-\($0.enrollmentID!)" == st.id } : nil
+        return Button { if !isMe && remote == nil { classroom.selectedID = st.id; tab = "review" } } label: {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 9) {
                     avatar(st, size: 34)
@@ -274,6 +321,17 @@ struct TeacherModeView: View {
             .padding(13)
             .fdCard(14, fill: settings.panel)
             .overlay(isMe ? RoundedRectangle(cornerRadius: 14).stroke(settings.accent.opacity(0.55), lineWidth: 1.5) : nil)
+            .overlay(alignment: .topTrailing) {
+                if let remote {
+                    Menu {
+                        Button("Remove from class", systemImage: "person.fill.xmark", role: .destructive) { studentToRemove = remote }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 13, weight: .bold)).foregroundStyle(settings.inkDim)
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Options for \(st.name)")
+                }
+            }
         }.buttonStyle(.plain)
     }
 
@@ -355,8 +413,16 @@ struct TeacherModeView: View {
                         }
                         Text("Students enter the code to follow this class live — they see every edit in real time.")
                             .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint)
+                        // Join-time disclosure (5.1.1 / classroom data): what is shared, with whom, for how long.
+                        Text("Use a first name or nickname. Your name and any beats you submit are shared with your teacher and deleted within 30 days.")
+                            .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Link("Privacy policy", destination: AppLinks.privacyPolicy)
+                            .font(FDFont.ui(11, .semibold)).tint(settings.accent)
                     }
                 }
+
+                if session.role != .host && !pastClasses.isEmpty { pastClassesCard }
 
             }
             .frame(width: 280)
@@ -398,11 +464,34 @@ struct TeacherModeView: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(settings.panel2)).opacity(st.on ? 1 : 0.6)
     }
 
+    /// Finished classes hosted on this iPad: review their submissions or delete all their data.
+    private var pastClassesCard: some View {
+        teCard("Past Classes") {
+            ForEach(pastClasses) { c in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(c.code).font(FDFont.mono(12, .bold)).foregroundStyle(settings.ink)
+                        Text(c.started.formatted(date: .abbreviated, time: .shortened)).font(FDFont.ui(10.5)).foregroundStyle(settings.inkFaint)
+                    }
+                    Spacer()
+                    Button("Review") { reviewPast = c; tab = "review"; Task { await refreshSubs() } }
+                        .font(FDFont.ui(12, .semibold)).tint(settings.accent)
+                    Button { classToDelete = c } label: {
+                        Image(systemName: "trash").font(.system(size: 13, weight: .semibold)).foregroundStyle(settings.theme.miss)
+                            .frame(width: 36, height: 36).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityLabel("Delete class \(c.code) data")
+                }
+            }
+            Text("Class data is deleted automatically 30 days after the class was last active.")
+                .font(FDFont.ui(11)).foregroundStyle(settings.inkFaint).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: review
 
     /// Submissions tab: real remote submissions when a live class is hosting, the example roster otherwise.
     @ViewBuilder private var review: some View {
-        if session.role == .host { liveReview } else { mockReview }
+        if reviewRoom != nil { liveReview } else { mockReview }
     }
 
     // MARK: Live submissions (real backend, teacher-authorized)
@@ -411,7 +500,12 @@ struct TeacherModeView: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Text("SUBMITTED BEATS · \(remoteSubs.count)").font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
+                    Text(reviewPast.map { "\($0.code) · \(remoteSubs.count) BEATS" } ?? "SUBMITTED BEATS · \(remoteSubs.count)")
+                        .font(FDFont.mono(10, .bold)).tracking(1.2).foregroundStyle(settings.inkFaint)
+                    if reviewPast != nil {
+                        Button("Close") { reviewPast = nil; remoteSubs = []; stopPlayback() }
+                            .font(FDFont.ui(11, .semibold)).tint(settings.accent)
+                    }
                     Spacer()
                     if subsRefreshing { ProgressView().controlSize(.mini) }
                     Button { Task { await refreshSubs() } } label: {
@@ -506,6 +600,10 @@ struct TeacherModeView: View {
             HStack {
                 if sub.reviewed { Label("Reviewed", systemImage: "checkmark.seal.fill").font(FDFont.ui(12, .semibold)).foregroundStyle(settings.theme.good) }
                 Spacer()
+                Button(role: .destructive) { submissionToDelete = sub } label: {
+                    Label("Delete", systemImage: "trash").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.theme.miss)
+                        .padding(.horizontal, 14).frame(height: 40)
+                }.buttonStyle(.plain)
                 let empty = remoteFeedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 Button { sendRemoteFeedback(sub) } label: {
                     Text("Send Feedback").font(FDFont.ui(13, .semibold)).foregroundStyle(.white)

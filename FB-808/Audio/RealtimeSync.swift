@@ -12,7 +12,21 @@ import Combine
 import CryptoKit
 
 /// A live enrolled student, surfaced to the Teacher roster (name is teacher-visible by design; no PII).
-struct RosterEntry: Identifiable, Equatable { let id = UUID(); let name: String; let online: Bool }
+struct RosterEntry: Identifiable, Equatable {
+    let id = UUID(); let name: String; let online: Bool
+    /// Server enrollment id — what the teacher's "Remove from class" targets. nil from an older backend.
+    var enrollmentID: String? = nil
+}
+
+/// A class this device hosted, kept in the Keychain so the teacher can still review or delete its data
+/// after ending it or after the app is killed (the host token used to live only in memory — M5).
+struct PastClass: Codable, Identifiable, Equatable {
+    var id: String { code }
+    let code: String, token: String, title: String, started: Date
+}
+
+/// The room a teacher-authorized call targets: the live one, or a finished class from `PastClass`.
+struct ClassRoomRef: Equatable { let code: String; let token: String }
 
 /// A host's answer to a channel (re)joining: the project snapshot, plus the transport position when
 /// playback is already past the count-in (see `SessionStore.joinResync`).
@@ -110,10 +124,11 @@ final class SessionStore: ObservableObject, SyncBus {
         let s = UUID().uuidString; UserDefaults.standard.set(s, forKey: k); return s
     }
     /// A fresh, hard-to-guess room code per live class (vs a shared hardcoded one) — mitigates code
-    /// enumeration and cross-class collisions. 6 symbols over a 32-char alphabet ≈ 1.1B codes (~30 bits).
+    /// enumeration and cross-class collisions. 8 symbols over a 32-char alphabet = 40 bits; the backend
+    /// also rate-limits code probing and refuses to reuse any existing code (PRODUCTION_READINESS B4/M1).
     static func randomCode() -> String {
         let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")   // no ambiguous 0/O/1/I
-        return "FD-" + String((0..<6).map { _ in alphabet[Int(arc4random_uniform(UInt32(alphabet.count)))] })
+        return "FD-" + String((0..<8).map { _ in alphabet[Int(arc4random_uniform(UInt32(alphabet.count)))] })
     }
 
     // MARK: - Resync policy (pure — unit-tested)
@@ -157,18 +172,27 @@ final class SessionStore: ObservableObject, SyncBus {
     /// authoritative host key), then connect. Generates a fresh non-guessable code.
     func host(title: String? = nil) {
         leave()
-        let code = SessionStore.randomCode()
         status = "Creating room…"
         joinTask?.cancel()
         joinTask = Task { @MainActor in
-            let res = await callRoom(["action": "create", "code": code, "hostKey": pubKeyB64, "title": title])
-            guard !Task.isCancelled else { return }   // a newer host/follow/leave superseded this
-            guard res?["ok"] as? Bool == true, let token = res?["hostToken"] as? String else {
-                status = "Offline"; lastError = (res?["error"] as? String) ?? "Could not create room"; return
+            // The backend refuses any code that already exists (409) — even a closed one, which used to hand
+            // back the old teacher token (B4) — so a collision just means "draw another code".
+            for _ in 0..<3 {
+                let code = SessionStore.randomCode()
+                let (res, http) = await callFuncStatus("room", ["action": "create", "code": code, "hostKey": pubKeyB64, "title": title])
+                guard !Task.isCancelled else { return }   // a newer host/follow/leave superseded this
+                if http == 409 { continue }
+                if http == 429 { status = "Offline"; lastError = "Too many classes started from this network. Try again in a few minutes."; return }
+                guard res?["ok"] as? Bool == true, let token = res?["hostToken"] as? String else {
+                    status = "Offline"; lastError = "Could not create the class. Check your connection and try again."; return
+                }
+                hostToken = token
+                PastClassStore.remember(PastClass(code: code, token: token, title: title ?? "Class", started: Date()))
+                begin(code: code, role: .host, serverHostKey: nil, channelKey: res?["channel"] as? String)
+                startRosterPolling()
+                return
             }
-            hostToken = token
-            begin(code: code, role: .host, serverHostKey: nil, channelKey: res?["channel"] as? String)
-            startRosterPolling()
+            status = "Offline"; lastError = "Could not create the class. Try again."
         }
     }
 
@@ -183,11 +207,19 @@ final class SessionStore: ObservableObject, SyncBus {
         status = "Joining…"
         joinTask?.cancel()
         joinTask = Task { @MainActor in
-            let res = await callRoom(["action": "join", "code": up, "displayName": displayName,
-                                      "studentToken": studentToken.isEmpty ? nil : studentToken])
+            let (res, http) = await callFuncStatus("room", ["action": "join", "code": up, "displayName": displayName,
+                                                            "studentToken": studentToken.isEmpty ? nil : studentToken])
             guard !Task.isCancelled else { return }
             guard res?["ok"] as? Bool == true else {
-                status = "Offline"; lastError = (res?["error"] as? String) ?? "Could not join"; return
+                status = "Offline"
+                switch http {
+                case 403: lastError = "You can't rejoin this class. Ask your teacher."
+                case 404: lastError = "No class with that code. Check it and try again."
+                case 429: lastError = "Too many join attempts from this network. Wait a minute and try again."
+                case nil: lastError = "Couldn't reach the class. Check your connection."
+                default:  lastError = "Could not join this class."
+                }
+                return
             }
             if let st = res?["studentToken"] as? String { studentToken = st }
             if let n = res?["displayName"] as? String { displayName = n }   // moderated name from server
@@ -230,23 +262,30 @@ final class SessionStore: ObservableObject, SyncBus {
 
     private func callRoom(_ body: [String: Any?]) async -> [String: Any]? { await callFunc("room", body) }
 
-    private func callFunc(_ name: String, _ body: [String: Any?]) async -> [String: Any]? {
-        guard let url = URL(string: "https://\(SyncConfig.projectRef).supabase.co/functions/v1/\(name)") else { return nil }
+    private func callFunc(_ name: String, _ body: [String: Any?], timeout: TimeInterval = 20) async -> [String: Any]? {
+        await callFuncStatus(name, body, timeout: timeout).0
+    }
+
+    /// `callFunc` plus the HTTP status, so callers can tell a code collision (409), a rate limit (429) or a
+    /// revoked token (403/404) from a network failure (status nil).
+    private func callFuncStatus(_ name: String, _ body: [String: Any?], timeout: TimeInterval = 20) async -> ([String: Any]?, Int?) {
+        guard let url = URL(string: "https://\(SyncConfig.projectRef).supabase.co/functions/v1/\(name)") else { return (nil, nil) }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 20
+        req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(SyncConfig.anonKey, forHTTPHeaderField: "apikey")
         req.setValue("Bearer \(SyncConfig.anonKey)", forHTTPHeaderField: "Authorization")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body.compactMapValues { $0 })
         guard let (data, response) = try? await URLSession.shared.data(for: req),
-              let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+              let http = response as? HTTPURLResponse else { return (nil, nil) }
+        guard 200..<300 ~= http.statusCode,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (nil, http.statusCode) }
         // A backend rejection is explicit: a non-empty "error" string, or "ok" == false. Surface it as a
         // failure instead of reporting success on any JSON body.
-        if let err = obj["error"] as? String, !err.isEmpty { return nil }
-        if (obj["ok"] as? Bool) == false { return nil }
-        return obj
+        if let err = obj["error"] as? String, !err.isEmpty { return (nil, http.statusCode) }
+        if (obj["ok"] as? Bool) == false { return (nil, http.statusCode) }
+        return (obj, http.statusCode)
     }
 
     private func startRosterPolling() {
@@ -257,7 +296,8 @@ final class SessionStore: ObservableObject, SyncBus {
                 if let res = await self.callRoom(["action": "roster", "code": self.roomCode, "hostToken": self.hostToken]),
                    let arr = res["roster"] as? [[String: Any]] {
                     self.remoteRoster = arr.map { RosterEntry(name: ($0["name"] as? String) ?? "Student",
-                                                              online: ($0["online"] as? Bool) ?? false) }
+                                                              online: ($0["online"] as? Bool) ?? false,
+                                                              enrollmentID: $0["id"] as? String) }
                 }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
@@ -269,7 +309,15 @@ final class SessionStore: ObservableObject, SyncBus {
         presenceTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                _ = await self.callRoom(["action": "presence", "code": self.roomCode, "studentToken": self.studentToken])
+                let (_, http) = await self.callFuncStatus("room", ["action": "presence", "code": self.roomCode, "studentToken": self.studentToken])
+                guard !Task.isCancelled else { return }
+                // 403: the teacher removed this student; 404: the class's data was deleted. Stop following
+                // instead of sitting on a dead room (the relay would otherwise keep streaming to us).
+                if http == 403 || http == 404 {
+                    self.leave()
+                    self.lastError = http == 403 ? "The teacher removed you from this class." : "This class has ended."
+                    return
+                }
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }
@@ -285,23 +333,50 @@ final class SessionStore: ObservableObject, SyncBus {
     /// Teacher: list submissions / send feedback.
     /// Returns nil on a transport failure (so callers don't mistake a network blip for "no submissions"
     /// and wipe the UI), [] only when the server genuinely reports none.
-    func fetchSubmissions() async -> [[String: Any]]? {
-        guard let res = await callRoom(["action": "submissions", "code": roomCode, "hostToken": hostToken]) else { return nil }
+    func fetchSubmissions(in room: ClassRoomRef? = nil) async -> [[String: Any]]? {
+        guard let room = room ?? liveRoom,
+              let res = await callRoom(["action": "submissions", "code": room.code, "hostToken": room.token]) else { return nil }
         return (res["submissions"] as? [[String: Any]]) ?? []
+    }
+    /// The class this device is hosting right now, as a teacher-call target.
+    var liveRoom: ClassRoomRef? {
+        guard role == .host, let hostToken, !roomCode.isEmpty else { return nil }
+        return ClassRoomRef(code: roomCode, token: hostToken)
+    }
+    /// Teacher: remove one student. Their token stops working server-side; their app leaves on its next
+    /// presence check.
+    func removeStudent(enrollmentID: String) async -> Bool {
+        guard let room = liveRoom else { return false }
+        let ok = await callRoom(["action": "kick", "code": room.code, "hostToken": room.token, "enrollmentId": enrollmentID]) != nil
+        if ok { remoteRoster.removeAll { $0.enrollmentID == enrollmentID } }
+        return ok
+    }
+    /// Teacher: permanently delete one submission and its audio.
+    func deleteSubmission(_ submissionId: String, in room: ClassRoomRef? = nil) async -> Bool {
+        guard let room = room ?? liveRoom else { return false }
+        return await callRoom(["action": "deleteSubmission", "code": room.code, "hostToken": room.token, "submissionId": submissionId]) != nil
+    }
+    /// Teacher: permanently delete a finished class — roster, submissions and audio (B5 retention).
+    func deleteClassData(_ past: PastClass) async -> Bool {
+        let ok = await callRoom(["action": "purge", "code": past.code, "hostToken": past.token]) != nil
+        if ok { PastClassStore.forget(code: past.code) }
+        return ok
     }
     /// False when the backend did not accept the feedback (offline, expired token) — the UI used to toast
     /// "sent" regardless (#sync-7).
     @discardableResult
-    func sendFeedbackRemote(submissionId: String, text: String) async -> Bool {
-        let res = await callRoom(["action": "feedback", "code": roomCode, "hostToken": hostToken, "submissionId": submissionId, "text": text])
+    func sendFeedbackRemote(submissionId: String, text: String, in room: ClassRoomRef? = nil) async -> Bool {
+        guard let room = room ?? liveRoom else { return false }
+        let res = await callRoom(["action": "feedback", "code": room.code, "hostToken": room.token, "submissionId": submissionId, "text": text])
         return res != nil
     }
 
     // MARK: - Audio via Storage (submission bounces)
 
     /// Teacher: a short-lived signed URL to play back a submission's audio.
-    func submissionAudioURL(path: String) async -> URL? {
-        guard let res = await callRoom(["action": "downloadUrl", "code": roomCode, "hostToken": hostToken, "path": path]),
+    func submissionAudioURL(path: String, in room: ClassRoomRef? = nil) async -> URL? {
+        guard let room = room ?? liveRoom,
+              let res = await callRoom(["action": "downloadUrl", "code": room.code, "hostToken": room.token, "path": path]),
               let u = res["url"] as? String else { return nil }
         return URL(string: u.hasPrefix("http") ? u : SyncConfig.url.absoluteString + u)
     }
@@ -335,9 +410,16 @@ final class SessionStore: ObservableObject, SyncBus {
         let wav = await Task.detached(priority: .userInitiated) { SessionStore.renderMonoWAV(plan) }.value
         guard generation == submissionGeneration, roomCode == room, studentToken == token else { return }
         if let wav, wav.count < 8_000_000 {
-            let res = await callFunc("submitAudio", ["code": roomCode, "studentToken": studentToken,
-                                                     "displayName": displayName, "beatName": name,
-                                                     "wavBase64": wav.base64EncodedString()])
+            // ~10 MB of base64 on school Wi-Fi: a 20 s timeout failed routinely (M4). Allow 90 s and retry
+            // once; the submission key lets the backend ignore a duplicate if the first attempt did land.
+            let body: [String: Any?] = ["code": roomCode, "studentToken": studentToken, "displayName": displayName,
+                                        "beatName": name, "wavBase64": wav.base64EncodedString(),
+                                        "submissionKey": UUID().uuidString]
+            var res = await callFunc("submitAudio", body, timeout: 90)
+            if res == nil, generation == submissionGeneration {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if generation == submissionGeneration { res = await callFunc("submitAudio", body, timeout: 90) }
+            }
             if generation == submissionGeneration { await finishSubmit(res != nil ? .sentWithAudio : .failed) }
         } else {
             let ok = await submitBeat(beatName: name, audioUrl: nil, accuracy: nil)   // metadata only if no/oversized audio

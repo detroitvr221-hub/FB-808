@@ -35,6 +35,8 @@ struct ProjectsSheet: View {
     @State private var renameOverwriteName = ""
     @State private var missingAudio: [String] = []
     @State private var loadFailed = false   // surface a decode/read failure instead of a dead Load button
+    @State private var loadFailedMessage = "The save file couldn't be read — it may be corrupted. Your other projects are unaffected."
+    @State private var importFailedMessage = ProjectArchiveError.unreadable.message
     @State private var shareFile: ExportFile?       // .fd808 project-file share sheet
     @State private var importingProject = false     // .fd808 file importer
     @State private var importFailed = false
@@ -163,10 +165,10 @@ struct ProjectsSheet: View {
         }
         .alert("Couldn't open that project", isPresented: $loadFailed) {
             Button("OK", role: .cancel) {}
-        } message: { Text("The save file couldn't be read — it may be corrupted. Your other projects are unaffected.") }
+        } message: { Text(loadFailedMessage) }   // names "newer version" vs corrupt (H3/H4)
         .alert("Couldn't import that file", isPresented: $importFailed) {
             Button("OK", role: .cancel) {}
-        } message: { Text("The file may be incomplete, contain unreadable audio, use an unsupported version, or exceed 256 MB. Your existing projects are unaffected.") }
+        } message: { Text(importFailedMessage) }   // the real cause: too large / newer version / damaged (M3/H3)
         .fileImporter(isPresented: $importingProject,
                       allowedContentTypes: [UTType(filenameExtension: "fd808") ?? .data],
                       allowsMultipleSelection: false) { handleProjectImport($0) }
@@ -192,7 +194,10 @@ struct ProjectsSheet: View {
                 searchText = ""
                 importedProject = store.items.first { $0.projectID == snapshot.id }
                 feedback = "Imported \(snapshot.name)."
-            } else { importFailed = true }
+            } else {
+                importFailedMessage = (store.lastArchiveError ?? .unreadable).message
+                importFailed = true
+            }
         }
     }
 
@@ -205,12 +210,14 @@ struct ProjectsSheet: View {
         let url = item.url
         Task { @MainActor in
             defer { operation = nil }
-            guard let snap = await Task.detached(priority: .userInitiated, operation: { ProjectStore.decodeSnapshot(url) }).value else {
+            let decoded = await Task.detached(priority: .userInitiated, operation: { ProjectStore.decodeSnapshotResult(url) }).value
+            guard case .success(let snap) = decoded else {
+                if case .failure(let f) = decoded { loadFailedMessage = f.message(for: item.name) }
                 loadFailed = true; return
             }
             await Task.detached(priority: .utility) { sweepExportDirs() }.value   // off-main (#export-5)
             if let out = await store.exportArchive(snap) { shareFile = ExportFile(urls: [out]) }
-            else { operationError = "Couldn’t share this beat. Check that all its audio is available and the project file is under 256 MB." }
+            else { operationError = (store.lastArchiveError ?? .unreadable).message }   // M3: says which limit/cause
         }
     }
 
@@ -508,14 +515,17 @@ struct ProjectsSheet: View {
         feedback = nil
         Task { @MainActor in
             defer { operation = nil }
-            guard let snap = await store.load(item) else { loadFailed = true; return }   // surface a corrupt/unreadable save
+            guard let snap = await store.load(item) else {   // surface a corrupt/unreadable/newer-version save (H3)
+                loadFailedMessage = (store.lastLoadFailure ?? .unreadable).message(for: item.name)
+                loadFailed = true; return
+            }
             // Opening a beat replaces the live project, so the recovery slot (the beat being left behind,
             // or a stale one) is no longer this session's unsaved work — never offer it back for the beat
             // the user just opened, where Recover would overwrite it (#RECOVERY-SLOT). Cleared only after a
             // successful load, so a failed open still leaves the rescue path intact.
             store.clearAutosave(protecting: project.liveAssetFilenames)   // the only call that forgot `protecting:` (#persist-5)
             let missing = await store.missingAudioAssetsAsync(in: snap)   // off-main (round 2, persist-M3)
-            project.restore(store.repaired(snap))   // item 9: load into a clean, repaired state
+            project.restore(store.repaired(snap), decodeAudioAsync: true)   // item 9 repair; H5: WAV decode off-main
             nameField = project.name
             if missing.isEmpty {
                 dismiss()

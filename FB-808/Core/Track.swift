@@ -343,6 +343,7 @@ extension Project {
     /// skipped (plays the clip → one voice instead of N). Best in Song Mode (renders the arrangement).
     @discardableResult
     func freezeTrack(_ id: String, render: ProjectOfflineRenderer = Project.renderOfflinePlan) async -> Bool {
+        await awaitAudioRestore()   // a just-opened beat's takes may still be decoding off-main (H5)
         guard !isBouncing, let i = tracks.firstIndex(where: { $0.id == id }),
               (tracks[i].isFrozen || tracks[i].isLinked), !tracks[i].frozenToAudio else { return false }
         let plan = buildSoloTrackPlan(tracks[i])   // resolves the link to live content if linked

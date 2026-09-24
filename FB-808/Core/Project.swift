@@ -1331,6 +1331,121 @@ final class Project: ObservableObject {
     /// Clip ids a restore must decode from disk: exactly those the live session does not already hold in
     /// memory. Re-using the decoded takes is what keeps a follower's 6 s fullSync restore off the WAV
     /// reader (finding 47).
+    // MARK: async audio restore (H5)
+
+    /// H5: a UI-driven load decodes clip / pad / sampler WAVs (incl. resampling) OFF the main actor. Results
+    /// land only while the same restore is still current (generation + project id), so a slow decode can
+    /// never leak into a beat opened after it. Export/bounce paths `await awaitAudioRestore()` first.
+    private var audioRestoreGeneration: UInt64 = 0
+    private(set) var audioRestoreTask: Task<Void, Never>?
+    @Published private(set) var isRestoringAudio = false
+    /// Clip metadata still decoding — folded into snapshot() so a save/autosave/checkpoint taken while a
+    /// load is decoding never drops the takes it has not applied yet (H5).
+    private var pendingClipMetas: [AudioClipMeta] = []
+    private var pendingClipOrder: [UUID] = []
+    private var padDecodePending = false
+    private var samplerDecodePending = false
+    /// Resolves once the current async audio restore has landed (or immediately when none is running).
+    func awaitAudioRestore() async { await audioRestoreTask?.value }
+
+    private nonisolated struct DecodedRestoreAudio: Sendable {
+        var clips: [UUID: (left: [Float], right: [Float]?)] = [:]
+        var pads: [String: [Float]] = [:]
+        var sampler: [Float]?
+    }
+    private nonisolated static func decodeRestoreAudio(clips: [UUID], pads: [(pad: String, file: String)],
+                                                       sampler: String?, sr: Double) -> DecodedRestoreAudio {
+        var out = DecodedRestoreAudio()
+        for id in clips {
+            guard let l = readClipWAV(id: id, targetSR: sr), !l.isEmpty else { continue }
+            out.clips[id] = (l, readClipWAVRight(id: id, targetSR: sr))
+        }
+        for p in pads { if let d = readPadSampleWAV(file: p.file, targetSR: sr), !d.isEmpty { out.pads[p.pad] = d } }
+        if let sampler, let d = readPadSampleWAV(file: sampler, targetSR: sr), !d.isEmpty { out.sampler = d }
+        return out
+    }
+
+    /// Async twin of restoreAudioClips + loadPadSamples + loadSampleAudio for a full project load (H5).
+    private func restoreAudioAsync(from metas: [AudioClipMeta]) {
+        let gen = audioRestoreGeneration, pid = projectID, sr = engine.sampleRate
+        // Clips: reuse what the session already holds; queue the rest for off-main decode.
+        let byID = Dictionary(audioClips.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var rebuilt: [AudioClip] = [], pending: [AudioClipMeta] = [], order: [UUID] = []
+        for m in metas {
+            guard let uuid = UUID(uuidString: m.id) else { continue }
+            order.append(uuid)
+            if var existing = byID[uuid] {
+                existing.startBar = m.startBar; existing.gain = m.gain; existing.muted = m.muted
+                rebuilt.append(existing)
+            } else { pending.append(m) }
+        }
+        audioClips = rebuilt
+        pendingClipMetas = pending; pendingClipOrder = order
+        // Pads: drop moved/removed registrations now (cheap); decode the new ones off-main.
+        let live = Self.padSampleFileRefs(padParams)
+        let plan = Self.padSampleReloadPlan(decoded: decodedPadSampleRefs, live: live)
+        for padID in plan.drop { engine.clearPadSample(padID); padSampleData[padID] = nil }
+        decodedPadSampleRefs = decodedPadSampleRefs.filter { live[$0.key] == $0.value }
+        let padLoads = plan.load.compactMap { id in live[id].map { (pad: id, file: $0) } }
+        padDecodePending = !padLoads.isEmpty
+        // Sampler buffer.
+        var samplerFile: String?
+        if let s = sample {
+            if Self.samplerNeedsReload(file: s.audioFile, decoded: decodedSamplerFile) { samplerFile = s.audioFile }
+        } else { decodedSamplerFile = nil }
+        samplerDecodePending = samplerFile != nil
+        guard !pending.isEmpty || !padLoads.isEmpty || samplerFile != nil else {
+            audioRestoreTask = nil; isRestoringAudio = false; return
+        }
+        isRestoringAudio = true
+        let clipIDs = pending.compactMap { UUID(uuidString: $0.id) }
+        audioRestoreTask = Task { @MainActor [weak self] in
+            let decoded = await Task.detached(priority: .userInitiated) {
+                Self.decodeRestoreAudio(clips: clipIDs, pads: padLoads, sampler: samplerFile, sr: sr)
+            }.value
+            // Stale: another restore started, or the session switched beats while decoding (H5).
+            guard let self, self.audioRestoreGeneration == gen, self.projectID == pid else { return }
+            self.applyDecodedAudio(decoded, padLoads: padLoads, samplerFile: samplerFile)
+        }
+    }
+
+    private func applyDecodedAudio(_ d: DecodedRestoreAudio, padLoads: [(pad: String, file: String)], samplerFile: String?) {
+        defer { isRestoringAudio = false; audioRestoreTask = nil }
+        if !pendingClipMetas.isEmpty {
+            var clips = audioClips
+            let held = Set(clips.map(\.id))
+            for m in pendingClipMetas {
+                guard let uuid = UUID(uuidString: m.id), !held.contains(uuid), let pcm = d.clips[uuid] else { continue }
+                var clip = AudioClip(track: m.track, startBar: m.startBar, data: pcm.left, dataR: pcm.right,
+                                     wave: Project.downsamplePeaks(pcm.left), name: m.name,
+                                     durSec: Double(pcm.left.count) / engine.sampleRate)
+                clip.id = uuid; clip.gain = m.gain; clip.muted = m.muted
+                clips.append(clip)
+            }
+            let rank = Dictionary(pendingClipOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+            audioClips = clips.enumerated().sorted {
+                (rank[$0.element.id] ?? Int.max, $0.offset) < (rank[$1.element.id] ?? Int.max, $1.offset)
+            }.map(\.element)
+            pendingClipMetas = []   // a WAV that read back empty is dropped, matching restoreAudioClips/repaired()
+        }
+        if padDecodePending {
+            padDecodePending = false
+            for p in padLoads where padParams[p.pad]?.sampleFile == p.file {
+                guard let data = d.pads[p.pad] else { continue }
+                padSampleData[p.pad] = data
+                engine.registerPadSample(p.pad, data)
+                decodedPadSampleRefs[p.pad] = p.file
+            }
+        }
+        if samplerDecodePending {
+            samplerDecodePending = false
+            if let file = samplerFile, let data = d.sampler, let s = sample, s.audioFile == file {
+                applySamplerBuffer(data, state: s, file: file)
+                rebuildSynthSampleSource()
+            }
+        }
+    }
+
     nonisolated static func clipIDsNeedingDecode(_ metas: [AudioClipMeta], cached: Set<UUID>) -> [UUID] {
         metas.compactMap { UUID(uuidString: $0.id) }.filter { !cached.contains($0) }
     }
@@ -1361,6 +1476,7 @@ final class Project: ObservableObject {
     /// the session already holds is reused as-is, which is what keeps a follower's 6 s fullSync restore
     /// from re-decoding every take on the main actor. (#PERSIST-01, finding 47)
     private func restoreAudioClips(from metas: [AudioClipMeta]) {
+        pendingClipMetas = []   // a sync reconcile (undo/redo/sync load) supersedes an in-flight async decode (H5)
         let byID = Dictionary(audioClips.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let needDecode = Set(Self.clipIDsNeedingDecode(metas, cached: Set(byID.keys)))
         var rebuilt: [AudioClip] = []
@@ -1676,6 +1792,7 @@ final class Project: ObservableObject {
     func resampleToPad(_ padID: String, bars: Int = 1, name: String = "Resample",
                        render: ProjectOfflineRenderer = Project.renderOfflinePlan) async -> Bool {
         guard !isBouncing else { return false }
+        await awaitAudioRestore()   // H5: never bounce silence while a load is still decoding
         let destination = ProjectRenderDestination(self)
         let target = operationDestination()
         let targetBank = bank   // scope the bounce to the bank it was resampled in (F0); bank may change mid-render
@@ -1699,6 +1816,7 @@ final class Project: ObservableObject {
     @discardableResult
     func autoMaster(render: ProjectOfflineRenderer = Project.renderOfflinePlan) async -> String? {
         guard !isBouncing else { return nil }
+        await awaitAudioRestore()   // H5: never bounce silence while a load is still decoding
         let destination = ProjectRenderDestination(self)
         let plan = buildExportPlan()
         isBouncing = true; defer { isBouncing = false }
@@ -1795,6 +1913,7 @@ final class Project: ObservableObject {
     /// registration and re-decoded the whole bank, so the cost grew with the total size of every assigned
     /// sample instead of the one that changed (finding 71).
     func loadPadSamples() {
+        padDecodePending = false   // supersedes an in-flight async pad decode (H5)
         let live = Self.padSampleFileRefs(padParams)
         guard Self.padSamplesNeedReload(decoded: decodedPadSampleRefs, live: live) else { return }
         let plan = Self.padSampleReloadPlan(decoded: decodedPadSampleRefs, live: live)
@@ -1848,9 +1967,13 @@ final class Project: ObservableObject {
     /// a UUID-named file, so an unchanged reference means the engine already holds exactly this audio and
     /// the 6 s fullSync must not re-decode the whole buffer. (finding 47)
     func loadSampleAudio() {
+        samplerDecodePending = false   // supersedes an in-flight async sampler decode (H5)
         guard let s = sample else { decodedSamplerFile = nil; return }
         guard Self.samplerNeedsReload(file: s.audioFile, decoded: decodedSamplerFile) else { return }
         guard let file = s.audioFile, let data = readPadSampleWAV(file: file, targetSR: engine.sampleRate), !data.isEmpty else { return }
+        applySamplerBuffer(data, state: s, file: file)
+    }
+    private func applySamplerBuffer(_ data: [Float], state s: SampleState, file: String) {
         _ = engine.importBuffer(data)   // sets engine original + data, recomputes wave
         let edits = (s.tools["normalize"] ?? false) || (s.tools["reverse"] ?? false)
             || (s.tools["fadeIn"] ?? false) || (s.tools["fadeOut"] ?? false) || abs(s.gain - 1) > 0.001
@@ -1992,7 +2115,8 @@ final class Project: ObservableObject {
                 AudioClipMeta(id: $0.id.uuidString, track: $0.track, startBar: $0.startBar,
                               name: $0.name, gain: $0.gain, muted: $0.muted, durSec: $0.durSec,
                               isStereo: $0.isStereo)
-            }, activeKit: activeKit, sample: sample, sliceBank: sliceBank, parts: parts, activePart: activePart,
+            } + pendingClipMetas.filter { m in !audioClips.contains { $0.id.uuidString == m.id } },   // H5: still decoding
+            activeKit: activeKit, sample: sample, sliceBank: sliceBank, parts: parts, activePart: activePart,
             chordMode: chordMode, arpMode: arpMode, arpRate: arpRate, arpOct: arpOct, humanize: humanize, grooveID: grooveID,
             tracks: tracks, melodyMuted: melodyMuted, countIn: countIn, metronome: metronome)
         snap.sampleBufferToken = pendingBufferToken
@@ -2023,7 +2147,11 @@ final class Project: ObservableObject {
 
     /// Load a project snapshot (e.g. from disk). Resets the sample buffer and
     /// clears undo history — this is a fresh project, not an edit.
-    func restore(_ s: ProjectSnapshot, keepHistory: Bool = false) {
+    /// `decodeAudioAsync` (H5): UI loads pass true so WAV decode/resample runs off the main actor; audio
+    /// lands via `awaitAudioRestore()`. Default stays synchronous for fullSync, undo-adjacent paths and tests.
+    func restore(_ s: ProjectSnapshot, keepHistory: Bool = false, decodeAudioAsync: Bool = false) {
+        audioRestoreGeneration &+= 1   // any restore invalidates an in-flight async decode (H5)
+        audioRestoreTask = nil; isRestoringAudio = false
         if !isApplyingRemote || s.id != projectID {
             engine.finishMicCapture()
             beforeProjectReplacement?()
@@ -2036,9 +2164,13 @@ final class Project: ObservableObject {
         // state (the follower's 6 s fullSync) re-reads no WAVs: re-decoding every take and pad one-shot on
         // the main actor stalled the scheduler, and a take whose file was not on this device was dropped
         // even though its audio was in memory. (finding 47)
-        restoreAudioClips(from: s.audioClips ?? [])   // load is a full project switch (not undo)
-        loadPadSamples()                              // re-register imported pad one-shots with the engine
-        loadSampleAudio()                             // restore the sampler buffer + Bank C slices
+        if decodeAudioAsync {
+            restoreAudioAsync(from: s.audioClips ?? [])   // H5: off-main decode, applied with a generation guard
+        } else {
+            restoreAudioClips(from: s.audioClips ?? [])   // load is a full project switch (not undo)
+            loadPadSamples()                              // re-register imported pad one-shots with the engine
+            loadSampleAudio()                             // restore the sampler buffer + Bank C slices
+        }
         rebuildSynthSampleSource()   // (#undo-1) the PCM behind a "sample" synth source lives only in the engine
         if !keepHistory {
             clearUndoHistory()
@@ -2296,7 +2428,9 @@ final class Project: ObservableObject {
 // MARK: - Codable snapshot
 
 nonisolated struct ProjectSnapshot: Codable, Sendable {   // Sendable + nonisolated → encode/decode can run off the main actor (no save/load hitch)
-    var version = 4   // v4: independent pad banks; migration moves all musical references together
+    /// Newest format this build can read. A file with a higher `version` is refused, never opened-and-resaved (H3).
+    static let currentVersion = 4
+    var version = ProjectSnapshot.currentVersion   // v4: independent pad banks; migration moves all musical references together
     var name: String
     var bpm: Int
     var swing: Double

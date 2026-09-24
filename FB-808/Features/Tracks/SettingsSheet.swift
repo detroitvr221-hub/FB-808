@@ -34,6 +34,7 @@ struct SettingsSheet: View {
                     qualityCard
                     diagnosticsCard
                     progressCard
+                    aboutCard
                     footer
                 }
                 .padding(20)
@@ -298,6 +299,21 @@ extension SettingsSheet {
         }
     }
 
+    private var aboutCard: some View {
+        card("About", icon: "info.circle.fill") {
+            NavigationLink { LegalView() } label: {
+                HStack {
+                    Text("Privacy, support & acknowledgements").font(FDFont.ui(13, .semibold)).foregroundStyle(settings.ink)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(settings.inkFaint)
+                }
+                .frame(height: 34)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     private var footer: some View {
         VStack(spacing: 12) {
             Button(role: .destructive) { showResetConfirm = true } label: {
@@ -357,7 +373,7 @@ private struct DiagnosticsPanel: View {
                     }
                 }
             }
-            ShareLink(item: engine.telemetryReport()) {
+            ShareLink(item: engine.telemetryReport() + CrashReporter.shared.report()) {
                 Text("Copy / share diagnostics").font(FDFont.ui(12.5, .semibold)).foregroundStyle(settings.accent)
                     .frame(maxWidth: .infinity).frame(height: 34)
                     .background(RoundedRectangle(cornerRadius: 9).fill(settings.accent.opacity(0.12)))

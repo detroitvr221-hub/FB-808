@@ -10,6 +10,7 @@
 @preconcurrency import AVFoundation   // suppress AVFAudio Sendable noise (e.g. AVAudioPCMBuffer in the converter block)
 import Combine
 import os
+import UIKit
 import FD808Engine
 
 /// App-wide logger — replaces scattered `print` for engine/file/export errors (shows in Console.app,
@@ -147,9 +148,26 @@ final class AudioEngine: ObservableObject {
     }
     private static let tsFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
 
-    init() { core.setMetersActive(false) }   // the LUFS readout turns this on when visible
+    init() {
+        core.setMetersActive(false)   // the LUFS readout turns this on when visible
+        memoryObserver = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+                                                                object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleMemoryWarning() }
+        }
+    }
+
+    /// M2: memory pressure. Drop the stem model + its On-Demand Resource (unless a split is running) and
+    /// free parked voices now instead of on the next 100 ms tick. The spectrum analyser keeps no shared
+    /// cache (per-view FFT scratch only), so there is nothing else global to purge here.
+    private var memoryObserver: NSObjectProtocol?
+    func handleMemoryWarning() {
+        let purged = FourStemSeparator.purgeForMemoryPressure()
+        core.drainReclaim()
+        logEvent("memory warning", purged ? "stem model released" : "stem split running — model kept")
+    }
 
     deinit {
+        if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) }
         reclaimTimer?.invalidate()
         diagTimer?.invalidate()
         for observer in audioObservers {
@@ -214,9 +232,23 @@ final class AudioEngine: ObservableObject {
         return (fx + mfx).sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
+    /// B2: the installed component whose type/subtype/manufacturer EXACTLY equal the saved ones, or nil.
+    /// Saved/imported data with any zero field is refused (0 is a wildcard to `components(matching:)`).
+    nonisolated static func installedComponent(for item: HostedEffectState) -> AVAudioUnitComponent? {
+        guard item.hasConcreteDescription else { return nil }
+        let desc = AudioComponentDescription(componentType: item.type, componentSubType: item.subtype,
+                                             componentManufacturer: item.manufacturer, componentFlags: 0, componentFlagsMask: 0)
+        return AVAudioUnitComponentManager.shared().components(matching: desc).first {
+            let d = $0.audioComponentDescription
+            return d.componentType == item.type && d.componentSubType == item.subtype && d.componentManufacturer == item.manufacturer
+        }
+    }
+
     /// Instantiate an effect and append it to the master insert chain.
     func addMasterAU(_ comp: AVAudioUnitComponent) async -> Bool {
         ensureConfigured()
+        let d = comp.audioComponentDescription
+        guard d.componentType != 0, d.componentSubType != 0, d.componentManufacturer != 0 else { return false }   // B2
         let key = quarantineKey(comp.audioComponentDescription)
         let generation = chainGeneration
         do {
@@ -360,13 +392,15 @@ final class AudioEngine: ObservableObject {
             }
             for item in saved {
                 guard !Task.isCancelled, generation == chainGeneration else { return }
-                let desc = AudioComponentDescription(componentType: item.type, componentSubType: item.subtype,
-                                                     componentManufacturer: item.manufacturer, componentFlags: 0, componentFlagsMask: 0)
-                let key = quarantineKey(desc)
-                guard !isAUQuarantined(key), AVAudioUnitComponentManager.shared().components(matching: desc).first != nil else {
+                // B2: resolve to the EXACT installed component and instantiate its own description — a zero field
+                // is a Core Audio wildcard and would match (and crash on) an arbitrary installed AU.
+                guard let comp = Self.installedComponent(for: item),
+                      !isAUQuarantined(quarantineKey(comp.audioComponentDescription)) else {
                     pluginNotice = "Some saved plugins are unavailable. Their settings have been kept in this beat."
                     continue
                 }
+                let desc = comp.audioComponentDescription
+                let key = quarantineKey(desc)
                 do {
                     let unit = try await instantiateAU(desc, timeout: 5)
                     guard !Task.isCancelled, generation == chainGeneration else { return }

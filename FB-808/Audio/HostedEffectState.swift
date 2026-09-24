@@ -9,4 +9,8 @@ nonisolated struct HostedEffectState: Codable, Equatable, Sendable, Identifiable
     var subtype: UInt32
     var manufacturer: UInt32
     var state: Data?
+
+    /// B2: every field non-zero — Core Audio treats 0 as a wildcard, so a zeroed (corrupt/imported)
+    /// description must never be matched or instantiated.
+    var hasConcreteDescription: Bool { type != 0 && subtype != 0 && manufacturer != 0 }
 }

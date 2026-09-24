@@ -14,6 +14,7 @@ struct FD808App: App {
     @StateObject private var store = ProjectStore()
 
     init() {
+        CrashReporter.shared.start()   // before anything else, so a crash during setup is still reported next launch
         let eng = AudioEngine()
         let proj = Project(engine: eng)
         let fxObj = PadFX()

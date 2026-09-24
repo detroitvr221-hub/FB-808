@@ -148,7 +148,9 @@ struct SynthModeView: View {
             .accessibilityLabel(Text(label))
     }
     private func applyPreset(_ p: SynthPatch) {
-        if !project.applyInstrumentPreset(p) { flashToast("This SoundFont is missing. Import its .sf2 again.") }
+        Task {   // M6: SoundFont read + parse happen off the main actor
+            if await project.applyInstrumentPresetAsync(p) == .missing { flashToast("This SoundFont is missing. Import its .sf2 again.") }
+        }
     }
     private func savePatchToLibrary() {
         guard project.persistPresetInstrument(project.editPatch) else { flashToast("Couldn't save the instrument. Check free storage."); return }

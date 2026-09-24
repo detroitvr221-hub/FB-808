@@ -139,7 +139,9 @@ struct FB_808Tests {
     @Test @MainActor func autosavesStayOrderedAndClearCannotBeUndoneByPendingWrite() async throws {
         let dir = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = ProjectStore(directory: dir)
+        // Scoped audio dirs: clearAutosave's grace-0 sweep over the GLOBAL FD808Audio deleted WAVs other
+        // suites (running in parallel) had just written — a flaky-test source.
+        let store = ProjectStore(directory: dir, audioDirectory: dir, sampleDirectory: dir)
         var snap = try fixture()
         for i in 0..<20 { snap.bpm = 100 + i; store.autosave(snap) }
         let latest = await store.autosaveSnapshot()
@@ -689,6 +691,9 @@ struct FB_808Tests {
         try FileManager.default.createDirectory(at: audio, withIntermediateDirectories: true)
         let store = ProjectStore(directory: dir, audioDirectory: audio, sampleDirectory: dir)
         var snap = try fixture(); snap.id = "id-good"
+        let goodID = UUID()   // H2: the deleted beat's OWN take — the only thing a delete may reclaim here
+        snap.audioClips = [AudioClipMeta(id: goodID.uuidString, track: "audio", startBar: 0,
+                                         name: "Good Take", gain: 1, muted: false, durSec: 0.1)]
         let goodURL = dir.appendingPathComponent("Good.fd808json")
         #expect(ProjectStore.writeSnapshot(snap, to: goodURL, pretty: false))
         // A SECOND saved beat whose take must survive the deleted beat's cleanup.
@@ -699,9 +704,12 @@ struct FB_808Tests {
         #expect(ProjectStore.writeSnapshot(other, to: dir.appendingPathComponent("Other.fd808json"), pretty: false))
         try Data("this is not a project".utf8).write(to: dir.appendingPathComponent("Corrupt.fd808json"))
         let keep = audio.appendingPathComponent("\(otherID.uuidString).wav")
-        let orphan = audio.appendingPathComponent("orphan.wav")
+        let orphan = audio.appendingPathComponent("\(goodID.uuidString).wav")
+        let unrelated = audio.appendingPathComponent("orphan.wav")   // might belong to the corrupt file
         #expect(writeWAVData([0.1, -0.2], to: keep))
         #expect(writeWAVData([0.3], to: orphan))
+        #expect(writeWAVData([0.3], to: unrelated))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-172_800)], ofItemAtPath: unrelated.path)
         // The 24h grace is what lets an unreferenced WAV survive for a live undo stack; both files are old,
         // so only the keep/reference rule (not the age rule) can decide their fate here.
         for f in [keep, orphan] {
@@ -714,6 +722,9 @@ struct FB_808Tests {
         await waitUntil { !FileManager.default.fileExists(atPath: orphan.path) }
         #expect(!FileManager.default.fileExists(atPath: orphan.path))     // freed by the delete, not "next launch"
         #expect(FileManager.default.fileExists(atPath: keep.path))        // the corrupt sibling must not disable GC
+        // H2: with an unreadable sibling the keep-set is incomplete, so a delete is NOT a blanket sweep —
+        // an unreferenced file that isn't the deleted beat's own audio waits for a complete launch sweep.
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
     /// #32 companion: the launch sweep's 24h grace is load-bearing (undo restores a removed clip by

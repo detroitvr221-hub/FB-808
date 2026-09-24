@@ -269,6 +269,7 @@ struct RootView: View {
     @State private var exportErr: String?       // surface a failed header export (the only export path at Beginner level)
     @Environment(\.scenePhase) private var scenePhase
     @State private var recoverSnap: ProjectSnapshot?
+    @State private var launchLoadFailure: String?   // H4: the last beat couldn't be opened at launch — say which and why
     @State private var missingAudio: [String] = []   // audio assets a loaded project references but can't find (Phase 8)
     @State private var exporting = false             // rail Share action — export is reachable at EVERY level (not just Tracks)
     @State private var exportFile: ExportFile?
@@ -368,18 +369,39 @@ struct RootView: View {
                     // then fall back to the legacy name key (pre-id sessions), then to the most-recent save so
                     // the user is never silently dropped to a blank default.
                     var loaded: ProjectSnapshot? = nil
-                    if let id = store.lastProjectID { loaded = await store.loadByID(id, touchLastOpened: false) }
-                    if loaded == nil, let nm = store.lastProjectName { loaded = await store.loadByName(nm) }
-                    if loaded == nil, let first = store.items.first { loaded = await store.load(first, touchLastOpened: false) }
+                    // H4: the fallback still runs, but the beat that couldn't be opened is NAMED (corrupt vs newer
+                    // version) instead of the user silently landing in a different beat.
+                    var failed: (name: String, why: ProjectLoadFailure)? = nil
+                    if let id = store.lastProjectID {
+                        loaded = await store.loadByID(id, touchLastOpened: false)
+                        if loaded == nil, let why = store.lastLoadFailure, why.isAlertworthy {
+                            failed = (store.items.first { $0.projectID == id }?.name ?? store.lastProjectName ?? "your last beat", why)
+                        }
+                    }
+                    if loaded == nil, let nm = store.lastProjectName {
+                        loaded = await store.loadByName(nm)
+                        if loaded == nil, failed == nil, let why = store.lastLoadFailure, why.isAlertworthy { failed = (nm, why) }
+                    }
+                    if loaded == nil {
+                        // Don't "fall back" onto the very file that just failed.
+                        let skipID = store.lastProjectID, skipName = store.lastProjectName
+                        if let first = store.items.first(where: { $0.projectID.map { $0 != skipID } ?? ($0.name != skipName) }) {
+                            loaded = await store.load(first, touchLastOpened: false)
+                        }
+                    }
+                    if let failed {
+                        launchLoadFailure = failed.why.message(for: failed.name)
+                            + (loaded.map { " FD·808 opened “\($0.name)” instead." } ?? "")
+                    }
                     if let snap = loaded {
                         let miss = await store.missingAudioAssetsAsync(in: snap)   // RAW snap, off-main (round 2, persist-M3)
                         guard launchDestination.matches(project), !project.hasUnsavedChanges else { return }
-                        project.restore(store.repaired(snap))           // load into a clean state (item 9 health repair)
+                        project.restore(store.repaired(snap), decodeAudioAsync: true)   // item 9 repair; H5: decode off-main
                         if !miss.isEmpty { missingAudio = miss }
                     }
                     if loaded == nil && (!launchDestination.matches(project) || project.hasUnsavedChanges) { return }
                     settings.mergeLegacySavedSynths(project.savedSynths)   // migrate per-project saved patches → global library (#67)
-                    if store.hasFreshAutosave() { recoverSnap = await store.autosaveSnapshot() }   // crash/quit recovery
+                    if await store.hasFreshAutosave() { recoverSnap = await store.autosaveSnapshot() }   // crash/quit recovery (M5: off-main, header-only)
                     if recoverSnap == nil && !toured { showTour = true }
                     store.sweepOrphanWAVs()   // reclaim audio leaked by deleted clips/samples/projects
                 }
@@ -392,7 +414,7 @@ struct RootView: View {
                                    onTick: saveRecovery, onClassEnded: classEnded))
         .modifier(AudioSettingsSync(settings: settings, apply: applyAudio))
         .alert("Recover unsaved changes?", isPresented: Binding(get: { recoverSnap != nil }, set: { if !$0 { recoverSnap = nil } })) {
-            Button("Recover") { if let s = recoverSnap { project.restore(store.repaired(s)); project.checkpoint("recovered", coalesce: false) }; recoverSnap = nil }
+            Button("Recover") { if let s = recoverSnap { project.restore(store.repaired(s), decodeAudioAsync: true); project.checkpoint("recovered", coalesce: false) }; recoverSnap = nil }
             Button("Discard", role: .destructive) { store.clearAutosave(protecting: project.liveAssetFilenames); recoverSnap = nil }
             Button("Decide later", role: .cancel) { recoverSnap = nil }   // keeps the slot — a mis-tap can't destroy the session
         } message: { Text("FD·808 closed with unsaved edits to “\(recoverSnap?.name ?? "a beat")”. Recover them, keep the last saved version, or decide later (the recovery copy stays until you save or discard).") }
@@ -408,6 +430,7 @@ struct RootView: View {
         // modifier chain, and inlining this alert pushed the expression past the type-checker's
         // limit ("unable to type-check this expression in reasonable time" at body's opening line).
         .modifier(SaveAudioFailureAlert(failed: project.audioWriteFailed) { project.audioWriteFailed = false })
+        .modifier(LaunchLoadFailureAlert(message: launchLoadFailure) { launchLoadFailure = nil })   // H4
         .modifier(BackgroundOperationAlert(project: project))
         .alert("Project updated on load", isPresented: Binding(get: { !store.lastRepairs.isEmpty }, set: { if !$0 { store.clearRepairs() } })) {
             Button("OK") { store.clearRepairs() }
@@ -472,11 +495,13 @@ struct RootView: View {
     }
     private func saveRecovery() {
         let payload = project.savePayload()
-        let task = UIApplication.shared.beginBackgroundTask(withName: "Save beat", expirationHandler: nil)
+        // M4: a nil expiration handler let iOS kill the app for overrunning the grant; end it either way, once.
+        let bg = BackgroundTaskGrant()
+        bg.id = UIApplication.shared.beginBackgroundTask(withName: "Save beat") { bg.end() }
         store.autosave(payload) {
             Task { @MainActor in
                 _ = await SharedPatchStore.flush()
-                if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+                bg.end()
             }
         }
     }
@@ -529,7 +554,7 @@ struct RootView: View {
                 coachTip = "Imported “\(snap.name)” into your beats — open it from Projects."
                 showProjects = true
             } else {
-                coachTip = "Couldn't import that beat file — it may be damaged or over 256 MB."
+                coachTip = "Couldn't import that beat file. " + (store.lastArchiveError ?? .unreadable).message   // M3/H3: the real cause
             }
         }
     }
@@ -537,11 +562,12 @@ struct RootView: View {
     private func runQuickExport(_ format: ExportFormat, fullSong: Bool) {
         guard !exporting else { return }
         exporting = true
-        let plan = project.buildExportPlan(songModeOverride: fullSong ? true : nil,
-                                           safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
         let dither = settings.exportDither
         let prog = quickExportProg; prog.reset()
         Task {
+            await project.awaitAudioRestore()   // H5: a just-opened beat may still be decoding its takes — never bounce silence
+            let plan = project.buildExportPlan(songModeOverride: fullSong ? true : nil,
+                                               safetyEnabled: settings.limiterOn, safetyCeilingDb: settings.limiterCeilingDb)
             await Task.detached(priority: .utility) { sweepExportDirs() }.value   // off-main (#export-5)
             let dir = fd808ExportDir()
             let result: Result<URL, ExportWriteFailure>? = await Task.detached(priority: .userInitiated) {
@@ -877,6 +903,28 @@ struct RootView: View {
 /// Surfaces a failed audio write (audit finding 2). Extracted from `RootView.body` to keep that
 /// expression inside the type-checker's budget; the value is read on every render, so the binding
 /// always reflects the current flag.
+/// M4: one background-task grant, ended exactly once (expiration or completion, whichever comes first).
+@MainActor private final class BackgroundTaskGrant {
+    var id: UIBackgroundTaskIdentifier = .invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+
+/// H4: the beat the app tried to reopen at launch failed; name it and the reason (split out of `body`).
+private struct LaunchLoadFailureAlert: ViewModifier {
+    let message: String?
+    let clear: () -> Void
+    func body(content: Content) -> some View {
+        content
+            .alert("Couldn't open your last beat", isPresented: Binding(get: { message != nil }, set: { if !$0 { clear() } })) {
+                Button("OK", action: clear)
+            } message: { Text(message ?? "") }
+    }
+}
+
 private struct SaveAudioFailureAlert: ViewModifier {
     let failed: Bool
     let clear: () -> Void

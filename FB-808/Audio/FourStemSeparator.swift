@@ -42,6 +42,30 @@ nonisolated final class FourStemSeparator {
     /// Compiled model cached alongside the held request — reloading from disk cost a few hundred ms per
     /// split (S5). Only touched from the single stem task (`stemBusy` serializes runs).
     private nonisolated(unsafe) static var cachedModel: MLModel?
+    /// M2: guards the statics above against the memory-warning purge (main thread) racing a stem task.
+    private static let stateLock = NSLock()
+    private nonisolated(unsafe) static var activeRuns = 0          // ensureModel/separate calls in flight
+    private nonisolated(unsafe) static var lastEnsured = Date.distantPast
+    /// ensure → separate hop through the main actor; don't release the ODR model inside that window.
+    private static let ensureGrace: TimeInterval = 15
+
+    /// M2 (memory warning): drop the ~100 MB compiled model and let the OS reclaim the On-Demand Resource
+    /// when no separation is running. Both come back on the next split (`ensureModel` re-fetches from the
+    /// local ODR cache). Returns false when a run is in flight and nothing was purged.
+    @discardableResult
+    static func purgeForMemoryPressure() -> Bool {
+        stateLock.lock()
+        guard activeRuns == 0 else { stateLock.unlock(); return false }
+        let model = cachedModel; cachedModel = nil
+        var request: NSBundleResourceRequest?
+        if Date().timeIntervalSince(lastEnsured) > ensureGrace { request = heldRequest; heldRequest = nil }
+        stateLock.unlock()
+        request?.endAccessingResources()
+        if model != nil || request != nil { log.info("stems: purged model on memory warning") }
+        return true
+    }
+    private static func beginRun() { stateLock.withLock { activeRuns += 1 } }
+    private static func endRun() { stateLock.withLock { activeRuns -= 1 } }
 
     /// Is the model present RIGHT NOW (already downloaded, or bundled directly)? Fetch it with `ensureModel()`.
     static var modelAvailable: Bool { modelURL != nil }
@@ -55,12 +79,23 @@ nonisolated final class FourStemSeparator {
     /// fetch fails (offline / not enough space) — callers should fall back to the 2-way split. If the model
     /// is bundled directly (ODR not configured), this returns true immediately without a network request.
     static func ensureModel() async -> Bool {
-        if modelURL != nil { return true }                       // already downloaded, or bundled directly
+        beginRun(); defer { endRun() }
+        // Already held, or bundled directly. After a memory-warning purge (M2) an ODR copy may still resolve
+        // but is no longer pinned, so re-begin access (a local, fast call when the pack is still cached).
+        let pinned = stateLock.withLock { heldRequest != nil }
+        if let url = modelURL, pinned || url.path.hasPrefix(Bundle.main.bundlePath) {
+            stateLock.withLock { lastEnsured = Date() }
+            return true
+        }
         let req = NSBundleResourceRequest(tags: [odrTag])
         req.loadingPriority = NSBundleResourceRequestLoadingPriorityUrgent
         do {
             try await req.beginAccessingResources()              // downloads from the App Store if not cached
-            heldRequest = req                                    // retain so the OS doesn't purge it mid-use
+            let previous = stateLock.withLock {
+                defer { heldRequest = req; lastEnsured = Date() }  // retain so the OS doesn't purge it mid-use
+                return heldRequest
+            }
+            if previous !== req { previous?.endAccessingResources() }
             return modelURL != nil
         } catch {
             log.error("stems: ODR fetch failed: \(error.localizedDescription, privacy: .public)")
@@ -90,14 +125,16 @@ nonisolated final class FourStemSeparator {
     /// (returns nil — callers distinguish a cancel from a failure via `Task.isCancelled`).
     static func separate(_ mono: [Float], engineSR: Double,
                          progress: (@Sendable (Double) -> Void)? = nil) -> [Stem]? {
+        beginRun(); defer { endRun() }
         guard let url = modelURL else { return nil }
         let model: MLModel
-        if let cached = cachedModel {
+        stateLock.lock(); let cached = cachedModel; stateLock.unlock()
+        if let cached {
             model = cached
         } else {
             let cfg = MLModelConfiguration(); cfg.computeUnits = .all
             guard let loaded = try? MLModel(contentsOf: url, configuration: cfg) else { log.error("stems: model load failed"); return nil }
-            cachedModel = loaded
+            stateLock.lock(); cachedModel = loaded; stateLock.unlock()
             model = loaded
         }
         let desc = model.modelDescription

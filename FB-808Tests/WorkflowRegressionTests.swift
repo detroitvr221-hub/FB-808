@@ -359,7 +359,10 @@ struct WorkflowRegressionTests {
 
     @Test @MainActor func unavailablePluginStateSurvivesSaveButNotNewSong() async throws {
         let p = Project(engine: AudioEngine())
-        let effect = HostedEffectState(id: UUID(), name: "Missing test effect", type: 0, subtype: 0, manufacturer: 0, state: Data([1, 2, 3]))
+        let effect = HostedEffectState(id: UUID(), name: "Missing test effect",
+                                       // B2: nonzero, non-existent codes — 0 is a Core Audio wildcard, not "missing".
+                                       type: 0x6175_6678 /* aufx */, subtype: 0x7A7A_7A7A, manufacturer: 0x4644_3858,
+                                       state: Data([1, 2, 3]))
         var snap = p.snapshot(); snap.hostedEffects = [effect]
         p.restore(snap)
         await Task.yield()
